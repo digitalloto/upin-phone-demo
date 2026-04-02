@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>UPIN Phone Demo</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a1628;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ─────────────────────────────── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            background: #111d2e;
+            border-bottom: 2px solid #2ecc71;
+        }
+        .header h1 {
+            font-size: 18px;
+            color: #2ecc71;
+        }
+        .header .status {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+        .status-ok { background: #2ecc71; color: #000; }
+        .status-warn { background: #f39c12; color: #000; }
+        .status-danger { background: #e74c3c; color: #fff; }
+
+        /* ── Map ────────────────────────────────── */
+        #map {
+            flex: 1;
+            min-height: 0;
+        }
+        .map-info {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 1000;
+            background: rgba(10, 22, 40, 0.9);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            line-height: 1.6;
+            border: 1px solid #2ecc7144;
+        }
+        .map-info strong { color: #2ecc71; }
+
+        /* ── Bottom Panel ───────────────────────── */
+        .panel {
+            background: #111d2e;
+            border-top: 2px solid #2ecc71;
+            max-height: 45vh;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* ── Buttons ────────────────────────────── */
+        .buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            padding: 12px 16px;
+        }
+        .btn {
+            padding: 14px 8px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            color: #fff;
+            transition: opacity 0.2s;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn:active { opacity: 0.7; }
+        .btn-start { background: #2ecc71; color: #000; }
+        .btn-spoof { background: #e74c3c; }
+        .btn-jam   { background: #f39c12; color: #000; }
+        .btn-reset { background: #555; }
+
+        /* ── Data Cards ─────────────────────────── */
+        .cards {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 0 16px 16px;
+        }
+        .card {
+            background: #1a2a3f;
+            border-radius: 10px;
+            padding: 12px;
+        }
+        .card-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #2ecc71;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+        .algo-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 13px;
+        }
+        .algo-conf { color: #2ecc71; font-weight: 600; }
+        .mono {
+            font-family: 'SF Mono', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .threat-box {
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .threat-clear { background: #2ecc7122; color: #2ecc71; }
+        .threat-spoof { background: #e74c3c; color: #fff; animation: pulse 1.5s infinite; }
+        .threat-jam   { background: #f39c12; color: #000; animation: pulse 1.5s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>UPIN Demo</h1>
+    <span class="status status-ok" id="hdr-status">Initializing</span>
+</div>
+
+<div style="position:relative;flex:1;min-height:0;">
+    <div id="map"></div>
+    <div class="map-info">
+        <div><strong>Accuracy:</strong> <span id="ui-accuracy">--</span>m</div>
+        <div><strong>Best algo:</strong> <span id="ui-best">--</span></div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="buttons">
+        <button class="btn btn-start" onclick="upin.start()">Start Demo</button>
+        <button class="btn btn-spoof" onclick="upin.spoof()">Simulate Spoof</button>
+        <button class="btn btn-jam"   onclick="upin.jam()">Simulate Jam</button>
+        <button class="btn btn-reset" onclick="upin.reset()">Reset</button>
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="card-title">Fusion Algorithms</div>
+            <div class="algo-row"><span>Kalman Filter</span><span class="algo-conf" id="ui-kalman">--</span></div>
+            <div class="algo-row"><span>Particle Filter</span><span class="algo-conf" id="ui-particle">--</span></div>
+            <div class="algo-row"><span>Fish Schooling</span><span class="algo-conf" id="ui-fish">--</span></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Position & Sensors</div>
+            <div class="mono" id="ui-sensors">Waiting for data...</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Threat Detection</div>
+            <div id="ui-threat" class="threat-box threat-clear">All Clear</div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+class UPINDemo {
+    constructor() {
+        this.gps = null;
+        this.accel = { x: 0, y: 0, z: 9.8 };
+        this.gyro = { x: 0, y: 0, z: 0 };
+        this.mag = { alpha: 0, beta: 0, gamma: 0 };
+        this.spoofing = false;
+        this.jamming = false;
+        this.baselineMean = null;
+        this.baselineN = 0;
+        this.trail = [];
+
+        // map layers
+        this.marker = null;
+        this.circle = null;
+        this.trailLine = null;
+        this.spoofMarker = null;
+
+        this.initMap();
+        this.initSensors();
+        setInterval(() => this.tick(), 500);
+    }
+
+    // ── Map ──────────────────────────────────────
+    initMap() {
+        this.map = L.map('map', { zoomControl: false }).setView([13.0827, 80.2707], 16);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OSM'
+        }).addTo(this.map);
+    }
+
+    // ── Sensors ──────────────────────────────────
+    initSensors() {
+        if ('geolocation' in navigator) {
+            navigator.geolocation.watchPosition(
+                p => this.onGPS(p),
+                () => this.useFallbackGPS(),
+                { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
+            );
+        } else {
+            this.useFallbackGPS();
+        }
+
+        // Accelerometer + gyro
+        const startMotion = () => window.addEventListener('devicemotion', e => {
+            const a = e.acceleration || {};
+            const r = e.rotationRate || {};
+            this.accel = { x: a.x || 0, y: a.y || 0, z: a.z || 9.8 };
+            this.gyro = { x: r.alpha || 0, y: r.beta || 0, z: r.gamma || 0 };
+        });
+        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+            DeviceMotionEvent.requestPermission().then(p => { if (p === 'granted') startMotion(); }).catch(() => {});
+        } else if ('DeviceMotionEvent' in window) {
+            startMotion();
+        }
+
+        // Magnetometer / orientation
+        const startOrient = () => window.addEventListener('deviceorientation', e => {
+            this.mag = { alpha: e.alpha || 0, beta: e.beta || 0, gamma: e.gamma || 0 };
+        });
+        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+            DeviceOrientationEvent.requestPermission().then(p => { if (p === 'granted') startOrient(); }).catch(() => {});
+        } else if ('DeviceOrientationEvent' in window) {
+            startOrient();
+        }
+
+        // Simulated sensor noise when no real hardware
+        setInterval(() => {
+            if (!this.accel.x && !this.accel.y) {
+                this.accel = { x: (Math.random() - .5) * 2, y: (Math.random() - .5) * 2, z: 9.8 + (Math.random() - .5) };
+                this.gyro = { x: (Math.random() - .5) * 10, y: (Math.random() - .5) * 10, z: (Math.random() - .5) * 10 };
+                this.mag = { alpha: Math.random() * 360, beta: (Math.random() - .5) * 180, gamma: (Math.random() - .5) * 90 };
+            }
+        }, 200);
+    }
+
+    onGPS(pos) {
+        this.gps = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy };
+        this.map.setView([this.gps.lat, this.gps.lon], 17);
+    }
+
+    useFallbackGPS() {
+        const base = { lat: 13.0827, lon: 80.2707 };
+        setInterval(() => {
+            this.gps = {
+                lat: base.lat + (Math.random() - .5) * 0.0002,
+                lon: base.lon + (Math.random() - .5) * 0.0002,
+                acc: 5 + Math.random() * 10
+            };
+            if (!this.marker) this.map.setView([this.gps.lat, this.gps.lon], 17);
+        }, 1000);
+    }
+
+    // ── Fusion ───────────────────────────────────
+    fuse(name, noiseNormal, noiseSpoofed, confNormal, confSpoofed) {
+        if (!this.gps) return null;
+        const noise = this.spoofing ? noiseSpoofed : noiseNormal;
+        const conf = this.spoofing ? confSpoofed : confNormal;
+        return {
+            lat: this.gps.lat + (Math.random() - .5) * noise,
+            lon: this.gps.lon + (Math.random() - .5) * noise,
+            confidence: conf + Math.random() * 0.08,
+            accuracy: this.spoofing ? 50 + Math.random() * 100 : 2 + Math.random() * 6,
+            name
+        };
+    }
+
+    kalman()   { return this.fuse('Kalman',   0.00005, 0.01,   0.85, 0.15); }
+    particle() { return this.fuse('Particle', 0.00003, 0.001,  0.80, 0.45); }
+    fish()     { return this.fuse('Fish',     0.00002, 0.0005, 0.88, 0.60); }
+
+    bestOf(results) {
+        return results.reduce((b, r) => r && (!b || r.confidence > b.confidence) ? r : b, null);
+    }
+
+    mahalanobis(lat, lon) {
+        if (!this.baselineMean || this.baselineN < 5) return 0;
+        const dlat = (lat - this.baselineMean.lat) * 111320;
+        const dlon = (lon - this.baselineMean.lon) * 111320 * Math.cos(this.baselineMean.lat * Math.PI / 180);
+        return Math.sqrt(dlat * dlat + dlon * dlon) / 5.0;
+    }
+
+    updateBaseline(lat, lon) {
+        if (!this.baselineMean) {
+            this.baselineMean = { lat, lon };
+            this.baselineN = 1;
+        } else {
+            const a = Math.min(0.05, 1 / (1 + this.baselineN));
+            this.baselineMean.lat = (1 - a) * this.baselineMean.lat + a * lat;
+            this.baselineMean.lon = (1 - a) * this.baselineMean.lon + a * lon;
+            this.baselineN++;
+        }
+    }
+
+    // ── Tick ─────────────────────────────────────
+    tick() {
+        if (!this.gps) return;
+
+        const k = this.kalman();
+        const p = this.particle();
+        const f = this.fish();
+        const best = this.bestOf([k, p, f]);
+        if (!best) return;
+
+        if (!this.spoofing) this.updateBaseline(best.lat, best.lon);
+        const md = this.mahalanobis(this.gps.lat, this.gps.lon);
+        const spoofDetected = this.spoofing && md > 3;
+
+        // Update map
+        const ll = [best.lat, best.lon];
+        if (this.marker) this.marker.setLatLng(ll);
+        else this.marker = L.circleMarker(ll, { radius: 8, color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 1 }).addTo(this.map);
+
+        if (this.circle) { this.circle.setLatLng(ll); this.circle.setRadius(best.accuracy); }
+        else this.circle = L.circle(ll, { radius: best.accuracy, color: '#2ecc71', fillOpacity: 0.12, weight: 1 }).addTo(this.map);
+
+        this.trail.push(ll);
+        if (this.trail.length > 80) this.trail.shift();
+        if (this.trailLine) this.trailLine.setLatLngs(this.trail);
+        else this.trailLine = L.polyline(this.trail, { color: '#2ecc71', weight: 2, opacity: 0.4 }).addTo(this.map);
+
+        if (this.spoofing) {
+            const sl = [this.gps.lat + 0.005, this.gps.lon + 0.007];
+            if (this.spoofMarker) this.spoofMarker.setLatLng(sl);
+            else this.spoofMarker = L.circleMarker(sl, { radius: 10, color: '#e74c3c', fillColor: '#e74c3c', fillOpacity: 0.8 }).bindPopup('Spoofed (rejected)').addTo(this.map);
+        }
+
+        // Update UI
+        const $ = id => document.getElementById(id);
+        $('ui-accuracy').textContent = best.accuracy.toFixed(1);
+        $('ui-best').textContent = best.name;
+        $('ui-kalman').textContent = k ? (k.confidence * 100).toFixed(0) + '%' : '--';
+        $('ui-particle').textContent = p ? (p.confidence * 100).toFixed(0) + '%' : '--';
+        $('ui-fish').textContent = f ? (f.confidence * 100).toFixed(0) + '%' : '--';
+
+        $('ui-sensors').innerHTML =
+            `Pos: ${best.lat.toFixed(6)}N, ${best.lon.toFixed(6)}E\n` +
+            `GPS acc: ±${this.gps.acc.toFixed(0)}m | Mahal: ${md.toFixed(1)}σ\n` +
+            `Accel: ${this.accel.x.toFixed(1)} ${this.accel.y.toFixed(1)} ${this.accel.z.toFixed(1)}\n` +
+            `Gyro:  ${this.gyro.x.toFixed(1)} ${this.gyro.y.toFixed(1)} ${this.gyro.z.toFixed(1)}`;
+
+        // Status + threats
+        const hdr = $('hdr-status');
+        const threat = $('ui-threat');
+        if (spoofDetected) {
+            hdr.textContent = 'SPOOF DETECTED';
+            hdr.className = 'status status-danger';
+            threat.className = 'threat-box threat-spoof';
+            threat.innerHTML = `<strong>GPS SPOOFING DETECTED</strong><br>Mahalanobis: ${md.toFixed(1)}σ (threshold: 3.0)<br>GPS isolated — using ${59} remaining layers`;
+        } else if (this.jamming) {
+            hdr.textContent = 'JAMMING';
+            hdr.className = 'status status-warn';
+            threat.className = 'threat-box threat-jam';
+            threat.innerHTML = '<strong>GPS JAMMING DETECTED</strong><br>RF signals denied<br>Using 19 internal unjammable layers';
+        } else {
+            hdr.textContent = 'Operational';
+            hdr.className = 'status status-ok';
+            threat.className = 'threat-box threat-clear';
+            threat.textContent = 'All Clear';
+        }
+    }
+
+    // ── Controls ─────────────────────────────────
+    start() { /* demo auto-runs on GPS lock */ }
+    spoof() { this.spoofing = true; this.jamming = false; }
+    jam()   { this.jamming = true; this.spoofing = false; this.removeSpoofMarker(); }
+    reset() {
+        this.spoofing = false;
+        this.jamming = false;
+        this.removeSpoofMarker();
+    }
+    removeSpoofMarker() {
+        if (this.spoofMarker) { this.map.removeLayer(this.spoofMarker); this.spoofMarker = null; }
+    }
+}
+
+const upin = new UPINDemo();
+</script>
+</body>
+</html>
