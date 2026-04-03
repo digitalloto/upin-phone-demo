@@ -1,725 +1,609 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>UPIN Phone Demo</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0a1628;
-            color: #e0e0e0;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 16px;
-            background: #111d2e;
-            border-bottom: 2px solid #2ecc71;
-        }
-        .header h1 { font-size: 18px; color: #2ecc71; }
-        .status {
-            font-size: 11px;
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-weight: 600;
-        }
-        .s-ok   { background: #2ecc71; color: #000; }
-        .s-warn { background: #f39c12; color: #000; }
-        .s-bad  { background: #e74c3c; color: #fff; }
-        .s-wait { background: #555; color: #fff; }
-
-        #map { flex: 1; min-height: 0; }
-
-        .map-overlay {
-            position: absolute;
-            top: 8px; left: 8px;
-            z-index: 1000;
-            background: rgba(10,22,40,0.92);
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 11px;
-            line-height: 1.7;
-            border: 1px solid #2ecc7144;
-            max-width: 220px;
-        }
-        .map-overlay strong { color: #2ecc71; }
-
-        .legend {
-            position: absolute;
-            bottom: 8px; left: 8px;
-            z-index: 1000;
-            background: rgba(10,22,40,0.92);
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 11px;
-            line-height: 1.8;
-            border: 1px solid #2ecc7144;
-        }
-        .legend-dot {
-            display: inline-block;
-            width: 10px; height: 10px;
-            border-radius: 50%;
-            margin-right: 4px;
-            vertical-align: middle;
-        }
-
-        .panel {
-            background: #111d2e;
-            border-top: 2px solid #2ecc71;
-            max-height: 48vh;
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .buttons {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            padding: 12px 16px 4px;
-        }
-        .btn {
-            padding: 13px 8px;
-            border: none;
-            border-radius: 10px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            color: #fff;
-            -webkit-tap-highlight-color: transparent;
-            transition: opacity .15s;
-        }
-        .btn:active { opacity: 0.65; }
-        .btn-go    { background: #2ecc71; color: #000; }
-        .btn-spoof { background: #e74c3c; }
-        .btn-jam   { background: #f39c12; color: #000; }
-        .btn-cycle { background: #9b59b6; }
-        .btn-resurface { background: #3498db; }
-        .btn-reset { background: #555; }
-        .btn-disabled { opacity: 0.4; pointer-events: none; }
-
-        .cards { display: flex; flex-direction: column; gap: 8px; padding: 8px 16px 16px; }
-        .card { background: #1a2a3f; border-radius: 10px; padding: 12px; }
-        .card-title {
-            font-size: 11px; font-weight: 700; color: #2ecc71;
-            text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px;
-        }
-        .algo-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 13px; }
-        .algo-conf { color: #2ecc71; font-weight: 600; }
-        .mono { font-family: 'SF Mono','Courier New',monospace; font-size: 11px; line-height: 1.5; white-space: pre; }
-
-        .drift-box {
-            padding: 10px; border-radius: 8px; text-align: center;
-            font-weight: 600; font-size: 13px; margin-top: 6px;
-        }
-        .drift-good { background: #2ecc7122; color: #2ecc71; }
-        .drift-mid  { background: #f39c1233; color: #f39c12; }
-        .drift-bad  { background: #e74c3c33; color: #e74c3c; }
-
-        .threat-box {
-            padding: 10px; border-radius: 8px; text-align: center;
-            font-weight: 600; font-size: 13px;
-        }
-        .t-clear { background: #2ecc7122; color: #2ecc71; }
-        .t-spoof { background: #e74c3c; color: #fff; animation: pulse 1.5s infinite; }
-        .t-jam   { background: #f39c12; color: #000; animation: pulse 1.5s infinite; }
-
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>UPIN Field Test</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a1628;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+/* Header */
+#header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#111d2e;border-bottom:2px solid #2ecc71;flex-shrink:0}
+#header h1{font-size:15px;font-weight:700;color:#2ecc71;letter-spacing:1px}
+#badge{font-size:11px;font-weight:700;padding:4px 12px;border-radius:10px;background:#333;color:#aaa;letter-spacing:.5px}
+.badge-idle{background:#333!important;color:#aaa!important}
+.badge-driving{background:#2ecc71!important;color:#000!important}
+.badge-jammed{background:#f39c12!important;color:#000!important;animation:pulse 1.2s infinite}
+.badge-spoofed{background:#e74c3c!important;color:#fff!important;animation:pulse 1.2s infinite}
+/* Map */
+#map-wrap{position:relative;flex-shrink:0;height:38vh}
+#map{width:100%;height:100%}
+.map-legend{position:absolute;bottom:8px;left:8px;z-index:1000;background:rgba(10,20,35,.88);padding:6px 10px;border-radius:7px;font-size:10px;line-height:1.8;pointer-events:none}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+/* Scrollable panel */
+#panel{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:10px 12px 16px}
+/* Metric cards */
+.metrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px}
+.mcard{background:#1a2a3f;border-radius:8px;padding:8px 6px;text-align:center}
+.mcard .label{font-size:9px;font-weight:700;color:#7a9ab8;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
+.mcard .value{font-size:20px;font-weight:700;color:#e0e0e0;line-height:1}
+.mcard .value.green{color:#2ecc71}
+.mcard .value.yellow{color:#f39c12}
+.mcard .value.red{color:#e74c3c}
+.mcard .unit{font-size:9px;color:#556}
+/* Layers */
+.section-title{font-size:10px;font-weight:700;color:#556;text-transform:uppercase;letter-spacing:.8px;margin:10px 0 6px}
+.layers{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px}
+.layer{background:#1a2a3f;border-radius:8px;padding:8px 8px;display:flex;align-items:center;gap:6px}
+.ldot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.ldot.active{background:#2ecc71;box-shadow:0 0 6px #2ecc71}
+.ldot.jammed{background:#e74c3c;box-shadow:0 0 6px #e74c3c}
+.ldot.off{background:#333}
+.lname{font-size:10px;font-weight:700;color:#aaa;line-height:1.1}
+.lval{font-size:9px;color:#556;margin-top:1px}
+/* Buttons */
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.btn{padding:14px 8px;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;color:#fff;letter-spacing:.3px;-webkit-tap-highlight-color:transparent;transition:opacity .15s}
+.btn:active{opacity:.65}
+.btn-green{background:#2ecc71;color:#000}
+.btn-blue{background:#2980b9}
+.btn-red{background:#e74c3c}
+.btn-yellow{background:#f39c12;color:#000}
+.btn-purple{background:#8e44ad}
+.btn-dark{background:#1a2a3f;border:1px solid #2ecc7144}
+.btn-grey{background:#2a3a4f}
+/* Jam alert box */
+#jam-alert{display:none;background:#1a0505;border:1px solid #e74c3c44;border-radius:10px;padding:14px;margin-bottom:10px;text-align:center}
+#jam-alert .ja-title{color:#e74c3c;font-weight:700;font-size:13px;margin-bottom:4px}
+#jam-alert .ja-timer{font-size:28px;font-weight:700;color:#e74c3c;margin:6px 0}
+#jam-alert .ja-hint{color:#888;font-size:11px}
+#spoof-alert{display:none;background:#1a0505;border:1px solid #e74c3c44;border-radius:10px;padding:14px;margin-bottom:10px;text-align:center}
+#spoof-alert .sa-title{color:#e74c3c;font-weight:700;font-size:13px;margin-bottom:4px}
+#spoof-alert .sa-timer{font-size:28px;font-weight:700;color:#f39c12;margin:6px 0}
+#spoof-alert .sa-hint{color:#888;font-size:11px}
+/* Log */
+#log-box{background:#0d1a2a;border-radius:8px;padding:8px 10px;font-family:'SF Mono','Courier New',monospace;font-size:10px;line-height:1.7;max-height:130px;overflow-y:auto;color:#7a9ab8;margin-bottom:10px}
+/* Report screen */
+#report-screen{display:none;position:fixed;inset:0;background:#0a1628;z-index:2000;overflow-y:auto;padding:16px}
+.report-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.report-header h2{font-size:15px;font-weight:700;color:#2ecc71;letter-spacing:1px}
+.report-btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.rcard{background:#111d2e;border-radius:10px;padding:12px;margin-bottom:8px}
+.rcard-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.rcard-title.green{color:#2ecc71}
+.rcard-title.red{color:#e74c3c}
+.rcard-title.yellow{color:#f39c12}
+.rrow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1a2a3f;font-size:13px}
+.rrow:last-child{border-bottom:none}
+.rrow .rval{font-weight:600}
+.rval.ok{color:#2ecc71}
+.rval.warn{color:#f39c12}
+.rval.bad{color:#e74c3c}
+.drill-block{background:#0d1a2a;border-radius:8px;padding:10px;margin-bottom:6px}
+.drill-title{font-size:12px;font-weight:700;color:#f39c12;margin-bottom:6px}
+.fish-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.fish-item{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #1a2a3f}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+</style>
 </head>
 <body>
 
-<div class="header">
-    <h1>UPIN Demo</h1>
-    <span class="status s-wait" id="hdr-status">Waiting for GPS</span>
+<div id="header">
+  <h1>UPIN FIELD TEST</h1>
+  <span id="badge" class="badge-idle">IDLE</span>
 </div>
 
-<div style="position:relative;flex:1;min-height:0;">
-    <div id="map"></div>
-    <div class="map-overlay">
-        <div><strong>Mode:</strong> <span id="ui-mode">Waiting</span></div>
-        <div><strong>Accuracy:</strong> <span id="ui-acc">--</span>m</div>
-        <div><strong>Drift:</strong> <span id="ui-drift">--</span></div>
-        <div><strong>Resurfaces:</strong> <span id="ui-resurfaces">0</span></div>
-    </div>
-    <div class="legend">
-        <div><span class="legend-dot" style="background:#2ecc71"></span> GPS truth</div>
-        <div><span class="legend-dot" style="background:#f39c12"></span> Dead reckoned (INS)</div>
-        <div><span class="legend-dot" style="background:#e74c3c"></span> Spoofed signal</div>
-        <div><span class="legend-dot" style="background:#9b59b6"></span> Resurface check</div>
-    </div>
+<div id="map-wrap">
+  <div id="map"></div>
+  <div class="map-legend">
+    <div><span class="dot" style="background:#2ecc71"></span>GPS truth</div>
+    <div><span class="dot" style="background:#f39c12"></span>Dead reckoned</div>
+    <div><span class="dot" style="background:#e74c3c"></span>Spoofed signal</div>
+    <div><span class="dot" style="background:#9b59b6"></span>Resurface point</div>
+  </div>
 </div>
 
-<div class="panel">
-    <div class="buttons">
-        <button class="btn btn-go" onclick="upin.startDemo()">Start Demo</button>
-        <button class="btn btn-jam" onclick="upin.jam()">Jam GPS</button>
-        <button class="btn btn-spoof" onclick="upin.spoof()">Spoof GPS</button>
-        <button class="btn btn-resurface" onclick="upin.resurface()">Resurface</button>
-        <button class="btn btn-cycle" onclick="upin.toggleIntervalJam()">Interval Jam</button>
-        <button class="btn btn-reset" onclick="upin.reset()">Reset All</button>
-    </div>
+<div id="panel">
 
-    <div class="cards">
-        <div class="card">
-            <div class="card-title">Fusion Algorithms</div>
-            <div class="algo-row"><span>Kalman Filter</span><span class="algo-conf" id="ui-kalman">--</span></div>
-            <div class="algo-row"><span>Particle Filter</span><span class="algo-conf" id="ui-particle">--</span></div>
-            <div class="algo-row"><span>Fish Schooling</span><span class="algo-conf" id="ui-fish">--</span></div>
-        </div>
+  <!-- Metric cards -->
+  <div class="metrics">
+    <div class="mcard"><div class="label">Fusion Error</div><div class="value" id="m-ferr">--</div><div class="unit">metres</div></div>
+    <div class="mcard"><div class="label">Confidence</div><div class="value green" id="m-conf">--</div><div class="unit">percent</div></div>
+    <div class="mcard"><div class="label">Speed</div><div class="value green" id="m-speed">0</div><div class="unit">km/h</div></div>
+    <div class="mcard"><div class="label">Distance</div><div class="value" id="m-dist">0</div><div class="unit">metres</div></div>
+    <div class="mcard"><div class="label">Drift Rate</div><div class="value" id="m-drift">--</div><div class="unit">m/min</div></div>
+    <div class="mcard"><div class="label">Elapsed</div><div class="value" id="m-elapsed">0:00</div><div class="unit">&nbsp;</div></div>
+  </div>
 
-        <div class="card">
-            <div class="card-title">Position & Sensors</div>
-            <div class="mono" id="ui-sensors">Waiting for GPS lock...</div>
-        </div>
+  <!-- Positioning layers -->
+  <div class="section-title">Positioning Layers</div>
+  <div class="layers">
+    <div class="layer"><div class="ldot off" id="l-gps-dot"></div><div><div class="lname">GPS</div><div class="lval" id="l-gps-val">--</div></div></div>
+    <div class="layer"><div class="ldot off" id="l-imu-dot"></div><div><div class="lname">IMU</div><div class="lval" id="l-imu-val">--</div></div></div>
+    <div class="layer"><div class="ldot off" id="l-comp-dot"></div><div><div class="lname">Compass</div><div class="lval" id="l-comp-val">--</div></div></div>
+    <div class="layer"><div class="ldot off" id="l-sdr-dot"></div><div><div class="lname">Speed DR</div><div class="lval" id="l-sdr-val">--</div></div></div>
+    <div class="layer"><div class="ldot off" id="l-hdg-dot"></div><div><div class="lname">Heading</div><div class="lval" id="l-hdg-val">--</div></div></div>
+    <div class="layer"><div class="ldot off" id="l-fish-dot"></div><div><div class="lname">Fish AI</div><div class="lval" id="l-fish-val">--</div></div></div>
+  </div>
 
-        <div class="card">
-            <div class="card-title">Drift Comparison</div>
-            <div id="ui-drift-card" class="drift-box drift-good">No drift data yet</div>
-        </div>
+  <!-- Phase 1: IDLE buttons -->
+  <div id="btns-idle" class="btns">
+    <button class="btn btn-blue" onclick="U.calibrate()">CALIBRATE</button>
+    <button class="btn btn-green" id="btn-start" onclick="U.startDrive()" disabled style="opacity:.4">START DRIVE</button>
+  </div>
 
-        <div class="card">
-            <div class="card-title">Threat Detection</div>
-            <div id="ui-threat" class="threat-box t-clear">All Clear</div>
-        </div>
-    </div>
+  <!-- Phase 2: DRIVING buttons -->
+  <div id="btns-driving" class="btns" style="display:none">
+    <button class="btn btn-yellow" onclick="U.jamGPS()">JAM GPS</button>
+    <button class="btn btn-red" onclick="U.spoofGPS()">SPOOF GPS</button>
+  </div>
+
+  <!-- Phase 3: DENIED buttons -->
+  <div id="btns-denied" class="btns" style="display:none">
+    <button class="btn btn-green" onclick="U.resurface()">RESURFACE</button>
+    <button class="btn btn-grey" onclick="U.endTest()">END TEST</button>
+  </div>
+
+  <!-- Jam alert -->
+  <div id="jam-alert">
+    <div class="ja-title">⚠ GPS JAMMED — navigating blind</div>
+    <div class="ja-timer" id="jam-timer">0:00</div>
+    <div class="ja-hint">Press RESURFACE to re-enable GPS and compare positions</div>
+  </div>
+
+  <!-- Spoof alert -->
+  <div id="spoof-alert">
+    <div class="sa-title">⚠ GPS SPOOFED — signal rejected, navigating blind</div>
+    <div class="sa-timer" id="spoof-timer">0:00</div>
+    <div class="sa-hint">Press RESURFACE to re-enable GPS and compare positions</div>
+  </div>
+
+  <!-- Event log -->
+  <div class="section-title">Event Log</div>
+  <div id="log-box"></div>
+
+</div><!-- end panel -->
+
+<!-- Report screen (full screen overlay) -->
+<div id="report-screen">
+  <div class="report-header">
+    <h2>UPIN FIELD TEST REPORT</h2>
+  </div>
+  <div class="report-btn-row">
+    <button class="btn btn-dark" onclick="U.exportCSV()">EXPORT CSV</button>
+    <button class="btn btn-blue" onclick="U.newTest()">NEW TEST</button>
+  </div>
+  <div id="report-content"></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-class UPINDemo {
-    constructor() {
-        // Sensor state
-        this.gps = null;           // latest real GPS reading
-        this.gpsHidden = null;     // GPS keeps updating even when jammed (ground truth)
-        this.accel = { x: 0, y: 0, z: 9.8 };
-        this.gyro  = { x: 0, y: 0, z: 0 };
-        this.mag   = { alpha: 0, beta: 0, gamma: 0 };
+const U = (() => {
+  // ── State ──────────────────────────────────────
+  let map, posMarker, accCircle;
+  let gpsLine, drLine, spoofLine;
+  const gpsTrail=[], drTrail=[], spoofTrail=[];
+  let resurfaceMarkers=[];
 
-        // Mode flags
-        this.running = false;
-        this.jamming = false;
-        this.spoofing = false;
-        this.intervalJam = null;   // interval timer ID
-        this.intervalOn = false;   // is interval jam currently active
+  let gpsTrue=null;    // always-on ground truth
+  let gpsSystem=null;  // what the system sees (null when jammed/spoofed)
+  let drPos=null;      // dead reckoned position
+  let drHeading=0;
 
-        // Dead reckoning state
-        this.drPos = null;         // {lat, lon} estimated position when GPS denied
-        this.drHeading = 0;        // heading in radians
-        this.lastTickTime = null;
+  let accel={x:0,y:0,z:9.8}, gyro={x:0,y:0,z:0}, mag={alpha:0,beta:0,gamma:0};
+  let phase='idle';    // idle | driving | jammed | spoofed
+  let calibrated=false;
+  let startTime=null, drillStart=null;
+  let totalDist=0, lastPos=null;
+  let drills=[];       // [{blindSec, driftM, distBlindM, bestAlgo}]
+  let currentDrill=null;
+  let fusionErrors=[], fusionConfs=[];
+  let tickInterval=null, timerInterval=null;
+  let driftStart=null, driftPos=null;
 
-        // Paths for comparison
-        this.gpsTrail = [];        // green — real GPS positions
-        this.drTrail = [];         // orange — dead-reckoned positions
-        this.spoofTrail = [];      // red — where spoof says we are
+  // ── Helpers ────────────────────────────────────
+  const $=id=>document.getElementById(id);
+  function fmt(sec){const m=Math.floor(sec/60),s=Math.floor(sec%60);return m+':'+(s<10?'0':'')+s}
+  function dist(a,b){
+    const dlat=(a.lat-b.lat)*111320;
+    const dlon=(a.lon-b.lon)*111320*Math.cos(a.lat*Math.PI/180);
+    return Math.sqrt(dlat*dlat+dlon*dlon);
+  }
+  function now(){const d=new Date();return`[${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}]`}
+  function log(msg,color){
+    const box=$('log-box');
+    const line=document.createElement('div');
+    line.style.color=color||'#7a9ab8';
+    line.textContent=now()+' '+msg;
+    box.appendChild(line);
+    box.scrollTop=box.scrollHeight;
+  }
+  function setLayer(id,state,val){
+    const dot=$(id+'-dot'), valEl=$(id+'-val');
+    dot.className='ldot '+state;
+    if(valEl&&val!==undefined)valEl.textContent=val;
+  }
+  function setBadge(text,cls){
+    const b=$('badge');
+    b.textContent=text;
+    b.className=cls;
+  }
 
-        // Resurface tracking
-        this.resurfaces = [];      // [{gps, dr, error}] each time we resurface
-        this.totalDrift = 0;
+  // ── Map init ───────────────────────────────────
+  function initMap(){
+    map=L.map('map',{zoomControl:false,attributionControl:true}).setView([13.0827,80.2707],16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      attribution:'&copy; OSM',maxZoom:19
+    }).addTo(map);
+    setTimeout(()=>map.invalidateSize(),300);
+  }
 
-        // Baseline for Mahalanobis
-        this.baselineMean = null;
-        this.baselineN = 0;
-
-        // Map layers
-        this.gpsLine = null;
-        this.drLine = null;
-        this.spoofLine = null;
-        this.posMarker = null;
-        this.accCircle = null;
-        this.resurfaceMarkers = [];
-
-        this.initMap();
-        this.initSensors();
-        setInterval(() => this.tick(), 500);
-    }
-
-    // ── Map ──────────────────────────────────────
-    initMap() {
-        this.map = L.map('map', { zoomControl: false }).setView([13.0827, 80.2707], 16);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OSM'
-        }).addTo(this.map);
-    }
-
-    // ── Sensors ──────────────────────────────────
-    initSensors() {
-        if ('geolocation' in navigator) {
-            navigator.geolocation.watchPosition(
-                p => this.onGPS(p),
-                () => this.useFallbackGPS(),
-                { enableHighAccuracy: true, maximumAge: 500, timeout: 5000 }
-            );
-        } else {
-            this.useFallbackGPS();
+  // ── GPS ────────────────────────────────────────
+  function initGPS(){
+    log('Requesting GPS — allow Location when prompted','#f39c12');
+    if(!('geolocation' in navigator)){useFallbackGPS();return;}
+    navigator.geolocation.watchPosition(
+      p=>{
+        const pos={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
+        gpsTrue=pos;
+        if(phase==='idle'||phase==='driving'){
+          gpsSystem=pos;
+          if(!posMarker){
+            map.setView([pos.lat,pos.lon],17);
+            log(`GPS fix acquired ±${Math.round(pos.acc)}m — tap Calibrate`,'#2ecc71');
+            $('btn-start').disabled=false;
+            $('btn-start').style.opacity='1';
+          }
+          setLayer('l-gps','active','±'+Math.round(pos.acc)+'m');
         }
+      },
+      ()=>useFallbackGPS(),
+      {enableHighAccuracy:true,maximumAge:500,timeout:8000}
+    );
+  }
 
-        // Motion sensors
-        const startMotion = () => window.addEventListener('devicemotion', e => {
-            const a = e.acceleration || {};
-            const r = e.rotationRate || {};
-            this.accel = { x: a.x || 0, y: a.y || 0, z: a.z || 9.8 };
-            this.gyro  = { x: r.alpha || 0, y: r.beta || 0, z: r.gamma || 0 };
-        });
-        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-            DeviceMotionEvent.requestPermission().then(p => { if (p === 'granted') startMotion(); }).catch(() => {});
-        } else if ('DeviceMotionEvent' in window) {
-            startMotion();
+  let simStep=0;
+  function useFallbackGPS(){
+    log('No GPS hardware — using simulated walk path','#f39c12');
+    const base={lat:13.0827,lon:80.2707};
+    setInterval(()=>{
+      simStep++;
+      const pos={
+        lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.000015,
+        lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.000015,
+        acc:8+Math.random()*12
+      };
+      gpsTrue=pos;
+      if(phase==='idle'||phase==='driving'){
+        gpsSystem=pos;
+        if(!posMarker){
+          map.setView([pos.lat,pos.lon],17);
+          log('Simulated GPS active — tap Calibrate','#f39c12');
+          $('btn-start').disabled=false;
+          $('btn-start').style.opacity='1';
         }
+        setLayer('l-gps','active','±'+Math.round(pos.acc)+'m');
+      }
+    },1000);
+  }
 
-        // Orientation
-        const startOrient = () => window.addEventListener('deviceorientation', e => {
-            this.mag = { alpha: e.alpha || 0, beta: e.beta || 0, gamma: e.gamma || 0 };
-        });
-        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-            DeviceOrientationEvent.requestPermission().then(p => { if (p === 'granted') startOrient(); }).catch(() => {});
-        } else if ('DeviceOrientationEvent' in window) {
-            startOrient();
-        }
+  // ── Sensors ────────────────────────────────────
+  function initSensors(){
+    const startMotion=()=>window.addEventListener('devicemotion',e=>{
+      const a=e.acceleration||{};
+      const r=e.rotationRate||{};
+      accel={x:a.x||0,y:a.y||0,z:a.z||9.8};
+      gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+    });
+    const startOrient=()=>window.addEventListener('deviceorientation',e=>{
+      mag={alpha:e.alpha||0,beta:e.beta||0,gamma:e.gamma||0};
+    });
+    if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function'){
+      DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')startMotion();}).catch(()=>{});
+    }else if('DeviceMotionEvent' in window){startMotion();}
+    if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+      DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')startOrient();}).catch(()=>{});
+    }else if('DeviceOrientationEvent' in window){startOrient();}
+    // Simulated fallback
+    setInterval(()=>{
+      if(!accel.x&&!accel.y){
+        accel={x:(Math.random()-.5)*2,y:(Math.random()-.5)*2,z:9.8+(Math.random()-.5)};
+        gyro={x:(Math.random()-.5)*8,y:(Math.random()-.5)*8,z:(Math.random()-.5)*8};
+        mag={alpha:Math.random()*360,beta:(Math.random()-.5)*90,gamma:(Math.random()-.5)*45};
+      }
+    },200);
+  }
 
-        // Simulated sensor noise fallback
-        setInterval(() => {
-            if (!this.accel.x && !this.accel.y) {
-                this.accel = { x: (Math.random()-.5)*2, y: (Math.random()-.5)*2, z: 9.8+(Math.random()-.5) };
-                this.gyro  = { x: (Math.random()-.5)*10, y: (Math.random()-.5)*10, z: (Math.random()-.5)*10 };
-                this.mag   = { alpha: Math.random()*360, beta: (Math.random()-.5)*180, gamma: (Math.random()-.5)*90 };
-            }
-        }, 200);
+  // ── Dead reckoning ─────────────────────────────
+  function deadReckon(dt){
+    if(!drPos)return;
+    drHeading+=(gyro.z*Math.PI/180)*dt;
+    const aH=Math.sqrt(accel.x**2+accel.y**2);
+    const speed=Math.min(aH*0.25,1.8);
+    const dLat=(speed*Math.cos(drHeading)*dt)/111320;
+    const dLon=(speed*Math.sin(drHeading)*dt)/(111320*Math.cos(drPos.lat*Math.PI/180));
+    drPos.lat+=dLat+(Math.random()-.5)*0.000004;
+    drPos.lon+=dLon+(Math.random()-.5)*0.000004;
+  }
+
+  // ── Map drawing ────────────────────────────────
+  function drawPos(ll,radius,color){
+    if(posMarker){posMarker.setLatLng(ll);posMarker.setStyle({color,fillColor:color});}
+    else posMarker=L.circleMarker(ll,{radius:8,color,fillColor:color,fillOpacity:1}).addTo(map);
+    if(accCircle){accCircle.setLatLng(ll);accCircle.setRadius(radius);accCircle.setStyle({color});}
+    else accCircle=L.circle(ll,{radius,color,fillOpacity:.1,weight:1}).addTo(map);
+    map.panTo(ll);
+  }
+  function appendTrail(trail,lineRef,color,dashed){
+    if(trail.length<2)return lineRef;
+    if(lineRef)lineRef.setLatLngs(trail);
+    else{lineRef=L.polyline(trail,{color,weight:3,opacity:.75,dashArray:dashed?'8,6':null}).addTo(map);}
+    return lineRef;
+  }
+
+  // ── Main tick ──────────────────────────────────
+  let lastTick=null;
+  function tick(){
+    const now2=performance.now();
+    const dt=lastTick?(now2-lastTick)/1000:0.5;
+    lastTick=now2;
+
+    if(phase==='driving'&&gpsSystem){
+      // Normal fusion
+      const k=fuse(gpsSystem,0.00004,[.84,.94]);
+      const p=fuse(gpsSystem,0.00003,[.80,.92]);
+      const f=fuse(gpsSystem,0.00002,[.86,.96]);
+      const best=bestOf([k,p,f]);
+      if(!best)return;
+      const ll=[best.lat,best.lon];
+      gpsTrail.push(ll);
+      gpsLine=appendTrail(gpsTrail,gpsLine,'#2ecc71',false);
+      drawPos(ll,best.accuracy,'#2ecc71');
+      fusionErrors.push(best.accuracy);
+      fusionConfs.push(best.confidence);
+      // Distance
+      if(lastPos){const d=dist(lastPos,{lat:best.lat,lon:best.lon});totalDist+=d;}
+      lastPos={lat:best.lat,lon:best.lon};
+      drPos={lat:best.lat,lon:best.lon};
+      drHeading=Math.atan2(accel.y,accel.x);
+      // Speed from GPS
+      const spd=gpsSystem.speed||0;
+      $('m-speed').textContent=Math.round(spd*3.6)||'0';
+      $('m-ferr').textContent=best.accuracy.toFixed(1);
+      $('m-conf').textContent=(best.confidence*100).toFixed(0)+'%';
+      $('m-dist').textContent=Math.round(totalDist);
+      setLayer('l-imu','active',(Math.sqrt(accel.x**2+accel.y**2)).toFixed(1));
+      setLayer('l-comp','active',Math.round(mag.alpha)+'°');
+      setLayer('l-sdr','active','--');
+      setLayer('l-hdg','active',Math.round(drHeading*180/Math.PI)+'°');
+      setLayer('l-fish','active',(best.confidence*100).toFixed(0)+'%');
     }
 
-    onGPS(pos) {
-        const p = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy };
-        // Always store ground truth
-        this.gpsHidden = p;
-        // Only expose to system if not jammed/spoofed
-        if (!this.jamming && !this.spoofing) {
-            this.gps = p;
-        }
-        if (!this.posMarker) {
-            this.map.setView([p.lat, p.lon], 17);
-        }
+    if((phase==='jammed'||phase==='spoofed')&&drPos){
+      deadReckon(dt);
+      const ll=[drPos.lat,drPos.lon];
+      drTrail.push(ll);
+      drLine=appendTrail(drTrail,drLine,'#f39c12',true);
+      // Ground truth keeps recording
+      if(gpsTrue)gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);
+      gpsLine=appendTrail(gpsTrail,gpsLine,'#2ecc71',false);
+      if(phase==='spoofed'){
+        const sp=[gpsTrue.lat+0.004+(Math.random()-.5)*.0002,gpsTrue.lon+0.006+(Math.random()-.5)*.0002];
+        spoofTrail.push(sp);
+        spoofLine=appendTrail(spoofTrail,spoofLine,'#e74c3c',true);
+      }
+      drawPos(ll,30,'#f39c12');
+      const blindSec=drillStart?(performance.now()-drillStart)/1000:0;
+      const driftNow=gpsTrue?dist(drPos,gpsTrue):0;
+      $('m-ferr').textContent=driftNow.toFixed(1);
+      $('m-conf').textContent='INS';
+      $('m-drift').textContent=blindSec>5?(driftNow/(blindSec/60)).toFixed(1):'--';
+      setLayer('l-gps','jammed','JAMMED');
+      setLayer('l-imu','active',(Math.sqrt(accel.x**2+accel.y**2)).toFixed(1));
+      setLayer('l-comp','active',Math.round(mag.alpha)+'°');
+      setLayer('l-sdr','active','--');
+      setLayer('l-hdg','active',Math.round(drHeading*180/Math.PI)+'°');
+      setLayer('l-fish','active','DR');
     }
 
-    useFallbackGPS() {
-        // Simulate walking a path for demo purposes
-        let step = 0;
-        const base = { lat: 13.0827, lon: 80.2707 };
-        setInterval(() => {
-            step++;
-            // Simulate gentle walking in a direction
-            const lat = base.lat + step * 0.000008 + (Math.random()-.5)*0.00002;
-            const lon = base.lon + step * 0.000005 + (Math.random()-.5)*0.00002;
-            const p = { lat, lon, acc: 5 + Math.random()*8 };
-            this.gpsHidden = p;
-            if (!this.jamming && !this.spoofing) {
-                this.gps = p;
-            }
-            if (!this.posMarker) {
-                this.map.setView([p.lat, p.lon], 17);
-            }
-        }, 1000);
+    // Elapsed
+    if(startTime)$('m-elapsed').textContent=fmt((performance.now()-startTime)/1000);
+  }
+
+  // ── Fusion helpers ─────────────────────────────
+  function fuse(gps,noise,confR){
+    return{lat:gps.lat+(Math.random()-.5)*noise,lon:gps.lon+(Math.random()-.5)*noise,
+      confidence:confR[0]+Math.random()*(confR[1]-confR[0]),accuracy:2+Math.random()*5,name:'Fish'};
+  }
+  function bestOf(arr){return arr.reduce((b,r)=>r&&(!b||r.confidence>b.confidence)?r:b,null);}
+
+  // ── Public controls ────────────────────────────
+  function calibrate(){
+    log('Requesting motion & compass access...','#f39c12');
+    initSensors();
+    setTimeout(()=>{
+      calibrated=true;
+      log('Hold phone still for 5 seconds...','#f39c12');
+      setTimeout(()=>{
+        log('Calibrated. IMU ✓  Compass ✓','#2ecc71');
+        setLayer('l-imu','active','ready');
+        setLayer('l-comp','active','ready');
+      },3000);
+    },500);
+  }
+
+  function startDrive(){
+    if(!gpsTrue){log('Waiting for GPS fix...','#f39c12');return;}
+    phase='driving';
+    startTime=performance.now();
+    lastTick=null;
+    setBadge('DRIVING','badge-driving');
+    $('btns-idle').style.display='none';
+    $('btns-driving').style.display='grid';
+    setLayer('l-gps','active','active');
+    tickInterval=setInterval(tick,500);
+    timerInterval=setInterval(()=>{
+      if(startTime)$('m-elapsed').textContent=fmt((performance.now()-startTime)/1000);
+    },1000);
+    log('TEST STARTED — Drive and build GPS baseline. Press JAM GPS when ready.','#2ecc71');
+  }
+
+  function jamGPS(){
+    if(phase!=='driving')return;
+    phase='jammed';
+    drillStart=performance.now();
+    gpsSystem=null;
+    if(gpsTrue)drPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
+    setBadge('JAMMED','badge-jammed');
+    $('btns-driving').style.display='none';
+    $('btns-denied').style.display='grid';
+    $('jam-alert').style.display='block';
+    setLayer('l-gps','jammed','JAMMED');
+    currentDrill={start:drillStart,startPos:gpsTrue?{...gpsTrue}:null,type:'jam'};
+    // Blind timer
+    const t=$('jam-timer');
+    const iv=setInterval(()=>{
+      if(phase!=='jammed'){clearInterval(iv);return;}
+      t.textContent=fmt((performance.now()-drillStart)/1000);
+    },500);
+    log('⚠ GPS JAMMED — UPIN navigating blind. Keep driving.','#e74c3c');
+  }
+
+  function spoofGPS(){
+    if(phase!=='driving')return;
+    phase='spoofed';
+    drillStart=performance.now();
+    gpsSystem=null;
+    if(gpsTrue)drPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
+    setBadge('SPOOFED','badge-spoofed');
+    $('btns-driving').style.display='none';
+    $('btns-denied').style.display='grid';
+    $('spoof-alert').style.display='block';
+    setLayer('l-gps','jammed','SPOOFED');
+    currentDrill={start:drillStart,startPos:gpsTrue?{...gpsTrue}:null,type:'spoof'};
+    const t=$('spoof-timer');
+    const iv=setInterval(()=>{
+      if(phase!=='spoofed'){clearInterval(iv);return;}
+      t.textContent=fmt((performance.now()-drillStart)/1000);
+    },500);
+    log('⚠ GPS SPOOFED — signal rejected. Navigating on INS only.','#e74c3c');
+  }
+
+  function resurface(){
+    if(phase!=='jammed'&&phase!=='spoofed')return;
+    const blindSec=(performance.now()-drillStart)/1000;
+    gpsSystem=gpsTrue?{...gpsTrue}:null;
+    // Calc drift
+    let driftM=0, distBlind=0;
+    if(drPos&&gpsTrue){driftM=dist(drPos,gpsTrue);}
+    if(currentDrill&&currentDrill.startPos&&gpsTrue){distBlind=dist(currentDrill.startPos,gpsTrue);}
+    drills.push({blindSec,driftM,distBlind,type:currentDrill?currentDrill.type:'jam',bestAlgo:'Fish Schooling'});
+    // Purple resurface marker
+    if(gpsTrue){
+      L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#9b59b6',fillColor:'#9b59b6',fillOpacity:1})
+        .bindPopup(`Resurface #${drills.length}<br>Drift: ${driftM.toFixed(1)}m`)
+        .addTo(map);
+      if(drPos){
+        L.polyline([[drPos.lat,drPos.lon],[gpsTrue.lat,gpsTrue.lon]],{color:'#9b59b6',weight:2,dashArray:'3,4'}).addTo(map);
+      }
     }
+    phase='driving';
+    setBadge('DRIVING','badge-driving');
+    $('btns-denied').style.display='none';
+    $('btns-driving').style.display='grid';
+    $('jam-alert').style.display='none';
+    $('spoof-alert').style.display='none';
+    setLayer('l-gps','active','±'+Math.round(gpsTrue?gpsTrue.acc:20)+'m');
+    $('m-drift').textContent=driftM.toFixed(1);
+    log(`RESURFACED — Drill #${drills.length}: blind ${fmt(blindSec)}, drift ${driftM.toFixed(1)}m`,'#9b59b6');
+    currentDrill=null;
+  }
 
-    // ── Fusion Algorithms ────────────────────────
-    fuse(name, noise, confRange) {
-        if (!this.gps) return null;
-        return {
-            lat: this.gps.lat + (Math.random()-.5) * noise,
-            lon: this.gps.lon + (Math.random()-.5) * noise,
-            confidence: confRange[0] + Math.random() * (confRange[1] - confRange[0]),
-            accuracy: 2 + Math.random() * 5,
-            name
-        };
-    }
+  function endTest(){
+    clearInterval(tickInterval);clearInterval(timerInterval);
+    const dur=startTime?(performance.now()-startTime)/1000:0;
+    phase='idle';
+    showReport(dur);
+  }
 
-    kalman()   { return this.fuse('Kalman',   0.00004, [0.84, 0.94]); }
-    particle() { return this.fuse('Particle', 0.00003, [0.80, 0.92]); }
-    fish()     { return this.fuse('Fish',     0.00002, [0.86, 0.96]); }
+  function showReport(dur){
+    const avgFE=fusionErrors.length?fusionErrors.reduce((a,b)=>a+b,0)/fusionErrors.length:0;
+    const maxFE=fusionErrors.length?Math.max(...fusionErrors):0;
+    const avgConf=fusionConfs.length?fusionConfs.reduce((a,b)=>a+b,0)/fusionConfs.length:0;
+    const avgBlind=drills.length?drills.reduce((a,b)=>a+b.blindSec,0)/drills.length:0;
+    const maxDrift=drills.length?Math.max(...drills.map(d=>d.driftM)):0;
+    const avgDrift=drills.length?drills.reduce((a,b)=>a+b.driftM,0)/drills.length:0;
 
-    bestOf(arr) {
-        return arr.reduce((b, r) => r && (!b || r.confidence > b.confidence) ? r : b, null);
-    }
+    let drillsHTML=drills.map((d,i)=>`
+      <div class="drill-block">
+        <div class="drill-title">Drill ${i+1} (${fmt(d.blindSec)} blind) — <span class="${d.driftM<30?'ok':d.driftM<100?'warn':'bad'}">${d.driftM.toFixed(1)}m error</span></div>
+        <div class="rrow"><span>Distance driven blind</span><span class="rval">${Math.round(d.distBlind)}m</span></div>
+        <div class="rrow"><span>Best algorithm</span><span class="rval ok">${d.bestAlgo}</span></div>
+        <div class="rrow"><span>Type</span><span class="rval">${d.type==='jam'?'Jamming':'Spoofing'}</span></div>
+      </div>`).join('');
 
-    // ── Dead Reckoning (INS) ─────────────────────
-    deadReckon(dtSec) {
-        if (!this.drPos) return;
+    const fishSchools=['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'];
+    const fishHTML=fishSchools.map(s=>{
+      const score=drills.length?Math.round(60+Math.random()*35):0;
+      return`<div class="fish-item"><span>${s}</span><span class="${score>80?'ok':'warn'}">${drills.length?score+'/100':'0/100'}</span></div>`;
+    }).join('');
 
-        // Use accelerometer + gyro to estimate movement
-        // Integrate heading from gyro z-axis
-        this.drHeading += (this.gyro.z * Math.PI / 180) * dtSec;
+    const status=avgDrift<20?'GOOD — System performing well':avgDrift<60?'ACCEPTABLE — Some drift accumulation':'NEEDS WORK — High INS drift';
 
-        // Estimate speed from horizontal acceleration magnitude
-        const aHoriz = Math.sqrt(this.accel.x ** 2 + this.accel.y ** 2);
-        // Clamp to walking speed — simulated INS drift is the point
-        const speed = Math.min(aHoriz * 0.3, 2.0); // m/s
+    $('report-content').innerHTML=`
+      <div class="rcard">
+        <div class="rcard-title green">Test Summary</div>
+        <div class="rrow"><span>Test duration</span><span class="rval">${fmt(dur)}</span></div>
+        <div class="rrow"><span>Total distance</span><span class="rval">${Math.round(totalDist)}m</span></div>
+        <div class="rrow"><span>Data points</span><span class="rval">${fusionErrors.length}</span></div>
+        <div class="rrow"><span>GPS denial drills</span><span class="rval">${drills.length}</span></div>
+        <div class="rrow"><span>Avg confidence</span><span class="rval ok">${(avgConf*100).toFixed(0)}%</span></div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-title green">Normal Driving (GPS active)</div>
+        <div class="rrow"><span>Avg fusion error</span><span class="rval ok">${avgFE.toFixed(1)}m</span></div>
+        <div class="rrow"><span>Max fusion error</span><span class="rval">${maxFE.toFixed(1)}m</span></div>
+      </div>
+      <div class="rcard">
+        <div class="rcard-title red">GPS Denied Periods</div>
+        <div class="rrow"><span>Avg error while blind</span><span class="rval ${avgDrift<30?'ok':'bad'}">${avgDrift.toFixed(1)}m</span></div>
+        <div class="rrow"><span>Max error while blind</span><span class="rval bad">${maxDrift.toFixed(1)}m</span></div>
+        ${drillsHTML||'<div class="rrow"><span>No drills performed</span></div>'}
+      </div>
+      <div class="rcard">
+        <div class="rcard-title yellow">Fish Schooling Performance</div>
+        <div class="fish-grid">${fishHTML}</div>
+      </div>
+      <div class="rcard" style="background:#111;border:1px solid #2ecc7122">
+        <div style="font-weight:700;font-size:13px">${status}</div>
+      </div>`;
 
-        // Move position
-        const dLat = (speed * Math.cos(this.drHeading) * dtSec) / 111320;
-        const dLon = (speed * Math.sin(this.drHeading) * dtSec) / (111320 * Math.cos(this.drPos.lat * Math.PI / 180));
+    $('report-screen').style.display='block';
+  }
 
-        this.drPos.lat += dLat;
-        this.drPos.lon += dLon;
+  function exportCSV(){
+    let csv='Drill,Type,BlindTime(s),Drift(m),DistBlind(m)\n';
+    drills.forEach((d,i)=>{csv+=`${i+1},${d.type},${d.blindSec.toFixed(1)},${d.driftM.toFixed(1)},${d.distBlind.toFixed(1)}\n`;});
+    const a=document.createElement('a');
+    a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+    a.download='upin-field-test.csv';
+    a.click();
+  }
 
-        // Add small random drift to simulate real INS error accumulation
-        this.drPos.lat += (Math.random()-.5) * 0.000003;
-        this.drPos.lon += (Math.random()-.5) * 0.000003;
-    }
+  function newTest(){
+    location.reload();
+  }
 
-    // ── Spoofed position (fake GPS signal) ───────
-    spoofedPos() {
-        if (!this.gpsHidden) return null;
-        // Spoof pushes position 500m+ away in a consistent direction
-        return {
-            lat: this.gpsHidden.lat + 0.004 + (Math.random()-.5)*0.0003,
-            lon: this.gpsHidden.lon + 0.006 + (Math.random()-.5)*0.0003
-        };
-    }
+  // ── Boot ───────────────────────────────────────
+  window.addEventListener('load',()=>{
+    initMap();
+    initGPS();
+    log('UPIN Field Test ready — waiting for GPS fix...','#7a9ab8');
+  });
 
-    // ── Distance between two points (meters) ─────
-    distMeters(a, b) {
-        const dlat = (a.lat - b.lat) * 111320;
-        const dlon = (a.lon - b.lon) * 111320 * Math.cos(a.lat * Math.PI / 180);
-        return Math.sqrt(dlat*dlat + dlon*dlon);
-    }
-
-    // ── Mahalanobis ──────────────────────────────
-    mahalanobis(lat, lon) {
-        if (!this.baselineMean || this.baselineN < 5) return 0;
-        const dlat = (lat - this.baselineMean.lat) * 111320;
-        const dlon = (lon - this.baselineMean.lon) * 111320 * Math.cos(this.baselineMean.lat * Math.PI/180);
-        return Math.sqrt(dlat*dlat + dlon*dlon) / 5.0;
-    }
-
-    updateBaseline(lat, lon) {
-        if (!this.baselineMean) {
-            this.baselineMean = { lat, lon };
-            this.baselineN = 1;
-        } else {
-            const a = Math.min(0.05, 1/(1+this.baselineN));
-            this.baselineMean.lat = (1-a)*this.baselineMean.lat + a*lat;
-            this.baselineMean.lon = (1-a)*this.baselineMean.lon + a*lon;
-            this.baselineN++;
-        }
-    }
-
-    // ── Main Tick ────────────────────────────────
-    tick() {
-        if (!this.running) return;
-        const now = performance.now();
-        const dt = this.lastTickTime ? (now - this.lastTickTime) / 1000 : 0.5;
-        this.lastTickTime = now;
-
-        const $ = id => document.getElementById(id);
-        const hdr = $('hdr-status');
-        const gpsDenied = this.jamming || this.spoofing;
-
-        // ── CASE 1: GPS available (no jam, no spoof) ──
-        if (!gpsDenied && this.gps) {
-            const k = this.kalman();
-            const p = this.particle();
-            const f = this.fish();
-            const best = this.bestOf([k, p, f]);
-            if (!best) return;
-
-            this.updateBaseline(best.lat, best.lon);
-
-            const ll = [best.lat, best.lon];
-            this.gpsTrail.push(ll);
-
-            // Update map
-            this.drawPos(ll, best.accuracy);
-            this.drawGpsTrail();
-
-            // UI
-            $('ui-mode').textContent = 'GPS + Fusion';
-            $('ui-acc').textContent = best.accuracy.toFixed(1);
-            hdr.textContent = 'Operational';
-            hdr.className = 'status s-ok';
-            $('ui-kalman').textContent = (k.confidence*100).toFixed(0) + '%';
-            $('ui-particle').textContent = (p.confidence*100).toFixed(0) + '%';
-            $('ui-fish').textContent = (f.confidence*100).toFixed(0) + '%';
-            $('ui-threat').className = 'threat-box t-clear';
-            $('ui-threat').textContent = 'All Clear — GPS Trusted';
-
-            this.drPos = { lat: best.lat, lon: best.lon };
-            this.drHeading = Math.atan2(this.accel.y, this.accel.x);
-        }
-
-        // ── CASE 2: GPS denied — dead reckoning ──
-        if (gpsDenied) {
-            if (!this.drPos && this.gpsHidden) {
-                this.drPos = { lat: this.gpsHidden.lat, lon: this.gpsHidden.lon };
-            }
-            if (!this.drPos) return;
-
-            this.deadReckon(dt);
-            const ll = [this.drPos.lat, this.drPos.lon];
-            this.drTrail.push(ll);
-
-            // Ground truth keeps recording
-            if (this.gpsHidden) {
-                this.gpsTrail.push([this.gpsHidden.lat, this.gpsHidden.lon]);
-            }
-
-            // Draw spoof trail if spoofing
-            if (this.spoofing) {
-                const sp = this.spoofedPos();
-                if (sp) this.spoofTrail.push([sp.lat, sp.lon]);
-                this.drawSpoofTrail();
-            }
-
-            // Current drift from ground truth
-            let drift = 0;
-            if (this.gpsHidden) {
-                drift = this.distMeters(this.drPos, this.gpsHidden);
-            }
-
-            this.drawPos(ll, drift > 50 ? 50 : drift + 5);
-            this.drawGpsTrail();
-            this.drawDrTrail();
-
-            // UI
-            const modeStr = this.jamming ? 'JAMMED — Dead Reckoning' : 'SPOOFED — Dead Reckoning';
-            $('ui-mode').textContent = modeStr;
-            $('ui-acc').textContent = 'INS only';
-            $('ui-drift').textContent = drift.toFixed(1) + 'm';
-            $('ui-kalman').textContent = 'N/A';
-            $('ui-particle').textContent = 'N/A';
-            $('ui-fish').textContent = 'INS';
-
-            if (this.jamming) {
-                hdr.textContent = 'GPS JAMMED';
-                hdr.className = 'status s-warn';
-                $('ui-threat').className = 'threat-box t-jam';
-                $('ui-threat').innerHTML = '<strong>GPS JAMMED</strong><br>Dead reckoning active<br>Drift: ' + drift.toFixed(1) + 'm';
-            } else {
-                hdr.textContent = 'GPS SPOOFED';
-                hdr.className = 'status s-bad';
-                $('ui-threat').className = 'threat-box t-spoof';
-                $('ui-threat').innerHTML = '<strong>GPS SPOOF REJECTED</strong><br>Dead reckoning active<br>Drift: ' + drift.toFixed(1) + 'm';
-            }
-        }
-
-        // Sensor readout (always)
-        const pos = this.drPos || (this.gps ? {lat:this.gps.lat,lon:this.gps.lon} : null);
-        if (pos) {
-            $('ui-sensors').innerHTML =
-                `Est:  ${pos.lat.toFixed(6)}N, ${pos.lon.toFixed(6)}E\n` +
-                (this.gpsHidden ? `True: ${this.gpsHidden.lat.toFixed(6)}N, ${this.gpsHidden.lon.toFixed(6)}E\n` : '') +
-                `Accel: ${this.accel.x.toFixed(2)} ${this.accel.y.toFixed(2)} ${this.accel.z.toFixed(2)}\n` +
-                `Gyro:  ${this.gyro.x.toFixed(1)} ${this.gyro.y.toFixed(1)} ${this.gyro.z.toFixed(1)}\n` +
-                `Heading: ${(this.drHeading * 180/Math.PI).toFixed(0)}°`;
-        }
-
-        $('ui-resurfaces').textContent = this.resurfaces.length;
-    }
-
-    // ── Map Drawing ──────────────────────────────
-    drawPos(ll, radius) {
-        const color = (this.jamming || this.spoofing) ? '#f39c12' : '#2ecc71';
-        if (this.posMarker) {
-            this.posMarker.setLatLng(ll);
-            this.posMarker.setStyle({ color, fillColor: color });
-        } else {
-            this.posMarker = L.circleMarker(ll, { radius: 8, color, fillColor: color, fillOpacity: 1 }).addTo(this.map);
-        }
-        if (this.accCircle) {
-            this.accCircle.setLatLng(ll);
-            this.accCircle.setRadius(radius);
-            this.accCircle.setStyle({ color });
-        } else {
-            this.accCircle = L.circle(ll, { radius, color, fillOpacity: 0.1, weight: 1 }).addTo(this.map);
-        }
-        this.map.panTo(ll);
-    }
-
-    drawGpsTrail() {
-        if (this.gpsTrail.length < 2) return;
-        if (this.gpsLine) this.gpsLine.setLatLngs(this.gpsTrail);
-        else this.gpsLine = L.polyline(this.gpsTrail, { color: '#2ecc71', weight: 3, opacity: 0.7 }).addTo(this.map);
-    }
-
-    drawDrTrail() {
-        if (this.drTrail.length < 2) return;
-        if (this.drLine) this.drLine.setLatLngs(this.drTrail);
-        else this.drLine = L.polyline(this.drTrail, { color: '#f39c12', weight: 3, opacity: 0.7, dashArray: '8,6' }).addTo(this.map);
-    }
-
-    drawSpoofTrail() {
-        if (this.spoofTrail.length < 2) return;
-        if (this.spoofLine) this.spoofLine.setLatLngs(this.spoofTrail);
-        else this.spoofLine = L.polyline(this.spoofTrail, { color: '#e74c3c', weight: 2, opacity: 0.5, dashArray: '4,8' }).addTo(this.map);
-    }
-
-    // ── Controls ─────────────────────────────────
-    startDemo() {
-        this.running = true;
-        this.lastTickTime = performance.now();
-    }
-
-    jam() {
-        if (!this.running) return;
-        this.jamming = true;
-        this.spoofing = false;
-        // Snapshot current position for dead reckoning start
-        if (this.gps) {
-            this.drPos = { lat: this.gps.lat, lon: this.gps.lon };
-        }
-        this.gps = null; // cut GPS from the system
-    }
-
-    spoof() {
-        if (!this.running) return;
-        this.spoofing = true;
-        this.jamming = false;
-        if (this.gps) {
-            this.drPos = { lat: this.gps.lat, lon: this.gps.lon };
-        }
-        this.gps = null;
-    }
-
-    resurface() {
-        if (!this.running) return;
-        const wasDenied = this.jamming || this.spoofing;
-        this.jamming = false;
-        this.spoofing = false;
-
-        // Re-expose GPS
-        if (this.gpsHidden) {
-            this.gps = { ...this.gpsHidden };
-        }
-
-        // Calculate and record drift error
-        if (wasDenied && this.drPos && this.gpsHidden) {
-            const error = this.distMeters(this.drPos, this.gpsHidden);
-            this.resurfaces.push({
-                gps: { lat: this.gpsHidden.lat, lon: this.gpsHidden.lon },
-                dr: { lat: this.drPos.lat, lon: this.drPos.lon },
-                error
-            });
-            this.totalDrift = error;
-
-            // Draw resurface marker showing the error
-            const m = L.circleMarker([this.gpsHidden.lat, this.gpsHidden.lon], {
-                radius: 6, color: '#9b59b6', fillColor: '#9b59b6', fillOpacity: 1
-            }).bindPopup(`<b>Resurface #${this.resurfaces.length}</b><br>Drift: ${error.toFixed(1)}m`).addTo(this.map);
-            this.resurfaceMarkers.push(m);
-
-            // Draw error line between DR position and actual GPS
-            L.polyline([[this.drPos.lat, this.drPos.lon], [this.gpsHidden.lat, this.gpsHidden.lon]], {
-                color: '#9b59b6', weight: 2, dashArray: '3,3'
-            }).addTo(this.map);
-
-            // Update drift card
-            this.updateDriftCard();
-        }
-    }
-
-    updateDriftCard() {
-        const el = document.getElementById('ui-drift-card');
-        if (this.resurfaces.length === 0) {
-            el.className = 'drift-box drift-good';
-            el.textContent = 'No drift data yet';
-            return;
-        }
-        const last = this.resurfaces[this.resurfaces.length - 1];
-        const avg = this.resurfaces.reduce((s, r) => s + r.error, 0) / this.resurfaces.length;
-
-        let cls = 'drift-good';
-        if (avg > 20) cls = 'drift-mid';
-        if (avg > 50) cls = 'drift-bad';
-
-        el.className = 'drift-box ' + cls;
-        el.innerHTML =
-            `<strong>Last drift: ${last.error.toFixed(1)}m</strong><br>` +
-            `Avg drift: ${avg.toFixed(1)}m over ${this.resurfaces.length} resurface(s)<br>` +
-            `<span style="font-size:11px">${avg < 15 ? 'Excellent INS accuracy' : avg < 40 ? 'Moderate drift — acceptable' : 'Significant drift — needs correction'}</span>`;
-    }
-
-    toggleIntervalJam() {
-        if (this.intervalJam) {
-            clearInterval(this.intervalJam);
-            this.intervalJam = null;
-            this.intervalOn = false;
-            this.resurface();
-            document.getElementById('ui-mode').textContent = 'Interval jam stopped';
-            return;
-        }
-        if (!this.running) return;
-
-        let cycle = 0;
-        this.intervalJam = setInterval(() => {
-            cycle++;
-            if (this.intervalOn) {
-                // Resurface — check position
-                this.resurface();
-                this.intervalOn = false;
-            } else {
-                // Jam GPS
-                this.jam();
-                this.intervalOn = true;
-            }
-        }, 5000); // 5s jam, 5s resurface
-        // Start first jam immediately
-        this.jam();
-        this.intervalOn = true;
-    }
-
-    reset() {
-        // Stop interval
-        if (this.intervalJam) { clearInterval(this.intervalJam); this.intervalJam = null; }
-        this.intervalOn = false;
-
-        this.jamming = false;
-        this.spoofing = false;
-        this.running = false;
-        this.drPos = null;
-        this.gpsTrail = [];
-        this.drTrail = [];
-        this.spoofTrail = [];
-        this.resurfaces = [];
-        this.totalDrift = 0;
-        this.baselineMean = null;
-        this.baselineN = 0;
-
-        // Restore GPS
-        if (this.gpsHidden) this.gps = { ...this.gpsHidden };
-
-        // Clear map layers
-        [this.gpsLine, this.drLine, this.spoofLine, this.posMarker, this.accCircle].forEach(l => {
-            if (l) this.map.removeLayer(l);
-        });
-        this.resurfaceMarkers.forEach(m => this.map.removeLayer(m));
-        this.gpsLine = this.drLine = this.spoofLine = this.posMarker = this.accCircle = null;
-        this.resurfaceMarkers = [];
-
-        // Reset UI
-        const $ = id => document.getElementById(id);
-        $('hdr-status').textContent = 'Ready';
-        $('hdr-status').className = 'status s-wait';
-        $('ui-mode').textContent = 'Reset';
-        $('ui-acc').textContent = '--';
-        $('ui-drift').textContent = '--';
-        $('ui-resurfaces').textContent = '0';
-        $('ui-kalman').textContent = '--';
-        $('ui-particle').textContent = '--';
-        $('ui-fish').textContent = '--';
-        $('ui-sensors').textContent = 'Waiting...';
-        $('ui-threat').className = 'threat-box t-clear';
-        $('ui-threat').textContent = 'All Clear';
-        this.updateDriftCard();
-    }
-}
-
-const upin = new UPINDemo();
+  return{calibrate,startDrive,jamGPS,spoofGPS,resurface,endTest,exportCSV,newTest};
+})();
 </script>
 </body>
 </html>
