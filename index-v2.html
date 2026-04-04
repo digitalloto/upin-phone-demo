@@ -8,9 +8,9 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a1628;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
-#header{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:#111d2e;border-bottom:2px solid #2ecc71;flex-shrink:0}
-#header h1{font-size:14px;font-weight:700;color:#2ecc71;letter-spacing:1px}
-#badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;background:#333;color:#aaa;letter-spacing:.5px}
+#hdr{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:#111d2e;border-bottom:2px solid #2ecc71;flex-shrink:0}
+#hdr h1{font-size:14px;font-weight:700;color:#2ecc71;letter-spacing:1px}
+#badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;background:#333;color:#aaa}
 .b-idle{background:#333!important;color:#aaa!important}
 .b-drive{background:#2ecc71!important;color:#000!important}
 .b-jam{background:#f39c12!important;color:#000!important;animation:pulse 1.2s infinite}
@@ -21,14 +21,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .legend{position:absolute;bottom:6px;left:6px;z-index:1000;background:rgba(10,20,35,.9);padding:5px 8px;border-radius:6px;font-size:9px;line-height:1.8;pointer-events:none}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle}
 #panel{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px 10px 16px}
-/* Metrics */
 .metrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px}
 .mc{background:#1a2a3f;border-radius:7px;padding:6px 4px;text-align:center}
 .mc .lb{font-size:8px;font-weight:700;color:#5a7a9a;text-transform:uppercase;letter-spacing:.3px}
 .mc .vl{font-size:18px;font-weight:700;color:#e0e0e0;line-height:1.1}
 .mc .un{font-size:8px;color:#445}
-.vl.g{color:#2ecc71}.vl.y{color:#f39c12}.vl.r{color:#e74c3c}.vl.p{color:#9b59b6}
-/* Layers */
+.g{color:#2ecc71}.y{color:#f39c12}.r{color:#e74c3c}.p{color:#9b59b6}
 .stitle{font-size:9px;font-weight:700;color:#445;text-transform:uppercase;letter-spacing:.8px;margin:8px 0 4px}
 .layers{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:8px}
 .ly{background:#1a2a3f;border-radius:6px;padding:5px 6px;display:flex;align-items:center;gap:5px}
@@ -37,75 +35,74 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .ld.jam{background:#e74c3c;box-shadow:0 0 5px #e74c3c}
 .ld.off{background:#333}
 .ln{font-size:9px;font-weight:700;color:#8aa}.lv{font-size:8px;color:#556}
-/* Agent cards */
+/* Agents */
 .agents{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:8px}
-.ag{background:#1a2a3f;border-radius:7px;padding:6px;position:relative;border:1px solid transparent}
+.ag{background:#1a2a3f;border-radius:7px;padding:6px;border:1px solid transparent}
 .ag.best{border-color:#2ecc71}
-.ag .aname{font-size:8px;font-weight:700;color:#5a7a9a;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px}
-.ag .aerr{font-size:14px;font-weight:700;line-height:1}
-.ag .aweight{font-size:8px;color:#556;margin-top:1px}
-.ag .abar{height:3px;background:#1a2a3f;border-radius:2px;margin-top:3px;overflow:hidden}
-.ag .abar-fill{height:100%;border-radius:2px;transition:width .3s}
-/* Fish schools */
+.ag .an{font-size:8px;font-weight:700;color:#5a7a9a;text-transform:uppercase;margin-bottom:2px}
+.ag .ae{font-size:14px;font-weight:700;line-height:1}
+.ag .aw{font-size:8px;color:#556;margin-top:1px}
+.ag .ab{height:3px;background:#0d1a2a;border-radius:2px;margin-top:3px;overflow:hidden}
+.ag .af{height:100%;border-radius:2px}
+/* MA indicator cards */
+.ma-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:8px}
+.mac{background:#1a2a3f;border-radius:7px;padding:6px;text-align:center}
+.mac .ml{font-size:7px;font-weight:700;color:#5a7a9a;text-transform:uppercase}
+.mac .mv{font-size:13px;font-weight:700;line-height:1.2}
+.mac .ms{font-size:7px;color:#556}
+/* Fish */
 .fish{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:8px}
 .fs{background:#1a2a3f;border-radius:6px;padding:5px 6px;text-align:center}
-.fs .fname{font-size:8px;font-weight:700;color:#5a7a9a;text-transform:uppercase}
-.fs .fscore{font-size:13px;font-weight:700;color:#e0e0e0}
-.fs .fleader{font-size:7px;color:#556}
+.fs .fn{font-size:8px;font-weight:700;color:#5a7a9a;text-transform:uppercase}
+.fs .fv{font-size:13px;font-weight:700}.fs .fl{font-size:7px;color:#556}
 /* Buttons */
 .btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
-.btns3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px}
-.btn{padding:12px 6px;border:none;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;color:#fff;letter-spacing:.3px;-webkit-tap-highlight-color:transparent;transition:opacity .15s}
+.btn{padding:12px 6px;border:none;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;color:#fff;-webkit-tap-highlight-color:transparent;transition:opacity .15s}
 .btn:active{opacity:.6}
 .btn-g{background:#2ecc71;color:#000}.btn-b{background:#2980b9}.btn-r{background:#e74c3c}
 .btn-y{background:#f39c12;color:#000}.btn-p{background:#8e44ad}.btn-d{background:#1a2a3f;border:1px solid #2ecc7133}
 .btn-grey{background:#2a3a4f}
-/* Drill config */
-.drill-cfg{background:#1a2a3f;border-radius:8px;padding:10px;margin-bottom:8px}
-.drill-cfg .cfg-title{font-size:9px;font-weight:700;color:#5a7a9a;text-transform:uppercase;margin-bottom:6px}
-.cfg-row{display:flex;gap:6px;flex-wrap:wrap}
-.cfg-opt{padding:8px 14px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;background:#0d1a2a;color:#7a9ab8;border:1px solid #2a3a4f;-webkit-tap-highlight-color:transparent}
-.cfg-opt.active{background:#2ecc71;color:#000;border-color:#2ecc71}
+/* Drill cfg */
+.dcfg{background:#1a2a3f;border-radius:8px;padding:10px;margin-bottom:8px}
+.dcfg .dt{font-size:9px;font-weight:700;color:#5a7a9a;text-transform:uppercase;margin-bottom:6px}
+.cr{display:flex;gap:6px;flex-wrap:wrap}
+.co{padding:8px 14px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;background:#0d1a2a;color:#7a9ab8;border:1px solid #2a3a4f}
+.co.active{background:#2ecc71;color:#000;border-color:#2ecc71}
 /* Alerts */
-.alert-box{display:none;border-radius:9px;padding:12px;margin-bottom:8px;text-align:center}
-.alert-box .at{font-weight:700;font-size:12px;margin-bottom:3px}
-.alert-box .atimer{font-size:26px;font-weight:700;margin:4px 0}
-.alert-box .ahint{color:#888;font-size:10px}
-#jam-alert{background:#1a0505;border:1px solid #f39c1244}
-#jam-alert .at{color:#f39c12}#jam-alert .atimer{color:#f39c12}
-#spoof-alert{background:#1a0505;border:1px solid #e74c3c44}
-#spoof-alert .at{color:#e74c3c}#spoof-alert .atimer{color:#e74c3c}
-/* Log */
-#log-box{background:#0d1a2a;border-radius:7px;padding:6px 8px;font-family:'SF Mono','Courier New',monospace;font-size:9px;line-height:1.6;max-height:110px;overflow-y:auto;color:#5a7a9a;margin-bottom:8px}
-/* Grade badge */
-.grade{display:inline-block;font-size:14px;font-weight:900;width:28px;height:28px;line-height:28px;text-align:center;border-radius:6px;margin-left:6px}
-.grade-a{background:#2ecc71;color:#000}.grade-b{background:#3498db;color:#fff}
-.grade-c{background:#f39c12;color:#000}.grade-d{background:#e74c3c;color:#fff}
+.alrt{display:none;border-radius:9px;padding:12px;margin-bottom:8px;text-align:center}
+.alrt .at{font-weight:700;font-size:12px;margin-bottom:3px}
+.alrt .atm{font-size:26px;font-weight:700;margin:4px 0}
+.alrt .ah{color:#888;font-size:10px}
+#jalrt{background:#1a0505;border:1px solid #f39c1244}
+#jalrt .at{color:#f39c12}#jalrt .atm{color:#f39c12}
+#salrt{background:#1a0505;border:1px solid #e74c3c44}
+#salrt .at{color:#e74c3c}#salrt .atm{color:#e74c3c}
+#log{background:#0d1a2a;border-radius:7px;padding:6px 8px;font-family:'SF Mono','Courier New',monospace;font-size:9px;line-height:1.6;max-height:110px;overflow-y:auto;color:#5a7a9a;margin-bottom:8px}
 /* Report */
-#report{display:none;position:fixed;inset:0;background:#0a1628;z-index:2000;overflow-y:auto;padding:14px}
-.rh{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.rh h2{font-size:14px;font-weight:700;color:#2ecc71;letter-spacing:1px}
-.rbtn{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px}
+#rpt{display:none;position:fixed;inset:0;background:#0a1628;z-index:2000;overflow-y:auto;padding:14px}
+.rh{display:flex;justify-content:space-between;margin-bottom:12px}
+.rh h2{font-size:14px;font-weight:700;color:#2ecc71}
+.rb2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px}
 .rc{background:#111d2e;border-radius:9px;padding:10px;margin-bottom:7px}
 .rct{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
-.rct.g{color:#2ecc71}.rct.r{color:#e74c3c}.rct.y{color:#f39c12}.rct.p{color:#9b59b6}
 .rr{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1a2a3f;font-size:12px}
 .rr:last-child{border-bottom:none}
-.rv{font-weight:600}.rv.ok{color:#2ecc71}.rv.w{color:#f39c12}.rv.bad{color:#e74c3c}
-.drill-blk{background:#0d1a2a;border-radius:7px;padding:8px;margin-bottom:5px}
-.drill-title{font-size:11px;font-weight:700;color:#f39c12;margin-bottom:4px}
+.rv{font-weight:600}
+.db{background:#0d1a2a;border-radius:7px;padding:8px;margin-bottom:5px}
+.dbt{font-size:11px;font-weight:700;color:#f39c12;margin-bottom:4px}
 .fg{display:grid;grid-template-columns:1fr 1fr;gap:4px}
 .fi{display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #1a2a3f}
-/* Replay */
-#replay-bar{display:none;background:#111d2e;padding:8px 14px;border-top:2px solid #9b59b6;text-align:center;flex-shrink:0}
-#replay-bar .rp-title{font-size:10px;color:#9b59b6;font-weight:700;margin-bottom:4px}
-#replay-progress{width:100%;height:4px;background:#1a2a3f;border-radius:2px;overflow:hidden;margin-bottom:4px}
-#replay-fill{height:100%;width:0;background:#9b59b6;border-radius:2px;transition:width .2s}
+.grade{display:inline-block;font-size:14px;font-weight:900;width:28px;height:28px;line-height:28px;text-align:center;border-radius:6px;margin-left:6px}
+.gA{background:#2ecc71;color:#000}.gB{background:#3498db;color:#fff}.gC{background:#f39c12;color:#000}.gD{background:#e74c3c;color:#fff}
+#rpbar{display:none;background:#111d2e;padding:8px 14px;border-top:2px solid #9b59b6;text-align:center;flex-shrink:0}
+#rpbar .rpt{font-size:10px;color:#9b59b6;font-weight:700;margin-bottom:4px}
+#rpprog{width:100%;height:4px;background:#1a2a3f;border-radius:2px;overflow:hidden;margin-bottom:4px}
+#rpfill{height:100%;width:0;background:#9b59b6;border-radius:2px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 </style>
 </head>
 <body>
-<div id="header"><h1>UPIN FIELD TEST v2</h1><span id="badge" class="b-idle">IDLE</span></div>
+<div id="hdr"><h1>UPIN FIELD TEST v2</h1><span id="badge" class="b-idle">IDLE</span></div>
 <div id="map-wrap">
   <div id="map"></div>
   <div class="legend">
@@ -117,385 +114,344 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 </div>
 <div id="panel">
   <div class="metrics">
-    <div class="mc"><div class="lb">Fusion Error</div><div class="vl" id="m-ferr">--</div><div class="un">metres</div></div>
-    <div class="mc"><div class="lb">Confidence</div><div class="vl g" id="m-conf">--</div><div class="un">percent</div></div>
-    <div class="mc"><div class="lb">Speed</div><div class="vl g" id="m-speed">0</div><div class="un">km/h</div></div>
-    <div class="mc"><div class="lb">Distance</div><div class="vl" id="m-dist">0</div><div class="un">metres</div></div>
-    <div class="mc"><div class="lb">Drift Rate</div><div class="vl" id="m-drate">--</div><div class="un">m/min</div></div>
-    <div class="mc"><div class="lb">Elapsed</div><div class="vl" id="m-time">0:00</div><div class="un">&nbsp;</div></div>
+    <div class="mc"><div class="lb">Fusion Error</div><div class="vl" id="mFE">--</div><div class="un">metres</div></div>
+    <div class="mc"><div class="lb">Confidence</div><div class="vl g" id="mCO">--</div><div class="un">percent</div></div>
+    <div class="mc"><div class="lb">Speed</div><div class="vl g" id="mSP">0</div><div class="un">km/h</div></div>
+    <div class="mc"><div class="lb">Distance</div><div class="vl" id="mDI">0</div><div class="un">metres</div></div>
+    <div class="mc"><div class="lb">Drift Rate</div><div class="vl" id="mDR">--</div><div class="un">m/min</div></div>
+    <div class="mc"><div class="lb">Elapsed</div><div class="vl" id="mTI">0:00</div><div class="un">&nbsp;</div></div>
   </div>
   <div class="stitle">Positioning Layers</div>
   <div class="layers">
-    <div class="ly"><div class="ld off" id="ld-gps"></div><div><div class="ln">GPS</div><div class="lv" id="lv-gps">--</div></div></div>
-    <div class="ly"><div class="ld off" id="ld-imu"></div><div><div class="ln">IMU</div><div class="lv" id="lv-imu">--</div></div></div>
-    <div class="ly"><div class="ld off" id="ld-comp"></div><div><div class="ln">Compass</div><div class="lv" id="lv-comp">--</div></div></div>
-    <div class="ly"><div class="ld off" id="ld-sdr"></div><div><div class="ln">Step DR</div><div class="lv" id="lv-sdr">--</div></div></div>
-    <div class="ly"><div class="ld off" id="ld-hdg"></div><div><div class="ln">Heading</div><div class="lv" id="lv-hdg">--</div></div></div>
-    <div class="ly"><div class="ld off" id="ld-fish"></div><div><div class="ln">Fish AI</div><div class="lv" id="lv-fish">--</div></div></div>
+    <div class="ly"><div class="ld off" id="dGPS"></div><div><div class="ln">GPS</div><div class="lv" id="vGPS">--</div></div></div>
+    <div class="ly"><div class="ld off" id="dIMU"></div><div><div class="ln">IMU</div><div class="lv" id="vIMU">--</div></div></div>
+    <div class="ly"><div class="ld off" id="dCMP"></div><div><div class="ln">Compass</div><div class="lv" id="vCMP">--</div></div></div>
+    <div class="ly"><div class="ld off" id="dSDR"></div><div><div class="ln">Step DR</div><div class="lv" id="vSDR">--</div></div></div>
+    <div class="ly"><div class="ld off" id="dHDG"></div><div><div class="ln">Heading</div><div class="lv" id="vHDG">--</div></div></div>
+    <div class="ly"><div class="ld off" id="dFSH"></div><div><div class="ln">Fish AI</div><div class="lv" id="vFSH">--</div></div></div>
+  </div>
+  <div class="stitle">Moving Averages (Baseline)</div>
+  <div class="ma-cards">
+    <div class="mac"><div class="ml">SMA Speed</div><div class="mv g" id="maSMA">--</div><div class="ms">m/s (20pt)</div></div>
+    <div class="mac"><div class="ml">EMA Heading</div><div class="mv" id="maEMA">--</div><div class="ms">degrees</div></div>
+    <div class="mac"><div class="ml">VWMA Pos</div><div class="mv p" id="maVWMA">--</div><div class="ms">confidence-weighted</div></div>
+    <div class="mac"><div class="ml">Vel SMA</div><div class="mv" id="maVel">--</div><div class="ms">m/s (lat,lon)</div></div>
+    <div class="mac"><div class="ml">Accel EMA</div><div class="mv" id="maAcc">--</div><div class="ms">m/s² fwd</div></div>
+    <div class="mac"><div class="ml">Samples</div><div class="mv g" id="maSamp">0</div><div class="ms">baseline pts</div></div>
   </div>
   <div class="stitle">Math Agents</div>
-  <div class="agents" id="agent-cards"></div>
+  <div class="agents" id="agC"></div>
   <div class="stitle">Fish Schools</div>
-  <div class="fish" id="fish-cards"></div>
-  <!-- Phase buttons -->
-  <div id="btns-idle" class="btns">
+  <div class="fish" id="fsC"></div>
+  <div id="bIdle" class="btns">
     <button class="btn btn-b" onclick="U.calibrate()">CALIBRATE</button>
-    <button class="btn btn-g" id="btn-start" onclick="U.startDrive()" disabled style="opacity:.4">START DRIVE</button>
+    <button class="btn btn-g" id="bStart" onclick="U.startDrive()" disabled style="opacity:.4">START DRIVE</button>
   </div>
-  <div id="btns-drive" class="btns" style="display:none">
+  <div id="bDrive" class="btns" style="display:none">
     <button class="btn btn-y" onclick="U.jamGPS()">JAM GPS</button>
     <button class="btn btn-r" onclick="U.spoofGPS()">SPOOF GPS</button>
   </div>
-  <div id="btns-denied" class="btns" style="display:none">
+  <div id="bDenied" class="btns" style="display:none">
     <button class="btn btn-g" onclick="U.resurface()">RESURFACE</button>
     <button class="btn btn-grey" onclick="U.endTest()">END TEST</button>
   </div>
-  <div id="btns-report" class="btns" style="display:none">
-    <button class="btn btn-p" onclick="U.showReplay()">REPLAY</button>
-    <button class="btn btn-grey" onclick="U.endTest()">END TEST</button>
-  </div>
-  <!-- Drill config -->
-  <div class="drill-cfg" id="drill-cfg" style="display:none">
-    <div class="cfg-title">Auto-Drill Interval</div>
-    <div class="cfg-row">
-      <div class="cfg-opt" onclick="U.setDrillTime(0)" id="dt-0">Manual</div>
-      <div class="cfg-opt" onclick="U.setDrillTime(10)" id="dt-10">10s</div>
-      <div class="cfg-opt" onclick="U.setDrillTime(20)" id="dt-20">20s</div>
-      <div class="cfg-opt" onclick="U.setDrillTime(30)" id="dt-30">30s</div>
+  <div class="dcfg" id="dcfg" style="display:none">
+    <div class="dt">Auto-Drill Interval</div>
+    <div class="cr">
+      <div class="co" onclick="U.setDrill(0)" id="d0">Manual</div>
+      <div class="co" onclick="U.setDrill(10)" id="d10">10s</div>
+      <div class="co" onclick="U.setDrill(20)" id="d20">20s</div>
+      <div class="co" onclick="U.setDrill(30)" id="d30">30s</div>
     </div>
   </div>
-  <!-- Alerts -->
-  <div class="alert-box" id="jam-alert">
-    <div class="at">GPS JAMMED — navigating with agents only</div>
-    <div class="atimer" id="jam-timer">0:00</div>
-    <div class="ahint">Press RESURFACE to compare agent estimates vs reality</div>
-  </div>
-  <div class="alert-box" id="spoof-alert">
-    <div class="at">GPS SPOOFED — fake signal rejected</div>
-    <div class="atimer" id="spoof-timer">0:00</div>
-    <div class="ahint">Press RESURFACE to compare agent estimates vs reality</div>
-  </div>
+  <div class="alrt" id="jalrt"><div class="at">GPS JAMMED — navigating on baseline averages</div><div class="atm" id="jTmr">0:00</div><div class="ah">Press RESURFACE to compare</div></div>
+  <div class="alrt" id="salrt"><div class="at">GPS SPOOFED — fake signal rejected</div><div class="atm" id="sTmr">0:00</div><div class="ah">Press RESURFACE to compare</div></div>
   <div class="stitle">Event Log</div>
-  <div id="log-box"></div>
+  <div id="log"></div>
 </div>
-<!-- Replay bar -->
-<div id="replay-bar">
-  <div class="rp-title">REPLAY</div>
-  <div id="replay-progress"><div id="replay-fill"></div></div>
-  <button class="btn btn-d" onclick="U.stopReplay()" style="padding:6px;font-size:10px">STOP</button>
-</div>
-<!-- Report overlay -->
-<div id="report"><div class="rh"><h2>UPIN FIELD TEST REPORT</h2></div>
-  <div class="rbtn"><button class="btn btn-d" onclick="U.exportCSV()">EXPORT CSV</button><button class="btn btn-b" onclick="location.reload()">NEW TEST</button></div>
-  <div id="report-body"></div>
+<div id="rpbar"><div class="rpt">REPLAY</div><div id="rpprog"><div id="rpfill"></div></div><button class="btn btn-d" onclick="U.stopReplay()" style="padding:6px;font-size:10px">STOP</button></div>
+<div id="rpt"><div class="rh"><h2>UPIN FIELD TEST REPORT</h2></div>
+  <div class="rb2"><button class="btn btn-d" onclick="U.exportCSV()">EXPORT CSV</button><button class="btn btn-b" onclick="location.reload()">NEW TEST</button></div>
+  <div id="rptB"></div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const U=(()=>{
-// ═══════════════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════════════
-let map,posMarker,accCircle;
-let gpsLine,drLine,spoofLine;
-const gpsTrail=[],drTrail=[],spoofTrail=[];
+// ── State ────────────────────────────────────
+let map,posMarker,accCircle,gpsLine,drLine,spoofLine;
+const MAX_TRAIL=300; // cap trail arrays to prevent freeze
+let gpsTrail=[],drTrail=[],spoofTrail=[];
 let gpsTrue=null,gpsSys=null,drPos=null;
 let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},mag={alpha:0,beta:0,gamma:0};
-let phase='idle'; // idle|driving|jammed|spoofed
-let calibrated=false,startTime=null,drillStart=null;
-let totalDist=0,lastGpsPos=null;
-let drills=[],currentDrill=null;
-let fusionErrors=[],fusionConfs=[];
-let tickIv=null,timerIv=null,autoDrillIv=null;
-let drillTimeSec=0; // 0=manual
-let simStep=0;
-// Step detection
-let stepCount=0,lastStepTime=0,stepFreq=0,strideLen=0.72; // meters
-let accelHistory=[],stepThreshold=1.2;
-// Heading from compass
-let compassHeading=0;
+let phase='idle',calibrated=false,startTime=null,drillStart=null;
+let totalDist=0,lastGP=null,stepCount=0,lastStepT=0,stepFreq=0;
+const strideLen=0.72;
+let compassHdg=0,simStep=0;
+let drills=[],currentDrill=null,fusionErrs=[],fusionConfs=[];
+let tickIv=null,timerIv=null,autoDrillIv=null,drillTimeSec=0;
+let accelHist=[];
+let uiDirty=true,uiFrame=0; // throttle UI updates
 
 const $=id=>document.getElementById(id);
-function ts(){const d=new Date();return`[${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}]`}
-function fmt(s){const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss}
-function hav(a,b){
-  const R=6371000,dLat=(b.lat-a.lat)*Math.PI/180,dLon=(b.lon-a.lon)*Math.PI/180;
-  const x=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLon/2)**2;
-  return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
-}
-function log(msg,color){
-  const b=$('log-box'),d=document.createElement('div');
-  d.style.color=color||'#5a7a9a';d.textContent=ts()+' '+msg;
-  b.appendChild(d);b.scrollTop=b.scrollHeight;
-}
-function setL(id,cls,val){$(id).className='ld '+cls;const v=id.replace('ld-','lv-');if(val!==undefined)$(v).textContent=val;}
-function setBadge(t,c){const b=$('badge');b.textContent=t;b.className=c;}
+const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
+const fmt=s=>{const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;};
+function ts(){const d=new Date();return`[${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}]`;}
+function log(m,c){const b=$('log'),d=document.createElement('div');d.style.color=c||'#5a7a9a';d.textContent=ts()+' '+m;b.appendChild(d);if(b.childNodes.length>50)b.removeChild(b.firstChild);b.scrollTop=b.scrollHeight;}
+function capArr(a){if(a.length>MAX_TRAIL)a.splice(0,a.length-MAX_TRAIL);}
 
 // ═══════════════════════════════════════════════
-// MATH AGENTS
+// MOVING AVERAGE BASELINE — "Financial Indicators"
+// Records data while GPS is active, uses it to predict when GPS denied
+// ═══════════════════════════════════════════════
+const MA={
+  // Rolling windows
+  speeds:[],      // m/s from GPS deltas
+  headings:[],    // compass degrees
+  velLat:[],      // lat velocity (deg/s)
+  velLon:[],      // lon velocity (deg/s)
+  accelFwd:[],    // forward acceleration
+  positions:[],   // {lat,lon,conf,t}
+  WINDOW:20,      // SMA window
+  EMA_ALPHA:0.15, // EMA smoothing factor
+  // Current averages
+  smaSpeed:0,
+  emaHeading:0,
+  vwmaLat:0,vwmaLon:0,     // volume(confidence)-weighted position
+  smaVelLat:0,smaVelLon:0, // velocity SMA
+  emaAccelFwd:0,
+  count:0,
+  lastT:null,lastLat:null,lastLon:null,
+
+  // Add a GPS sample to the baseline
+  addSample(lat,lon,conf,hdg,aFwd){
+    const now=performance.now()/1000;
+    if(this.lastT!==null&&this.lastLat!==null){
+      const dt=now-this.lastT;
+      if(dt>0.1&&dt<5){
+        const vLat=(lat-this.lastLat)/dt;
+        const vLon=(lon-this.lastLon)/dt;
+        const speed=Math.sqrt((vLat*111320)**2+(vLon*111320*Math.cos(lat*Math.PI/180))**2);
+        this.speeds.push(speed);
+        this.velLat.push(vLat);
+        this.velLon.push(vLon);
+        this.headings.push(hdg);
+        this.accelFwd.push(aFwd);
+        this.positions.push({lat,lon,conf:conf||0.5,t:now});
+        // Cap windows
+        const W=this.WINDOW*3;
+        if(this.speeds.length>W)this.speeds.splice(0,this.speeds.length-W);
+        if(this.velLat.length>W)this.velLat.splice(0,this.velLat.length-W);
+        if(this.velLon.length>W)this.velLon.splice(0,this.velLon.length-W);
+        if(this.headings.length>W)this.headings.splice(0,this.headings.length-W);
+        if(this.accelFwd.length>W)this.accelFwd.splice(0,this.accelFwd.length-W);
+        if(this.positions.length>W)this.positions.splice(0,this.positions.length-W);
+        this.count++;
+        this.recalc();
+      }
+    }
+    this.lastT=now;this.lastLat=lat;this.lastLon=lon;
+  },
+
+  recalc(){
+    const W=Math.min(this.WINDOW,this.speeds.length);
+    if(W<2)return;
+    // SMA Speed (last W samples)
+    const tail=a=>a.slice(-W);
+    const sma=a=>{const t=tail(a);return t.reduce((s,v)=>s+v,0)/t.length;};
+    this.smaSpeed=sma(this.speeds);
+    // EMA Heading
+    const hTail=tail(this.headings);
+    let ema=hTail[0];
+    for(let i=1;i<hTail.length;i++)ema=this.EMA_ALPHA*hTail[i]+(1-this.EMA_ALPHA)*ema;
+    this.emaHeading=ema;
+    // Velocity SMA
+    this.smaVelLat=sma(this.velLat);
+    this.smaVelLon=sma(this.velLon);
+    // EMA forward accel
+    const aTail=tail(this.accelFwd);
+    let eAcc=aTail[0];
+    for(let i=1;i<aTail.length;i++)eAcc=this.EMA_ALPHA*aTail[i]+(1-this.EMA_ALPHA)*eAcc;
+    this.emaAccelFwd=eAcc;
+    // VWMA position (confidence-weighted)
+    const pTail=tail(this.positions);
+    let twLat=0,twLon=0,tw=0;
+    pTail.forEach(p=>{twLat+=p.lat*p.conf;twLon+=p.lon*p.conf;tw+=p.conf;});
+    if(tw>0){this.vwmaLat=twLat/tw;this.vwmaLon=twLon/tw;}
+  },
+
+  // Predict next position when GPS denied using baseline averages
+  predict(currentPos,dt){
+    if(this.count<5||!currentPos)return currentPos;
+    // Use velocity SMA + EMA heading + EMA accel to project forward
+    const hdgRad=this.emaHeading*Math.PI/180;
+    // Blend: 60% velocity SMA continuation, 40% heading-based projection
+    const velSpeed=Math.sqrt((this.smaVelLat*111320)**2+(this.smaVelLon*111320*Math.cos(currentPos.lat*Math.PI/180))**2);
+    const effSpeed=Math.min(velSpeed+this.emaAccelFwd*dt,30); // cap at 30 m/s
+    const dLat_vel=this.smaVelLat*dt;
+    const dLon_vel=this.smaVelLon*dt;
+    const dLat_hdg=(effSpeed*Math.cos(hdgRad)*dt)/111320;
+    const dLon_hdg=(effSpeed*Math.sin(hdgRad)*dt)/(111320*Math.cos(currentPos.lat*Math.PI/180));
+    return{
+      lat:currentPos.lat+dLat_vel*0.6+dLat_hdg*0.4,
+      lon:currentPos.lon+dLon_vel*0.6+dLon_hdg*0.4
+    };
+  }
+};
+
+// ═══════════════════════════════════════════════
+// MATH AGENTS — now use MA baseline for better accuracy
 // ═══════════════════════════════════════════════
 class Agent{
-  constructor(name,color){
-    this.name=name;this.color=color;
-    this.pos=null;    // {lat,lon}
-    this.weight=1/5;  // initial equal weight
-    this.totalErr=0;  // cumulative error across drills
-    this.drillCount=0;
-    this.lastErr=null;
-    this.confidence=0;
-  }
+  constructor(n,c){this.name=n;this.color=c;this.pos=null;this.weight=0.2;this.totalErr=0;this.drillCount=0;this.lastErr=null;this.conf=0;}
   init(lat,lon){this.pos={lat,lon};}
-  // Override in subclasses
-  predict(dt,sensors){}
-  getPos(){return this.pos;}
-  grade(){
-    if(!this.lastErr)return'-';
-    if(this.lastErr<10)return'A';if(this.lastErr<30)return'B';
-    if(this.lastErr<80)return'C';return'D';
-  }
+  predict(dt,s){}
+  onGPS(g){if(g)this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.85+Math.random()*0.1);}
+  grade(){if(this.lastErr===null)return'-';if(this.lastErr<10)return'A';if(this.lastErr<30)return'B';if(this.lastErr<80)return'C';return'D';}
 }
 
-// -- Kalman Agent: linear state estimation
 class KalmanAgent extends Agent{
-  constructor(){super('Kalman','#3498db');this.vLat=0;this.vLon=0;this.Q=0.000001;this.P=0.001;}
+  constructor(){super('Kalman','#3498db');this.vLat=0;this.vLon=0;this.P=0.001;}
   predict(dt,s){
     if(!this.pos)return;
-    // Predict from velocity
-    this.pos.lat+=this.vLat*dt;
-    this.pos.lon+=this.vLon*dt;
-    // Update velocity from accel
-    const aFwd=s.accel.x*0.15;
-    const aLat=s.accel.y*0.15;
-    const h=s.compassHeading*Math.PI/180;
-    this.vLat+=(aFwd*Math.cos(h)-aLat*Math.sin(h))*dt/111320;
-    this.vLon+=(aFwd*Math.sin(h)+aLat*Math.cos(h))*dt/(111320*Math.cos(this.pos.lat*Math.PI/180));
-    // Decay velocity (friction)
-    this.vLat*=0.98;this.vLon*=0.98;
-    // Process noise
-    this.P+=this.Q*dt;
-    this.confidence=Math.max(0,1-this.P*500);
+    // Use MA velocity as prediction basis instead of raw accel
+    if(MA.count>5){
+      this.vLat=MA.smaVelLat*0.7+this.vLat*0.3;
+      this.vLon=MA.smaVelLon*0.7+this.vLon*0.3;
+    }else{
+      const h=s.compassHdg*Math.PI/180;
+      this.vLat+=(s.accel.x*Math.cos(h)*0.1*dt)/111320;
+      this.vLon+=(s.accel.x*Math.sin(h)*0.1*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180));
+    }
+    this.pos.lat+=this.vLat*dt;this.pos.lon+=this.vLon*dt;
+    this.vLat*=0.97;this.vLon*=0.97;
+    this.P+=0.000001*dt;
+    this.conf=Math.max(0,1-this.P*400);
   }
-  onGPS(gps){
-    if(!this.pos)return;
-    // Kalman gain
-    const R=0.00005;
-    const K=this.P/(this.P+R);
-    this.pos.lat+=K*(gps.lat-this.pos.lat);
-    this.pos.lon+=K*(gps.lon-this.pos.lon);
-    this.P=(1-K)*this.P;
-    this.confidence=Math.min(1,0.85+Math.random()*0.1);
-  }
+  onGPS(g){if(!this.pos||!g)return;const K=this.P/(this.P+0.00004);this.pos.lat+=K*(g.lat-this.pos.lat);this.pos.lon+=K*(g.lon-this.pos.lon);this.P=(1-K)*this.P;this.conf=Math.min(1,0.88+Math.random()*0.08);}
 }
 
-// -- Particle Agent: 80 weighted particles
 class ParticleAgent extends Agent{
-  constructor(){super('Particle','#e67e22');this.particles=[];this.N=80;}
-  init(lat,lon){
-    this.pos={lat,lon};
-    this.particles=[];
-    for(let i=0;i<this.N;i++)this.particles.push({lat:lat+(Math.random()-.5)*0.0001,lon:lon+(Math.random()-.5)*0.0001,w:1/this.N});
-  }
+  constructor(){super('Particle','#e67e22');this.particles=[];this.N=30;} // reduced from 80 to 30
+  init(lat,lon){this.pos={lat,lon};this.particles=[];for(let i=0;i<this.N;i++)this.particles.push({lat:lat+(Math.random()-.5)*0.00008,lon:lon+(Math.random()-.5)*0.00008,w:1/this.N});}
   predict(dt,s){
     if(!this.particles.length)return;
-    const h=s.compassHeading*Math.PI/180;
-    const spd=s.stepSpeed||0.5;
-    this.particles.forEach(p=>{
-      const noise=()=>(Math.random()-.5)*0.000008;
-      p.lat+=(spd*Math.cos(h)*dt)/111320+noise();
-      p.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(p.lat*Math.PI/180))+noise();
-    });
-    // Weighted average
-    let tLat=0,tLon=0,tw=0;
-    this.particles.forEach(p=>{tLat+=p.lat*p.w;tLon+=p.lon*p.w;tw+=p.w;});
-    this.pos={lat:tLat/tw,lon:tLon/tw};
-    this.confidence=Math.max(0,0.75-this.particles.reduce((s,p)=>s+Math.abs(p.lat-this.pos.lat),0)*111320/this.N*0.1);
+    // Use MA baseline to guide particles
+    const predicted=MA.predict(this.pos,dt);
+    if(predicted&&MA.count>5){
+      const dLat=predicted.lat-this.pos.lat;
+      const dLon=predicted.lon-this.pos.lon;
+      this.particles.forEach(p=>{p.lat+=dLat+(Math.random()-.5)*0.000006;p.lon+=dLon+(Math.random()-.5)*0.000006;});
+    }else{
+      const h=s.compassHdg*Math.PI/180,spd=(s.stepSpeed||0.5);
+      this.particles.forEach(p=>{p.lat+=(spd*Math.cos(h)*dt)/111320+(Math.random()-.5)*0.000006;p.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(p.lat*Math.PI/180))+(Math.random()-.5)*0.000006;});
+    }
+    let tLa=0,tLo=0,tw=0;
+    this.particles.forEach(p=>{tLa+=p.lat*p.w;tLo+=p.lon*p.w;tw+=p.w;});
+    this.pos={lat:tLa/tw,lon:tLo/tw};
+    this.conf=Math.max(0.1,this.conf-0.002*dt);
   }
-  onGPS(gps){
-    if(!this.particles.length)return;
-    // Reweight particles by distance to GPS
-    this.particles.forEach(p=>{
-      const d=hav(p,gps);
-      p.w=Math.exp(-d*d/200);
-    });
-    // Resample
-    const tw=this.particles.reduce((s,p)=>s+p.w,0);
+  onGPS(g){
+    if(!g||!this.particles.length)return;
+    this.particles.forEach(p=>{const d=hav(p,g);p.w=Math.exp(-d*d/150);});
+    const tw=this.particles.reduce((s,p)=>s+p.w,0)||1;
     this.particles.forEach(p=>p.w/=tw);
-    const newP=[];
-    for(let i=0;i<this.N;i++){
-      let r=Math.random(),cum=0;
-      for(const p of this.particles){cum+=p.w;if(cum>=r){newP.push({lat:p.lat+(Math.random()-.5)*0.00002,lon:p.lon+(Math.random()-.5)*0.00002,w:1/this.N});break;}}
-    }
-    if(newP.length===this.N)this.particles=newP;
-    this.pos={lat:gps.lat,lon:gps.lon};
-    this.confidence=Math.min(1,0.82+Math.random()*0.12);
+    // Resample
+    const nP=[];
+    for(let i=0;i<this.N;i++){let r=Math.random(),c=0;for(const p of this.particles){c+=p.w;if(c>=r){nP.push({lat:p.lat+(Math.random()-.5)*0.00001,lon:p.lon+(Math.random()-.5)*0.00001,w:1/this.N});break;}}}
+    if(nP.length===this.N)this.particles=nP;
+    this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.84+Math.random()*0.1);
   }
 }
 
-// -- Bayesian Agent: grid-based posterior
 class BayesianAgent extends Agent{
-  constructor(){super('Bayesian','#1abc9c');this.prior=null;}
+  constructor(){super('Bayesian','#1abc9c');}
   predict(dt,s){
     if(!this.pos)return;
-    const h=s.compassHeading*Math.PI/180;
-    const spd=s.stepSpeed||0.5;
-    // Shift position by motion model
-    this.pos.lat+=(spd*Math.cos(h)*dt)/111320+(Math.random()-.5)*0.000005;
-    this.pos.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180))+(Math.random()-.5)*0.000005;
-    // Confidence decays with time
-    this.confidence=Math.max(0.1,this.confidence-0.003*dt);
-  }
-  onGPS(gps){
-    if(!this.pos)return;
-    // Bayesian update: posterior = prior * likelihood
-    const priorW=0.3,gpsW=0.7;
-    this.pos.lat=this.pos.lat*priorW+gps.lat*gpsW;
-    this.pos.lon=this.pos.lon*priorW+gps.lon*gpsW;
-    this.confidence=Math.min(1,0.80+Math.random()*0.13);
-  }
-}
-
-// -- Step-Compass Agent: pedometer + magnetometer
-class StepCompassAgent extends Agent{
-  constructor(){super('StepNav','#e74c3c');this.lastStepCount=0;}
-  predict(dt,s){
-    if(!this.pos)return;
-    const newSteps=s.steps-this.lastStepCount;
-    this.lastStepCount=s.steps;
-    if(newSteps>0){
-      const h=s.compassHeading*Math.PI/180;
-      const d=newSteps*s.strideLen;
-      this.pos.lat+=d*Math.cos(h)/111320;
-      this.pos.lon+=d*Math.sin(h)/(111320*Math.cos(this.pos.lat*Math.PI/180));
+    // Use MA prediction as the prior
+    const pred=MA.predict(this.pos,dt);
+    if(pred&&MA.count>5){
+      this.pos.lat=pred.lat*0.8+this.pos.lat*0.2;
+      this.pos.lon=pred.lon*0.8+this.pos.lon*0.2;
+    }else{
+      const h=s.compassHdg*Math.PI/180,spd=s.stepSpeed||0.3;
+      this.pos.lat+=(spd*Math.cos(h)*dt)/111320+(Math.random()-.5)*0.000004;
+      this.pos.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180))+(Math.random()-.5)*0.000004;
     }
-    // Small noise
-    this.pos.lat+=(Math.random()-.5)*0.000002;
-    this.pos.lon+=(Math.random()-.5)*0.000002;
-    this.confidence=Math.max(0.2,this.confidence-0.002*dt);
+    this.conf=Math.max(0.1,this.conf-0.002*dt);
   }
-  onGPS(gps){
-    if(!this.pos)return;
-    this.pos={lat:gps.lat,lon:gps.lon};
-    this.confidence=Math.min(1,0.88+Math.random()*0.08);
-    this.lastStepCount=stepCount;
-  }
+  onGPS(g){if(!this.pos||!g)return;this.pos.lat=this.pos.lat*0.25+g.lat*0.75;this.pos.lon=this.pos.lon*0.25+g.lon*0.75;this.conf=Math.min(1,0.82+Math.random()*0.12);}
 }
 
-// -- Momentum Agent: physics-based velocity+decay
+class StepNavAgent extends Agent{
+  constructor(){super('StepNav','#e74c3c');this.lastSteps=0;}
+  predict(dt,s){
+    if(!this.pos)return;
+    const ns=s.steps-this.lastSteps;this.lastSteps=s.steps;
+    if(ns>0){
+      // Use EMA heading from baseline if available
+      const hdg=(MA.count>5?MA.emaHeading:s.compassHdg)*Math.PI/180;
+      const d=ns*strideLen;
+      this.pos.lat+=d*Math.cos(hdg)/111320;
+      this.pos.lon+=d*Math.sin(hdg)/(111320*Math.cos(this.pos.lat*Math.PI/180));
+    }
+    this.pos.lat+=(Math.random()-.5)*0.0000015;this.pos.lon+=(Math.random()-.5)*0.0000015;
+    this.conf=Math.max(0.2,this.conf-0.001*dt);
+  }
+  onGPS(g){if(!g)return;this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.9+Math.random()*0.06);this.lastSteps=stepCount;}
+}
+
 class MomentumAgent extends Agent{
   constructor(){super('Momentum','#f39c12');this.vel={lat:0,lon:0};}
   predict(dt,s){
     if(!this.pos)return;
-    const h=s.compassHeading*Math.PI/180;
-    const aFwd=Math.sqrt(s.accel.x**2+s.accel.y**2)*0.12;
-    this.vel.lat+=(aFwd*Math.cos(h)*dt)/111320;
-    this.vel.lon+=(aFwd*Math.sin(h)*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180));
-    // Friction
-    this.vel.lat*=0.95;this.vel.lon*=0.95;
-    this.pos.lat+=this.vel.lat*dt;
-    this.pos.lon+=this.vel.lon*dt;
-    this.confidence=Math.max(0.15,this.confidence-0.004*dt);
+    // Use MA velocity as momentum basis
+    if(MA.count>5){
+      this.vel.lat=this.vel.lat*0.5+MA.smaVelLat*0.5;
+      this.vel.lon=this.vel.lon*0.5+MA.smaVelLon*0.5;
+    }
+    this.vel.lat*=0.96;this.vel.lon*=0.96;
+    this.pos.lat+=this.vel.lat*dt;this.pos.lon+=this.vel.lon*dt;
+    this.conf=Math.max(0.1,this.conf-0.003*dt);
   }
-  onGPS(gps){
-    if(!this.pos)return;
-    // Update velocity from position correction
-    this.vel.lat=(gps.lat-this.pos.lat)*0.5;
-    this.vel.lon=(gps.lon-this.pos.lon)*0.5;
-    this.pos={lat:gps.lat,lon:gps.lon};
-    this.confidence=Math.min(1,0.78+Math.random()*0.15);
-  }
+  onGPS(g){if(!this.pos||!g)return;this.vel.lat=(g.lat-this.pos.lat)*0.4;this.vel.lon=(g.lon-this.pos.lon)*0.4;this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.8+Math.random()*0.13);}
 }
 
-const agents=[new KalmanAgent(),new ParticleAgent(),new BayesianAgent(),new StepCompassAgent(),new MomentumAgent()];
+const agents=[new KalmanAgent(),new ParticleAgent(),new BayesianAgent(),new StepNavAgent(),new MomentumAgent()];
 
 // ═══════════════════════════════════════════════
-// FISH SCHOOLING — 6 competing schools
+// FISH SCHOOLING
 // ═══════════════════════════════════════════════
-const SCHOOL_NAMES=['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'];
-class FishSchool{
-  constructor(name,leaderIdx){
-    this.name=name;this.leaderIdx=leaderIdx;
-    this.score=0;this.pos=null;this.totalErr=0;this.checks=0;
+const SNAMES=['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'];
+class School{
+  constructor(n,li){this.name=n;this.leaderIdx=li;this.score=0;this.pos=null;this.totalErr=0;this.checks=0;}
+  update(aPos){
+    const ldr=aPos[this.leaderIdx];if(!ldr)return;
+    if(!this.pos){this.pos={...ldr};return;}
+    let aLa=0,aLo=0,n=0;aPos.forEach(p=>{if(p){aLa+=p.lat;aLo+=p.lon;n++;}});
+    if(!n)return;aLa/=n;aLo/=n;
+    this.pos.lat=ldr.lat*0.7+aLa*0.3;this.pos.lon=ldr.lon*0.7+aLo*0.3;
   }
-  update(agentPositions){
-    // Follow the leader agent, but blend with school average
-    const leader=agentPositions[this.leaderIdx];
-    if(!leader)return;
-    if(!this.pos){this.pos={...leader};return;}
-    // 70% leader, 30% school cohesion (average of all agents)
-    let avgLat=0,avgLon=0,n=0;
-    agentPositions.forEach(p=>{if(p){avgLat+=p.lat;avgLon+=p.lon;n++;}});
-    if(n===0)return;
-    avgLat/=n;avgLon/=n;
-    this.pos.lat=leader.lat*0.7+avgLat*0.3;
-    this.pos.lon=leader.lon*0.7+avgLon*0.3;
-    // Add small schooling noise (fish don't all swim identically)
-    this.pos.lat+=(Math.random()-.5)*0.000003;
-    this.pos.lon+=(Math.random()-.5)*0.000003;
-  }
-  scoreAgainst(truth){
+  scoreVs(truth){
     if(!this.pos||!truth)return;
-    const err=hav(this.pos,truth);
-    this.totalErr+=err;this.checks++;
-    // Score: 100 for <5m, 0 for >200m
-    const s=Math.max(0,Math.min(100,100-err*0.5));
-    this.score=this.checks>0?Math.round((this.score*(this.checks-1)+s)/this.checks):s;
+    const e=hav(this.pos,truth);this.totalErr+=e;this.checks++;
+    const s=Math.max(0,Math.min(100,100-e*0.5));
+    this.score=Math.round((this.score*(this.checks-1)+s)/this.checks);
   }
 }
-// Each school follows a different lead agent, with Foxtrot following the weighted consensus
-const schools=SCHOOL_NAMES.map((n,i)=>new FishSchool(n,i<5?i:0));
+const schools=SNAMES.map((n,i)=>new School(n,i<5?i:0));
 
-// Consensus: weighted average of all agents
 function consensus(){
-  let tLat=0,tLon=0,tw=0;
-  agents.forEach(a=>{
-    if(!a.pos)return;
-    tLat+=a.pos.lat*a.weight;
-    tLon+=a.pos.lon*a.weight;
-    tw+=a.weight;
-  });
-  if(tw===0)return null;
-  return{lat:tLat/tw,lon:tLon/tw};
+  let tLa=0,tLo=0,tw=0;
+  agents.forEach(a=>{if(!a.pos)return;tLa+=a.pos.lat*a.weight;tLo+=a.pos.lon*a.weight;tw+=a.weight;});
+  return tw>0?{lat:tLa/tw,lon:tLo/tw}:null;
 }
-
-// Update agent weights after resurface based on accuracy
 function updateWeights(){
-  const total=agents.reduce((s,a)=>s+Math.max(0.01,1/(1+a.totalErr)),0);
-  agents.forEach(a=>{a.weight=Math.max(0.01,1/(1+a.totalErr))/total;});
-}
-
-// Render agent cards
-function renderAgentCards(){
-  let html='';
-  let bestIdx=0,bestConf=0;
-  agents.forEach((a,i)=>{if(a.confidence>bestConf){bestConf=a.confidence;bestIdx=i;}});
-  agents.forEach((a,i)=>{
-    const err=a.lastErr!==null?a.lastErr.toFixed(1)+'m':'--';
-    const errCls=a.lastErr===null?'':(a.lastErr<15?'g':a.lastErr<50?'y':'r');
-    const isBest=i===bestIdx;
-    html+=`<div class="ag${isBest?' best':''}">
-      <div class="aname">${a.name}</div>
-      <div class="aerr vl ${errCls}">${err}</div>
-      <div class="aweight">w: ${(a.weight*100).toFixed(0)}%</div>
-      <div class="abar"><div class="abar-fill" style="width:${a.confidence*100}%;background:${a.color}"></div></div>
-    </div>`;
-  });
-  $('agent-cards').innerHTML=html;
-}
-
-function renderFishCards(){
-  let html='';
-  schools.forEach(s=>{
-    const leader=s.leaderIdx<5?agents[s.leaderIdx].name:'Consensus';
-    html+=`<div class="fs">
-      <div class="fname">${s.name}</div>
-      <div class="fscore">${s.score}/100</div>
-      <div class="fleader">${leader}</div>
-    </div>`;
-  });
-  $('fish-cards').innerHTML=html;
+  const tot=agents.reduce((s,a)=>s+Math.max(0.01,1/(1+a.totalErr)),0);
+  agents.forEach(a=>{a.weight=Math.max(0.01,1/(1+a.totalErr))/tot;});
 }
 
 // ═══════════════════════════════════════════════
-// SENSORS + GPS + STEP DETECTION
+// SENSORS + GPS
 // ═══════════════════════════════════════════════
 function initMap(){
   map=L.map('map',{zoomControl:false}).setView([13.0827,80.2707],16);
@@ -503,451 +459,372 @@ function initMap(){
   setTimeout(()=>map.invalidateSize(),300);
   window.addEventListener('resize',()=>map.invalidateSize());
 }
-
 function initGPS(){
-  log('Requesting GPS — allow Location when prompted','#f39c12');
+  log('Requesting GPS...','#f39c12');
   if(!('geolocation' in navigator)){useFallback();return;}
-  navigator.geolocation.watchPosition(
-    p=>{
-      const pos={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
-      gpsTrue=pos;
-      if(phase==='idle'||phase==='driving'){
-        gpsSys=pos;
-        if(!posMarker){map.setView([pos.lat,pos.lon],17);log(`GPS fix acquired ±${Math.round(pos.acc)}m — tap Calibrate`,'#2ecc71');$('btn-start').disabled=false;$('btn-start').style.opacity='1';}
-        setL('ld-gps','on','±'+Math.round(pos.acc)+'m');
-      }
-    },
-    ()=>useFallback(),
-    {enableHighAccuracy:true,maximumAge:500,timeout:8000}
-  );
+  navigator.geolocation.watchPosition(p=>{
+    const pos={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
+    gpsTrue=pos;
+    if(phase==='idle'||phase==='driving'){
+      gpsSys=pos;
+      if(!posMarker){map.setView([pos.lat,pos.lon],17);log('GPS fix ±'+Math.round(pos.acc)+'m — tap Calibrate','#2ecc71');$('bStart').disabled=false;$('bStart').style.opacity='1';}
+      $('dGPS').className='ld on';$('vGPS').textContent='±'+Math.round(pos.acc)+'m';
+    }
+  },()=>useFallback(),{enableHighAccuracy:true,maximumAge:500,timeout:8000});
 }
-
 function useFallback(){
-  log('Simulated GPS walk active','#f39c12');
+  log('Simulated GPS walk','#f39c12');
   const base={lat:13.0827,lon:80.2707};
   setInterval(()=>{
     simStep++;
     const pos={lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.00001,lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.00001,acc:8+Math.random()*10};
     gpsTrue=pos;
-    if(phase==='idle'||phase==='driving'){gpsSys=pos;if(!posMarker){map.setView([pos.lat,pos.lon],17);$('btn-start').disabled=false;$('btn-start').style.opacity='1';}setL('ld-gps','on','±'+Math.round(pos.acc)+'m');}
+    if(phase==='idle'||phase==='driving'){gpsSys=pos;if(!posMarker){map.setView([pos.lat,pos.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}$('dGPS').className='ld on';$('vGPS').textContent='±'+Math.round(pos.acc)+'m';}
   },1000);
 }
-
 function initSensors(){
-  const startM=()=>window.addEventListener('devicemotion',e=>{
-    const a=e.acceleration||{};const r=e.rotationRate||{};
-    accel={x:a.x||0,y:a.y||0,z:a.z||9.8};
-    gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+  const sM=()=>window.addEventListener('devicemotion',e=>{
+    const a=e.acceleration||{},r=e.rotationRate||{};
+    accel={x:a.x||0,y:a.y||0,z:a.z||9.8};gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
     detectStep();
   });
-  const startO=()=>window.addEventListener('deviceorientation',e=>{
-    mag={alpha:e.alpha||0,beta:e.beta||0,gamma:e.gamma||0};
-    compassHeading=e.alpha||0;
-  });
-  if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')
-    DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')startM();}).catch(()=>{});
-  else if('DeviceMotionEvent' in window)startM();
-  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')
-    DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')startO();}).catch(()=>{});
-  else if('DeviceOrientationEvent' in window)startO();
-  // Fallback simulated sensors
+  const sO=()=>window.addEventListener('deviceorientation',e=>{mag={alpha:e.alpha||0,beta:e.beta||0,gamma:e.gamma||0};compassHdg=e.alpha||0;});
+  if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')sM();}).catch(()=>{});
+  else if('DeviceMotionEvent' in window)sM();
+  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')sO();}).catch(()=>{});
+  else if('DeviceOrientationEvent' in window)sO();
   setInterval(()=>{
     if(!accel.x&&!accel.y){
-      accel={x:(Math.random()-.5)*2,y:(Math.random()-.5)*2,z:9.8+(Math.random()-.5)};
-      gyro={x:(Math.random()-.5)*8,y:(Math.random()-.5)*8,z:(Math.random()-.5)*8};
-      mag={alpha:mag.alpha+(Math.random()-.5)*5,beta:(Math.random()-.5)*90,gamma:(Math.random()-.5)*45};
-      compassHeading=mag.alpha;
-      // Simulate steps when driving/jammed
-      if(phase==='driving'||phase==='jammed'||phase==='spoofed'){
-        if(Math.random()>0.4)detectStepSim();
-      }
+      accel={x:(Math.random()-.5)*1.5,y:(Math.random()-.5)*1.5,z:9.8+(Math.random()-.5)*.5};
+      gyro={x:(Math.random()-.5)*6,y:(Math.random()-.5)*6,z:(Math.random()-.5)*6};
+      mag={alpha:mag.alpha+(Math.random()-.5)*3,beta:(Math.random()-.5)*45,gamma:(Math.random()-.5)*25};
+      compassHdg=mag.alpha;
+      if(phase!=='idle'&&Math.random()>0.45)detectStepSim();
     }
-  },200);
+  },250);
 }
-
-// Step detection from accel magnitude peaks
 function detectStep(){
   const m=Math.sqrt(accel.x**2+accel.y**2+accel.z**2);
-  accelHistory.push(m);
-  if(accelHistory.length>10)accelHistory.shift();
-  const avg=accelHistory.reduce((a,b)=>a+b,0)/accelHistory.length;
-  if(m>avg+stepThreshold&&Date.now()-lastStepTime>300){
-    stepCount++;lastStepTime=Date.now();
-    stepFreq=1000/(Date.now()-lastStepTime+1);
-  }
+  accelHist.push(m);if(accelHist.length>10)accelHist.shift();
+  const avg=accelHist.reduce((a,b)=>a+b,0)/accelHist.length;
+  if(m>avg+1.2&&Date.now()-lastStepT>300){stepCount++;lastStepT=Date.now();stepFreq=1/(((Date.now()-lastStepT)||600)/1000);}
 }
-function detectStepSim(){
-  if(Date.now()-lastStepTime>600){stepCount++;lastStepTime=Date.now();}
-}
+function detectStepSim(){if(Date.now()-lastStepT>550){stepCount++;lastStepT=Date.now();}}
 
 // ═══════════════════════════════════════════════
-// MAIN TICK
+// MAIN TICK — optimized: throttle UI, cap trails
 // ═══════════════════════════════════════════════
 let lastTick=null;
 function tick(){
-  const now=performance.now();
-  const dt=lastTick?(now-lastTick)/1000:0.5;
-  lastTick=now;
-
-  const sensorPack={accel,gyro,mag,compassHeading,steps:stepCount,strideLen,stepSpeed:stepFreq*strideLen||0.5};
+  const now=performance.now(),dt=lastTick?(now-lastTick)/1000:0.5;
+  lastTick=now;uiFrame++;
+  const doUI=(uiFrame%4===0); // update DOM every 4th tick (every 2s)
+  const aFwd=Math.sqrt(accel.x**2+accel.y**2);
+  const sensorPack={accel,gyro,mag,compassHdg,steps:stepCount,stepSpeed:stepFreq*strideLen||0.5};
 
   if(phase==='driving'&&gpsSys){
-    // Feed all agents GPS
-    agents.forEach(a=>{
-      if(!a.pos)a.init(gpsSys.lat,gpsSys.lon);
-      a.onGPS(gpsSys);
-    });
+    agents.forEach(a=>{if(!a.pos)a.init(gpsSys.lat,gpsSys.lon);a.onGPS(gpsSys);});
     const con=consensus();
     if(con){
       const ll=[con.lat,con.lon];
-      gpsTrail.push(ll);
+      gpsTrail.push(ll);capArr(gpsTrail);
       gpsLine=drawTrail(gpsTrail,gpsLine,'#2ecc71',false);
-      drawMarker(ll,con.acc||5,'#2ecc71');
+      drawMarker(ll,gpsSys.acc||5,'#2ecc71');
       const fErr=hav(con,gpsSys);
-      fusionErrors.push(fErr);
-      fusionConfs.push(agents.reduce((s,a)=>s+a.confidence,0)/agents.length);
-      if(lastGpsPos)totalDist+=hav(lastGpsPos,{lat:con.lat,lon:con.lon});
-      lastGpsPos={lat:con.lat,lon:con.lon};
-      drPos={lat:con.lat,lon:con.lon};
-      $('m-ferr').textContent=fErr.toFixed(1);
-      $('m-conf').textContent=(fusionConfs[fusionConfs.length-1]*100).toFixed(0)+'%';
-      $('m-dist').textContent=Math.round(totalDist);
+      fusionErrs.push(fErr);if(fusionErrs.length>500)fusionErrs.shift();
+      const avgConf=agents.reduce((s,a)=>s+a.conf,0)/agents.length;
+      fusionConfs.push(avgConf);if(fusionConfs.length>500)fusionConfs.shift();
+      if(lastGP)totalDist+=hav(lastGP,{lat:con.lat,lon:con.lon});
+      lastGP={lat:con.lat,lon:con.lon};drPos={lat:con.lat,lon:con.lon};
+      // Feed moving average baseline
+      MA.addSample(con.lat,con.lon,avgConf,compassHdg,aFwd);
+      if(doUI){
+        $('mFE').textContent=fErr.toFixed(1);$('mFE').className='vl';
+        $('mCO').textContent=(avgConf*100).toFixed(0)+'%';
+        $('mDI').textContent=Math.round(totalDist);
+        $('mSP').textContent=Math.round(MA.smaSpeed*3.6);
+        $('dIMU').className='ld on';$('vIMU').textContent=aFwd.toFixed(1);
+        $('dCMP').className='ld on';$('vCMP').textContent=Math.round(compassHdg)+'°';
+        $('dSDR').className='ld on';$('vSDR').textContent=stepCount+'st';
+        $('dHDG').className='ld on';$('vHDG').textContent=Math.round(compassHdg)+'°';
+        $('dFSH').className='ld on';$('vFSH').textContent='6 schools';
+        // MA cards
+        $('maSMA').textContent=MA.smaSpeed.toFixed(1);
+        $('maEMA').textContent=MA.emaHeading.toFixed(0)+'°';
+        $('maVWMA').textContent=MA.count>2?'active':'--';
+        $('maVel').textContent=MA.count>2?(MA.smaVelLat*111320).toFixed(2):'--';
+        $('maAcc').textContent=MA.emaAccelFwd.toFixed(2);
+        $('maSamp').textContent=MA.count;
+        renderUI();
+      }
     }
-    // Update schools
     const aPos=agents.map(a=>a.pos?{...a.pos}:null);
     schools.forEach(s=>s.update(aPos));
-    // Update foxtrot to follow consensus
-    const con2=consensus();
-    if(con2)schools[5].pos={...con2};
-    // Layers
-    setL('ld-imu','on',Math.sqrt(accel.x**2+accel.y**2).toFixed(1));
-    setL('ld-comp','on',Math.round(compassHeading)+'°');
-    setL('ld-sdr','on',stepCount+'st');
-    setL('ld-hdg','on',Math.round(compassHeading)+'°');
-    setL('ld-fish','on','6 schools');
-    renderAgentCards();renderFishCards();
+    const c2=consensus();if(c2)schools[5].pos={...c2};
   }
 
-  if((phase==='jammed'||phase==='spoofed')){
-    // Agents predict without GPS
+  if(phase==='jammed'||phase==='spoofed'){
+    // Each agent predicts using MA baseline
     agents.forEach(a=>a.predict(dt,sensorPack));
     const con=consensus();
     if(con){
-      drPos={lat:con.lat,lon:con.lon};
-      const ll=[con.lat,con.lon];
-      drTrail.push(ll);
+      // Also blend consensus with MA prediction for extra accuracy
+      const maPred=MA.predict(drPos||con,dt);
+      if(maPred&&MA.count>10){
+        drPos={lat:con.lat*0.6+maPred.lat*0.4,lon:con.lon*0.6+maPred.lon*0.4};
+      }else{
+        drPos={lat:con.lat,lon:con.lon};
+      }
+      const ll=[drPos.lat,drPos.lon];
+      drTrail.push(ll);capArr(drTrail);
       drLine=drawTrail(drTrail,drLine,'#f39c12',true);
-      drawMarker(ll,25,'#f39c12');
+      drawMarker(ll,20,'#f39c12');
     }
-    // Ground truth keeps recording
-    if(gpsTrue)gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);
+    if(gpsTrue){gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);capArr(gpsTrail);}
     gpsLine=drawTrail(gpsTrail,gpsLine,'#2ecc71',false);
-    // Spoof trail
     if(phase==='spoofed'&&gpsTrue){
-      const sp=[gpsTrue.lat+0.004+(Math.random()-.5)*.0002,gpsTrue.lon+0.006+(Math.random()-.5)*.0002];
-      spoofTrail.push(sp);spoofLine=drawTrail(spoofTrail,spoofLine,'#e74c3c',true);
+      spoofTrail.push([gpsTrue.lat+0.004+(Math.random()-.5)*.0002,gpsTrue.lon+0.006+(Math.random()-.5)*.0002]);
+      capArr(spoofTrail);spoofLine=drawTrail(spoofTrail,spoofLine,'#e74c3c',true);
     }
-    // Update schools (they keep following their agent)
     const aPos=agents.map(a=>a.pos?{...a.pos}:null);
     schools.forEach(s=>s.update(aPos));
-    if(con)schools[5].pos={...con};
-    // Drift calc
-    const drift=gpsTrue&&drPos?hav(drPos,gpsTrue):0;
-    const blindSec=drillStart?(now-drillStart)/1000:0;
-    $('m-ferr').textContent=drift.toFixed(1);
-    $('m-ferr').className='vl'+(drift<15?' g':drift<50?' y':' r');
-    $('m-conf').textContent='INS';
-    $('m-drate').textContent=blindSec>3?(drift/(blindSec/60)).toFixed(1):'--';
-    setL('ld-gps','jam',phase==='jammed'?'JAMMED':'SPOOFED');
-    setL('ld-imu','on',Math.sqrt(accel.x**2+accel.y**2).toFixed(1));
-    setL('ld-comp','on',Math.round(compassHeading)+'°');
-    setL('ld-sdr','on',stepCount+'st');
-    setL('ld-hdg','on',Math.round(compassHeading)+'°');
-    setL('ld-fish','on','active');
-    renderAgentCards();renderFishCards();
+    const c2=consensus();if(c2)schools[5].pos={...c2};
+    if(doUI){
+      const drift=gpsTrue&&drPos?hav(drPos,gpsTrue):0;
+      const bs=drillStart?(now-drillStart)/1000:0;
+      $('mFE').textContent=drift.toFixed(1);$('mFE').className='vl'+(drift<15?' g':drift<50?' y':' r');
+      $('mCO').textContent='INS';$('mDR').textContent=bs>3?(drift/(bs/60)).toFixed(1):'--';
+      $('dGPS').className='ld jam';$('vGPS').textContent=phase==='jammed'?'JAMMED':'SPOOFED';
+      $('dIMU').className='ld on';$('vIMU').textContent=aFwd.toFixed(1);
+      $('dCMP').className='ld on';$('vCMP').textContent=Math.round(compassHdg)+'°';
+      $('dSDR').className='ld on';$('vSDR').textContent=stepCount+'st';
+      $('dHDG').className='ld on';$('vHDG').textContent=Math.round(compassHdg)+'°';
+      $('dFSH').className='ld on';$('vFSH').textContent='active';
+      $('maSMA').textContent=MA.smaSpeed.toFixed(1);
+      $('maEMA').textContent=MA.emaHeading.toFixed(0)+'°';
+      $('maVWMA').textContent='predicting';$('maVWMA').className='mv y';
+      renderUI();
+    }
   }
-
-  if(startTime)$('m-time').textContent=fmt((now-startTime)/1000);
-  $('m-speed').textContent=Math.round((stepFreq||0)*strideLen*3.6);
+  if(startTime&&doUI)$('mTI').textContent=fmt((now-startTime)/1000);
 }
 
 // ═══════════════════════════════════════════════
-// MAP DRAWING
+// UI RENDERING — cached, only update on change
 // ═══════════════════════════════════════════════
-function drawMarker(ll,r,color){
-  if(posMarker){posMarker.setLatLng(ll);posMarker.setStyle({color,fillColor:color});}
-  else posMarker=L.circleMarker(ll,{radius:8,color,fillColor:color,fillOpacity:1}).addTo(map);
-  if(accCircle){accCircle.setLatLng(ll);accCircle.setRadius(r);accCircle.setStyle({color});}
-  else accCircle=L.circle(ll,{radius:r,color,fillOpacity:.1,weight:1}).addTo(map);
+function renderUI(){
+  let bestI=0,bestC=0;
+  agents.forEach((a,i)=>{if(a.conf>bestC){bestC=a.conf;bestI=i;}});
+  let h='';
+  agents.forEach((a,i)=>{
+    const e=a.lastErr!==null?a.lastErr.toFixed(1)+'m':'--';
+    const ec=a.lastErr===null?'':(a.lastErr<15?' g':a.lastErr<50?' y':' r');
+    h+=`<div class="ag${i===bestI?' best':''}"><div class="an">${a.name}</div><div class="ae vl${ec}">${e}</div><div class="aw">w:${(a.weight*100).toFixed(0)}%</div><div class="ab"><div class="af" style="width:${a.conf*100}%;background:${a.color}"></div></div></div>`;
+  });
+  $('agC').innerHTML=h;
+  h='';
+  schools.forEach(s=>{
+    const l=s.leaderIdx<5?agents[s.leaderIdx].name:'Con';
+    h+=`<div class="fs"><div class="fn">${s.name}</div><div class="fv">${s.score}/100</div><div class="fl">${l}</div></div>`;
+  });
+  $('fsC').innerHTML=h;
+}
+
+// ── Map drawing ──────────────────────────────
+function drawMarker(ll,r,c){
+  if(posMarker){posMarker.setLatLng(ll);posMarker.setStyle({color:c,fillColor:c});}
+  else posMarker=L.circleMarker(ll,{radius:8,color:c,fillColor:c,fillOpacity:1}).addTo(map);
+  if(accCircle){accCircle.setLatLng(ll);accCircle.setRadius(r);accCircle.setStyle({color:c});}
+  else accCircle=L.circle(ll,{radius:r,color:c,fillOpacity:.1,weight:1}).addTo(map);
   map.panTo(ll);
 }
-function drawTrail(trail,lineRef,color,dashed){
-  if(trail.length<2)return lineRef;
-  if(lineRef)lineRef.setLatLngs(trail);
-  else lineRef=L.polyline(trail,{color,weight:3,opacity:.7,dashArray:dashed?'8,6':null}).addTo(map);
-  return lineRef;
+function drawTrail(t,ref,c,dash){
+  if(t.length<2)return ref;
+  if(ref)ref.setLatLngs(t);
+  else ref=L.polyline(t,{color:c,weight:3,opacity:.7,dashArray:dash?'8,6':null}).addTo(map);
+  return ref;
 }
 
 // ═══════════════════════════════════════════════
 // CONTROLS
 // ═══════════════════════════════════════════════
 function calibrate(){
-  log('Requesting motion & compass access...','#f39c12');
-  initSensors();
-  setTimeout(()=>{log('Hold phone still 5 seconds...','#f39c12');
-    setTimeout(()=>{calibrated=true;log('Calibrated. IMU ✓ Compass ✓','#2ecc71');setL('ld-imu','on','ready');setL('ld-comp','on','ready');},3000);
+  log('Requesting motion & compass...','#f39c12');initSensors();
+  setTimeout(()=>{log('Hold still 5s...','#f39c12');
+    setTimeout(()=>{calibrated=true;log('Calibrated. IMU + Compass ready','#2ecc71');$('dIMU').className='ld on';$('vIMU').textContent='ready';$('dCMP').className='ld on';$('vCMP').textContent='ready';},3000);
   },500);
 }
-
 function startDrive(){
-  if(!gpsTrue){log('No GPS fix yet','#e74c3c');return;}
+  if(!gpsTrue){log('No GPS fix','#e74c3c');return;}
   phase='driving';startTime=performance.now();lastTick=null;
-  setBadge('DRIVING','b-drive');
-  $('btns-idle').style.display='none';
-  $('btns-drive').style.display='grid';
-  $('drill-cfg').style.display='block';
-  // Init all agents at current position
-  agents.forEach(a=>{a.init(gpsTrue.lat,gpsTrue.lon);a.confidence=0.9;});
+  $('badge').textContent='DRIVING';$('badge').className='b-drive';
+  $('bIdle').style.display='none';$('bDrive').style.display='grid';$('dcfg').style.display='block';
+  agents.forEach(a=>{a.init(gpsTrue.lat,gpsTrue.lon);a.conf=0.9;});
   schools.forEach(s=>{s.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};s.score=50;});
   tickIv=setInterval(tick,500);
-  timerIv=setInterval(()=>{if(startTime)$('m-time').textContent=fmt((performance.now()-startTime)/1000);},1000);
-  log('TEST STARTED — Drive around. Press JAM or SPOOF when ready.','#2ecc71');
-  // Default drill config
-  document.querySelectorAll('.cfg-opt').forEach(e=>e.classList.remove('active'));
-  $('dt-0').classList.add('active');
+  timerIv=setInterval(()=>{if(startTime)$('mTI').textContent=fmt((performance.now()-startTime)/1000);},1000);
+  document.querySelectorAll('.co').forEach(e=>e.classList.remove('active'));$('d0').classList.add('active');
+  log('TEST STARTED — drive to build baseline. Press JAM/SPOOF when ready.','#2ecc71');
 }
-
 function jamGPS(){
   if(phase!=='driving')return;
-  phase='jammed';drillStart=performance.now();
-  gpsSys=null;
+  phase='jammed';drillStart=performance.now();gpsSys=null;
   if(gpsTrue)drPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
-  setBadge('JAMMED','b-jam');
-  $('btns-drive').style.display='none';$('btns-denied').style.display='grid';
-  $('jam-alert').style.display='block';$('spoof-alert').style.display='none';
+  $('badge').textContent='JAMMED';$('badge').className='b-jam';
+  $('bDrive').style.display='none';$('bDenied').style.display='grid';
+  $('jalrt').style.display='block';$('salrt').style.display='none';
   currentDrill={start:drillStart,startPos:gpsTrue?{...gpsTrue}:null,type:'jam'};
-  const iv=setInterval(()=>{if(phase!=='jammed'){clearInterval(iv);return;}$('jam-timer').textContent=fmt((performance.now()-drillStart)/1000);},500);
-  log('⚠ GPS JAMMED — agents navigating blind','#f39c12');
+  const iv=setInterval(()=>{if(phase!=='jammed'){clearInterval(iv);return;}$('jTmr').textContent=fmt((performance.now()-drillStart)/1000);},500);
+  log('GPS JAMMED — using MA baseline + agents ('+MA.count+' baseline samples)','#f39c12');
 }
-
 function spoofGPS(){
   if(phase!=='driving')return;
-  phase='spoofed';drillStart=performance.now();
-  gpsSys=null;
+  phase='spoofed';drillStart=performance.now();gpsSys=null;
   if(gpsTrue)drPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
-  setBadge('SPOOFED','b-spoof');
-  $('btns-drive').style.display='none';$('btns-denied').style.display='grid';
-  $('spoof-alert').style.display='block';$('jam-alert').style.display='none';
+  $('badge').textContent='SPOOFED';$('badge').className='b-spoof';
+  $('bDrive').style.display='none';$('bDenied').style.display='grid';
+  $('salrt').style.display='block';$('jalrt').style.display='none';
   currentDrill={start:drillStart,startPos:gpsTrue?{...gpsTrue}:null,type:'spoof'};
-  const iv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(iv);return;}$('spoof-timer').textContent=fmt((performance.now()-drillStart)/1000);},500);
-  log('⚠ GPS SPOOFED — fake signal rejected, agents navigating blind','#e74c3c');
+  const iv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(iv);return;}$('sTmr').textContent=fmt((performance.now()-drillStart)/1000);},500);
+  log('GPS SPOOFED — signal rejected, using MA baseline + agents','#e74c3c');
 }
-
 function resurface(){
   if(phase!=='jammed'&&phase!=='spoofed')return;
-  const blindSec=(performance.now()-drillStart)/1000;
+  const bs=(performance.now()-drillStart)/1000;
   gpsSys=gpsTrue?{...gpsTrue}:null;
-  // Score each agent
-  let bestAgent=null,bestErr=Infinity;
+  let bestA=null,bestE=Infinity;
   agents.forEach(a=>{
-    if(a.pos&&gpsTrue){
-      const err=hav(a.pos,gpsTrue);
-      a.lastErr=err;a.totalErr+=err;a.drillCount++;
-      if(err<bestErr){bestErr=err;bestAgent=a;}
-    }
+    if(a.pos&&gpsTrue){const e=hav(a.pos,gpsTrue);a.lastErr=e;a.totalErr+=e;a.drillCount++;if(e<bestE){bestE=e;bestA=a;}}
     if(gpsSys)a.onGPS(gpsSys);
   });
   updateWeights();
-  // Score fish schools
-  schools.forEach(s=>{if(gpsTrue)s.scoreAgainst(gpsTrue);});
-  // Foxtrot follows best performing school next round
-  let bestSchoolIdx=0,bestScore=0;
-  schools.forEach((s,i)=>{if(s.score>bestScore){bestScore=s.score;bestSchoolIdx=i;}});
-  schools[5].leaderIdx=schools[bestSchoolIdx].leaderIdx;
-  // Consensus drift
-  const conDrift=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
-  const distBlind=currentDrill&&currentDrill.startPos&&gpsTrue?hav(currentDrill.startPos,gpsTrue):0;
-  // Grade
-  const driftPerSec=blindSec>0?conDrift/blindSec:0;
-  let grade='D';
-  if(driftPerSec<0.3)grade='A';else if(driftPerSec<1)grade='B';else if(driftPerSec<3)grade='C';
-  drills.push({blindSec,driftM:conDrift,distBlind,type:currentDrill?currentDrill.type:'jam',bestAgent:bestAgent?bestAgent.name:'--',bestErr,grade,
-    agentErrors:agents.map(a=>({name:a.name,err:a.lastErr}))});
-  // Map markers
+  schools.forEach(s=>{if(gpsTrue)s.scoreVs(gpsTrue);});
+  let bsi=0,bss=0;schools.forEach((s,i)=>{if(s.score>bss){bss=s.score;bsi=i;}});
+  schools[5].leaderIdx=schools[bsi].leaderIdx;
+  const conD=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
+  const distB=currentDrill&&currentDrill.startPos&&gpsTrue?hav(currentDrill.startPos,gpsTrue):0;
+  const dps=bs>0?conD/bs:0;
+  let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
+  drills.push({blindSec:bs,driftM:conD,distBlind:distB,type:currentDrill?currentDrill.type:'jam',bestAgent:bestA?bestA.name:'--',bestErr:bestE,grade,
+    agentErrors:agents.map(a=>({name:a.name,err:a.lastErr})),baselineSamples:MA.count});
   if(gpsTrue){
-    L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#9b59b6',fillColor:'#9b59b6',fillOpacity:1})
-      .bindPopup(`<b>Resurface #${drills.length}</b><br>Drift: ${conDrift.toFixed(1)}m<br>Grade: ${grade}<br>Best: ${bestAgent?bestAgent.name:'--'}`)
-      .addTo(map);
+    L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#9b59b6',fillColor:'#9b59b6',fillOpacity:1}).bindPopup(`Resurface #${drills.length}<br>Drift: ${conD.toFixed(1)}m<br>Grade: ${grade}<br>Best: ${bestA?bestA.name:'--'}<br>Baseline: ${MA.count} pts`).addTo(map);
     if(drPos)L.polyline([[drPos.lat,drPos.lon],[gpsTrue.lat,gpsTrue.lon]],{color:'#9b59b6',weight:2,dashArray:'3,4'}).addTo(map);
   }
-  phase='driving';
-  setBadge('DRIVING','b-drive');
-  $('btns-denied').style.display='none';$('btns-drive').style.display='grid';
-  $('jam-alert').style.display='none';$('spoof-alert').style.display='none';
-  $('m-drate').textContent=conDrift.toFixed(1);
-  setL('ld-gps','on','±'+Math.round(gpsTrue?gpsTrue.acc:20)+'m');
-  log(`RESURFACED #${drills.length}: blind ${fmt(blindSec)}, drift ${conDrift.toFixed(1)}m, grade ${grade}, best agent: ${bestAgent?bestAgent.name:'--'}`,'#9b59b6');
-  currentDrill=null;
-  renderAgentCards();renderFishCards();
+  phase='driving';$('badge').textContent='DRIVING';$('badge').className='b-drive';
+  $('bDenied').style.display='none';$('bDrive').style.display='grid';
+  $('jalrt').style.display='none';$('salrt').style.display='none';
+  $('dGPS').className='ld on';$('vGPS').textContent='±'+Math.round(gpsTrue?gpsTrue.acc:20)+'m';
+  $('maVWMA').className='mv p';$('maVWMA').textContent='active';
+  log(`RESURFACED #${drills.length}: blind ${fmt(bs)}, drift ${conD.toFixed(1)}m, grade ${grade}, best: ${bestA?bestA.name:'--'}, baseline: ${MA.count}pts`,'#9b59b6');
+  currentDrill=null;renderUI();
 }
-
-function setDrillTime(sec){
-  drillTimeSec=sec;
-  document.querySelectorAll('.cfg-opt').forEach(e=>e.classList.remove('active'));
-  $('dt-'+sec).classList.add('active');
+function setDrill(s){
+  drillTimeSec=s;document.querySelectorAll('.co').forEach(e=>e.classList.remove('active'));$('d'+s).classList.add('active');
   if(autoDrillIv){clearInterval(autoDrillIv);autoDrillIv=null;}
-  if(sec>0){
-    log(`Auto-drill: ${sec}s jam cycles enabled`,'#8e44ad');
-    autoDrillIv=setInterval(()=>{
-      if(phase==='driving')jamGPS();
-      else if(phase==='jammed'||phase==='spoofed')resurface();
-    },sec*1000);
-  }else{
-    log('Auto-drill disabled — manual mode','#5a7a9a');
-  }
+  if(s>0){log('Auto-drill: '+s+'s cycles','#8e44ad');autoDrillIv=setInterval(()=>{if(phase==='driving')jamGPS();else if(phase==='jammed'||phase==='spoofed')resurface();},s*1000);}
+  else log('Manual mode','#5a7a9a');
 }
-
 function endTest(){
-  clearInterval(tickIv);clearInterval(timerIv);
-  if(autoDrillIv){clearInterval(autoDrillIv);autoDrillIv=null;}
+  clearInterval(tickIv);clearInterval(timerIv);if(autoDrillIv){clearInterval(autoDrillIv);autoDrillIv=null;}
   if(phase==='jammed'||phase==='spoofed')resurface();
-  const dur=startTime?(performance.now()-startTime)/1000:0;
-  phase='idle';
-  showReport(dur);
+  const dur=startTime?(performance.now()-startTime)/1000:0;phase='idle';showReport(dur);
 }
 
 // ═══════════════════════════════════════════════
 // REPORT
 // ═══════════════════════════════════════════════
 function showReport(dur){
-  const avgFE=fusionErrors.length?fusionErrors.reduce((a,b)=>a+b,0)/fusionErrors.length:0;
-  const maxFE=fusionErrors.length?Math.max(...fusionErrors):0;
-  const avgDrift=drills.length?drills.reduce((a,b)=>a+b.driftM,0)/drills.length:0;
-  const maxDrift=drills.length?Math.max(...drills.map(d=>d.driftM)):0;
-
-  let drillsHTML=drills.map((d,i)=>{
-    const gc='grade-'+d.grade.toLowerCase();
-    let agentRows=d.agentErrors.map(ae=>`<div class="rr"><span>${ae.name}</span><span class="rv${ae.err<15?' ok':ae.err<50?' w':' bad'}">${ae.err!==null?ae.err.toFixed(1)+'m':'--'}</span></div>`).join('');
-    return`<div class="drill-blk">
-      <div class="drill-title">Drill ${i+1} (${fmt(d.blindSec)} blind) <span class="grade ${gc}">${d.grade}</span> — <span class="${d.driftM<30?'rv ok':d.driftM<80?'rv w':'rv bad'}">${d.driftM.toFixed(1)}m drift</span></div>
-      <div class="rr"><span>Type</span><span class="rv">${d.type==='jam'?'Jamming':'Spoofing'}</span></div>
-      <div class="rr"><span>Distance driven blind</span><span class="rv">${Math.round(d.distBlind)}m</span></div>
-      <div class="rr"><span>Best agent</span><span class="rv ok">${d.bestAgent} (${d.bestErr.toFixed(1)}m)</span></div>
-      <div style="margin-top:4px;font-size:10px;color:#556">Agent breakdown:</div>
-      ${agentRows}
-    </div>`;
+  const aFE=fusionErrs.length?fusionErrs.reduce((a,b)=>a+b,0)/fusionErrs.length:0;
+  const mFE=fusionErrs.length?Math.max(...fusionErrs):0;
+  const aD=drills.length?drills.reduce((a,b)=>a+b.driftM,0)/drills.length:0;
+  const mD=drills.length?Math.max(...drills.map(d=>d.driftM)):0;
+  let dH=drills.map((d,i)=>{
+    const gc='g'+d.grade;
+    let ar=d.agentErrors.map(ae=>`<div class="rr"><span>${ae.name}</span><span class="rv${ae.err!==null?(ae.err<15?' ok':ae.err<50?' w':' bad'):''}">${ae.err!==null?ae.err.toFixed(1)+'m':'--'}</span></div>`).join('');
+    return`<div class="db"><div class="dbt">Drill ${i+1} (${fmt(d.blindSec)} blind) <span class="grade ${gc}">${d.grade}</span> — <span class="${d.driftM<30?'rv ok':d.driftM<80?'rv w':'rv bad'}">${d.driftM.toFixed(1)}m</span></div>
+    <div class="rr"><span>Type</span><span class="rv">${d.type}</span></div>
+    <div class="rr"><span>Dist blind</span><span class="rv">${Math.round(d.distBlind)}m</span></div>
+    <div class="rr"><span>Best agent</span><span class="rv ok">${d.bestAgent} (${d.bestErr.toFixed(1)}m)</span></div>
+    <div class="rr"><span>Baseline pts</span><span class="rv">${d.baselineSamples}</span></div>
+    <div style="margin-top:3px;font-size:9px;color:#445">Agent breakdown:</div>${ar}</div>`;
   }).join('');
-
-  let fishHTML=schools.map(s=>{
-    const leader=s.leaderIdx<5?agents[s.leaderIdx].name:'Consensus';
-    return`<div class="fi"><span>${s.name} → ${leader}</span><span class="${s.score>70?'rv ok':s.score>40?'rv w':'rv bad'}">${s.score}/100</span></div>`;
-  }).join('');
-
-  // Agent weight summary
-  let agentSummary=agents.map(a=>`<div class="fi"><span>${a.name}</span><span class="rv">${(a.weight*100).toFixed(0)}% (${a.drillCount} drills, avg ${a.drillCount?((a.totalErr/a.drillCount)).toFixed(1)+'m':'--'})</span></div>`).join('');
-
-  const verdict=avgDrift<15?'EXCELLENT':'PASS';
-  const verdictColor=avgDrift<15?'ok':avgDrift<50?'w':'bad';
-
-  $('report-body').innerHTML=`
-    <div class="rc"><div class="rct g">Test Summary</div>
+  let fH=schools.map(s=>{const l=s.leaderIdx<5?agents[s.leaderIdx].name:'Con';return`<div class="fi"><span>${s.name}→${l}</span><span class="${s.score>70?'rv ok':s.score>40?'rv w':'rv bad'}">${s.score}/100</span></div>`;}).join('');
+  let aS=agents.map(a=>`<div class="fi"><span>${a.name}</span><span class="rv">${(a.weight*100).toFixed(0)}% (avg ${a.drillCount?((a.totalErr/a.drillCount)).toFixed(1)+'m':'--'})</span></div>`).join('');
+  const v=aD<15?'EXCELLENT':aD<40?'GOOD':aD<80?'NEEDS WORK':'POOR';
+  const vc=aD<15?'ok':aD<40?'ok':aD<80?'w':'bad';
+  $('rptB').innerHTML=`
+    <div class="rc"><div class="rct g">Summary</div>
       <div class="rr"><span>Duration</span><span class="rv">${fmt(dur)}</span></div>
-      <div class="rr"><span>Total distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
-      <div class="rr"><span>Data points</span><span class="rv">${fusionErrors.length}</span></div>
-      <div class="rr"><span>GPS denial drills</span><span class="rv">${drills.length}</span></div>
-      <div class="rr"><span>Steps counted</span><span class="rv">${stepCount}</span></div>
+      <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
+      <div class="rr"><span>Data points</span><span class="rv">${fusionErrs.length}</span></div>
+      <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
+      <div class="rr"><span>Steps</span><span class="rv">${stepCount}</span></div>
+      <div class="rr"><span>Baseline samples</span><span class="rv">${MA.count}</span></div>
     </div>
-    <div class="rc"><div class="rct g">Normal Driving (GPS active)</div>
-      <div class="rr"><span>Avg fusion error</span><span class="rv ok">${avgFE.toFixed(1)}m</span></div>
-      <div class="rr"><span>Max fusion error</span><span class="rv">${maxFE.toFixed(1)}m</span></div>
+    <div class="rc"><div class="rct g">Moving Average Baseline</div>
+      <div class="rr"><span>SMA Speed</span><span class="rv">${MA.smaSpeed.toFixed(2)} m/s</span></div>
+      <div class="rr"><span>EMA Heading</span><span class="rv">${MA.emaHeading.toFixed(1)}°</span></div>
+      <div class="rr"><span>Velocity SMA</span><span class="rv">${(MA.smaVelLat*111320).toFixed(3)} m/s</span></div>
+      <div class="rr"><span>Accel EMA</span><span class="rv">${MA.emaAccelFwd.toFixed(3)} m/s²</span></div>
     </div>
-    <div class="rc"><div class="rct r">GPS Denied Periods</div>
-      <div class="rr"><span>Avg drift while blind</span><span class="rv ${avgDrift<30?'ok':'bad'}">${avgDrift.toFixed(1)}m</span></div>
-      <div class="rr"><span>Max drift</span><span class="rv bad">${maxDrift.toFixed(1)}m</span></div>
-      ${drillsHTML||'<div class="rr"><span>No drills</span></div>'}
+    <div class="rc"><div class="rct g">Normal Driving</div>
+      <div class="rr"><span>Avg fusion error</span><span class="rv ok">${aFE.toFixed(1)}m</span></div>
+      <div class="rr"><span>Max fusion error</span><span class="rv">${mFE.toFixed(1)}m</span></div>
     </div>
-    <div class="rc"><div class="rct p">Agent Weights (learned)</div>
-      ${agentSummary}
+    <div class="rc"><div class="rct r">GPS Denied</div>
+      <div class="rr"><span>Avg drift blind</span><span class="rv ${aD<30?'ok':'bad'}">${aD.toFixed(1)}m</span></div>
+      <div class="rr"><span>Max drift</span><span class="rv bad">${mD.toFixed(1)}m</span></div>
+      ${dH||'<div class="rr"><span>No drills</span></div>'}
     </div>
-    <div class="rc"><div class="rct y">Fish Schooling Performance</div>
-      <div class="fg">${fishHTML}</div>
-    </div>
-    <div class="rc" style="border:1px solid #2ecc7122">
-      <div style="font-weight:700;font-size:14px" class="${verdictColor}">${verdict} — avg blind drift ${avgDrift.toFixed(1)}m</div>
-    </div>`;
-  $('report').style.display='block';
+    <div class="rc"><div class="rct p">Agent Weights</div>${aS}</div>
+    <div class="rc"><div class="rct y">Fish Schools</div><div class="fg">${fH}</div></div>
+    <div class="rc" style="border:1px solid #2ecc7122"><div style="font-weight:700;font-size:14px" class="${vc}">${v} — avg blind drift ${aD.toFixed(1)}m</div></div>`;
+  $('rpt').style.display='block';
 }
-
 function exportCSV(){
-  let csv='Drill,Type,BlindTime(s),ConsensusDrift(m),DistBlind(m),Grade,BestAgent,BestAgentErr(m)\n';
-  drills.forEach((d,i)=>{csv+=`${i+1},${d.type},${d.blindSec.toFixed(1)},${d.driftM.toFixed(1)},${d.distBlind.toFixed(1)},${d.grade},${d.bestAgent},${d.bestErr.toFixed(1)}\n`;});
-  csv+='\nAgent,Weight,TotalErr,Drills\n';
-  agents.forEach(a=>{csv+=`${a.name},${(a.weight*100).toFixed(1)}%,${a.totalErr.toFixed(1)},${a.drillCount}\n`;});
-  csv+='\nSchool,Score,Leader\n';
-  schools.forEach(s=>{csv+=`${s.name},${s.score},${s.leaderIdx<5?agents[s.leaderIdx].name:'Consensus'}\n`;});
-  const a=document.createElement('a');
-  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download='upin-field-test-v2.csv';a.click();
+  let c='Drill,Type,Blind(s),Drift(m),DistBlind(m),Grade,BestAgent,BestErr(m),BaselinePts\n';
+  drills.forEach((d,i)=>{c+=`${i+1},${d.type},${d.blindSec.toFixed(1)},${d.driftM.toFixed(1)},${d.distBlind.toFixed(1)},${d.grade},${d.bestAgent},${d.bestErr.toFixed(1)},${d.baselineSamples}\n`;});
+  c+='\nAgent,Weight,AvgErr,Drills\n';agents.forEach(a=>{c+=`${a.name},${(a.weight*100).toFixed(1)}%,${a.drillCount?(a.totalErr/a.drillCount).toFixed(1):'0'},${a.drillCount}\n`;});
+  c+='\nSchool,Score,Leader\n';schools.forEach(s=>{c+=`${s.name},${s.score},${s.leaderIdx<5?agents[s.leaderIdx].name:'Con'}\n`;});
+  c+='\nBaseline\nSMA_Speed,'+MA.smaSpeed.toFixed(3)+'\nEMA_Heading,'+MA.emaHeading.toFixed(1)+'\nVel_SMA_Lat,'+(MA.smaVelLat*111320).toFixed(4)+'\nSamples,'+MA.count+'\n';
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v2-report.csv';a.click();
 }
 
 // ═══════════════════════════════════════════════
 // REPLAY
 // ═══════════════════════════════════════════════
-let replayIv=null;
+let rpIv=null;
 function showReplay(){
-  if(gpsTrail.length<2&&drTrail.length<2){log('No trail data to replay','#e74c3c');return;}
-  setBadge('REPLAY','b-replay');
-  $('replay-bar').style.display='block';
-  // Clear existing trails from map
+  if(gpsTrail.length<2){log('No data','#e74c3c');return;}
+  $('badge').textContent='REPLAY';$('badge').className='b-replay';$('rpbar').style.display='block';
   if(gpsLine){map.removeLayer(gpsLine);gpsLine=null;}
   if(drLine){map.removeLayer(drLine);drLine=null;}
   if(spoofLine){map.removeLayer(spoofLine);spoofLine=null;}
-  let idx=0;
-  const maxLen=Math.max(gpsTrail.length,drTrail.length);
-  const replayGps=[],replayDr=[],replaySp=[];
-  let rGpsLine=null,rDrLine=null,rSpLine=null;
-  replayIv=setInterval(()=>{
-    if(idx>=maxLen){clearInterval(replayIv);log('Replay complete','#9b59b6');return;}
-    if(idx<gpsTrail.length)replayGps.push(gpsTrail[idx]);
-    if(idx<drTrail.length)replayDr.push(drTrail[idx]);
-    if(idx<spoofTrail.length)replaySp.push(spoofTrail[idx]);
-    if(replayGps.length>1){
-      if(rGpsLine)rGpsLine.setLatLngs(replayGps);
-      else rGpsLine=L.polyline(replayGps,{color:'#2ecc71',weight:3,opacity:.8}).addTo(map);
-    }
-    if(replayDr.length>1){
-      if(rDrLine)rDrLine.setLatLngs(replayDr);
-      else rDrLine=L.polyline(replayDr,{color:'#f39c12',weight:3,opacity:.8,dashArray:'8,6'}).addTo(map);
-    }
-    if(replaySp.length>1){
-      if(rSpLine)rSpLine.setLatLngs(replaySp);
-      else rSpLine=L.polyline(replaySp,{color:'#e74c3c',weight:2,opacity:.5,dashArray:'4,8'}).addTo(map);
-    }
-    $('replay-fill').style.width=(idx/maxLen*100)+'%';
-    idx++;
+  let i=0;const mx=Math.max(gpsTrail.length,drTrail.length);
+  const rG=[],rD=[],rS=[];let lG,lD,lS;
+  rpIv=setInterval(()=>{
+    if(i>=mx){clearInterval(rpIv);log('Replay done','#9b59b6');return;}
+    if(i<gpsTrail.length)rG.push(gpsTrail[i]);
+    if(i<drTrail.length)rD.push(drTrail[i]);
+    if(i<spoofTrail.length)rS.push(spoofTrail[i]);
+    if(rG.length>1){if(lG)lG.setLatLngs(rG);else lG=L.polyline(rG,{color:'#2ecc71',weight:3}).addTo(map);}
+    if(rD.length>1){if(lD)lD.setLatLngs(rD);else lD=L.polyline(rD,{color:'#f39c12',weight:3,dashArray:'8,6'}).addTo(map);}
+    if(rS.length>1){if(lS)lS.setLatLngs(rS);else lS=L.polyline(rS,{color:'#e74c3c',weight:2,dashArray:'4,8'}).addTo(map);}
+    $('rpfill').style.width=(i/mx*100)+'%';i++;
   },50);
 }
-
 function stopReplay(){
-  if(replayIv)clearInterval(replayIv);
-  $('replay-bar').style.display='none';
-  setBadge('IDLE','b-idle');
-  // Redraw full trails
-  gpsLine=drawTrail(gpsTrail,null,'#2ecc71',false);
-  drLine=drawTrail(drTrail,null,'#f39c12',true);
-  spoofLine=drawTrail(spoofTrail,null,'#e74c3c',true);
+  if(rpIv)clearInterval(rpIv);$('rpbar').style.display='none';$('badge').className='b-idle';
+  gpsLine=drawTrail(gpsTrail,null,'#2ecc71',false);drLine=drawTrail(drTrail,null,'#f39c12',true);spoofLine=drawTrail(spoofTrail,null,'#e74c3c',true);
 }
 
 // ═══════════════════════════════════════════════
 // BOOT
 // ═══════════════════════════════════════════════
-window.addEventListener('load',()=>{
-  initMap();initGPS();
-  renderAgentCards();renderFishCards();
-  log('UPIN Field Test v2 ready — waiting for GPS fix...','#5a7a9a');
-});
+window.addEventListener('load',()=>{initMap();initGPS();renderUI();log('UPIN Field Test v2 ready — waiting for GPS...','#5a7a9a');});
 
-return{calibrate,startDrive,jamGPS,spoofGPS,resurface,endTest,setDrillTime,showReplay,stopReplay,exportCSV};
+return{calibrate,startDrive,jamGPS,spoofGPS,resurface,endTest,setDrill,showReplay,stopReplay,exportCSV};
 })();
 </script>
 </body>
