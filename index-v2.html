@@ -98,6 +98,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 #rpbar .rpt{font-size:10px;color:#9b59b6;font-weight:700;margin-bottom:4px}
 #rpprog{width:100%;height:4px;background:#1a2a3f;border-radius:2px;overflow:hidden;margin-bottom:4px}
 #rpfill{height:100%;width:0;background:#9b59b6;border-radius:2px}
+/* Strategy layers */
+.strats{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px}
+.st{background:#1a2a3f;border-radius:7px;padding:6px;border:1px solid transparent;position:relative}
+.st.winner{border-color:#2ecc71}
+.st .sn{font-size:8px;font-weight:700;color:#5a7a9a;text-transform:uppercase;margin-bottom:1px}
+.st .sv{font-size:13px;font-weight:700;line-height:1.1}
+.st .sp{font-size:7px;color:#556;margin-top:2px;line-height:1.3}
+.st .sw{font-size:8px;color:#445;margin-top:1px}
+.drift-row{display:flex;justify-content:space-between;font-size:11px;padding:3px 0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 </style>
 </head>
@@ -139,6 +148,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <div class="mac"><div class="ml">Accel EMA</div><div class="mv" id="maAcc">--</div><div class="ms">m/s² fwd</div></div>
     <div class="mac"><div class="ml">Samples</div><div class="mv g" id="maSamp">0</div><div class="ms">baseline pts</div></div>
   </div>
+  <div class="stitle">Strategy Layers (Indicator Combos)</div>
+  <div class="agents" id="stC"></div>
+  <div class="stitle">Drift Curve (m/s blind)</div>
+  <div class="ma-cards" id="driftC"></div>
   <div class="stitle">Math Agents</div>
   <div class="agents" id="agC"></div>
   <div class="stitle">Fish Schools</div>
@@ -297,6 +310,184 @@ const MA={
     };
   }
 };
+
+// ═══════════════════════════════════════════════
+// STRATEGY LAYERS — different indicator combos
+// Like stacking trading indicators to find confluence
+// ═══════════════════════════════════════════════
+class Strategy{
+  constructor(name,params,color,desc){
+    this.name=name;this.params=params;this.color=color;this.desc=desc;
+    this.pos=null;this.weight=0.2;this.totalErr=0;this.drillCount=0;this.lastErr=null;
+    // Drift curve: records drift over time during blind periods
+    this.driftCurve=[];// [{t,drift}] seconds blind vs drift meters
+    this.currentCurve=[];
+  }
+  init(lat,lon){this.pos={lat,lon};this.currentCurve=[];}
+  // Each strategy implements predict differently using indicator combos
+  predict(pos,dt){return pos;}
+  recordDrift(secBlind,driftM){this.currentCurve.push({t:secBlind,drift:driftM});}
+  finishDrill(){if(this.currentCurve.length)this.driftCurve.push([...this.currentCurve]);this.currentCurve=[];}
+  avgDriftRate(){// m per second of blind time
+    if(!this.driftCurve.length)return 0;
+    let totalRate=0;
+    this.driftCurve.forEach(curve=>{
+      if(curve.length>1){const last=curve[curve.length-1];totalRate+=last.drift/Math.max(1,last.t);}
+    });
+    return totalRate/this.driftCurve.length;
+  }
+}
+
+// Strategy A: "Trend" — fast SMA + fast EMA, reactive
+class TrendStrategy extends Strategy{
+  constructor(){super('Trend',{smaW:5,emaA:0.25},'#e74c3c','SMA(5) speed + EMA(0.25) heading — fast, reactive');}
+  predict(pos,dt){
+    if(!pos||MA.count<3)return pos;
+    const W=Math.min(this.params.smaW,MA.speeds.length);
+    const spds=MA.speeds.slice(-W);
+    const smaSpd=spds.reduce((a,b)=>a+b,0)/spds.length;
+    // Fast EMA heading
+    const hds=MA.headings.slice(-W);
+    let ema=hds[0]||0;
+    for(let i=1;i<hds.length;i++)ema=this.params.emaA*hds[i]+(1-this.params.emaA)*ema;
+    const h=ema*Math.PI/180;
+    const dLat=(smaSpd*Math.cos(h)*dt)/111320;
+    const dLon=(smaSpd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    return{lat:pos.lat+dLat,lon:pos.lon+dLon};
+  }
+}
+
+// Strategy B: "Smooth" — slow SMA + slow EMA, stable
+class SmoothStrategy extends Strategy{
+  constructor(){super('Smooth',{smaW:30,emaA:0.05},'#3498db','SMA(30) speed + EMA(0.05) heading — slow, stable');}
+  predict(pos,dt){
+    if(!pos||MA.count<3)return pos;
+    const W=Math.min(this.params.smaW,MA.speeds.length);
+    const spds=MA.speeds.slice(-W);
+    const smaSpd=spds.reduce((a,b)=>a+b,0)/spds.length;
+    const hds=MA.headings.slice(-W);
+    let ema=hds[0]||0;
+    for(let i=1;i<hds.length;i++)ema=this.params.emaA*hds[i]+(1-this.params.emaA)*ema;
+    const h=ema*Math.PI/180;
+    const dLat=(smaSpd*Math.cos(h)*dt)/111320;
+    const dLon=(smaSpd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    return{lat:pos.lat+dLat,lon:pos.lon+dLon};
+  }
+}
+
+// Strategy C: "MACD" — velocity momentum (fast EMA - slow EMA = signal)
+class MACDStrategy extends Strategy{
+  constructor(){super('MACD',{fastA:0.2,slowA:0.05},'#f39c12','VelEMA(0.2)-VelEMA(0.05) momentum — predicts acceleration');}
+  predict(pos,dt){
+    if(!pos||MA.velLat.length<3)return pos;
+    // Fast EMA of velocity
+    let fastLat=MA.velLat[0],fastLon=MA.velLon[0];
+    let slowLat=MA.velLat[0],slowLon=MA.velLon[0];
+    for(let i=1;i<MA.velLat.length;i++){
+      fastLat=this.params.fastA*MA.velLat[i]+(1-this.params.fastA)*fastLat;
+      fastLon=this.params.fastA*MA.velLon[i]+(1-this.params.fastA)*fastLon;
+      slowLat=this.params.slowA*MA.velLat[i]+(1-this.params.slowA)*slowLat;
+      slowLon=this.params.slowA*MA.velLon[i]+(1-this.params.slowA)*slowLon;
+    }
+    // MACD signal = fast - slow (momentum direction)
+    const macdLat=fastLat-slowLat;
+    const macdLon=fastLon-slowLon;
+    // Project: use fast EMA velocity + MACD as acceleration
+    return{
+      lat:pos.lat+(fastLat+macdLat*0.5)*dt,
+      lon:pos.lon+(fastLon+macdLon*0.5)*dt
+    };
+  }
+}
+
+// Strategy D: "Bollinger" — mean reversion within bands
+class BollingerStrategy extends Strategy{
+  constructor(){super('Bollinger',{smaW:20,bandMult:2},'#9b59b6','SMA(20) position ± 2σ — mean reversion within bounds');}
+  predict(pos,dt){
+    if(!pos||MA.positions.length<5)return pos;
+    const W=Math.min(this.params.smaW,MA.positions.length);
+    const pts=MA.positions.slice(-W);
+    // SMA position
+    const mLat=pts.reduce((s,p)=>s+p.lat,0)/pts.length;
+    const mLon=pts.reduce((s,p)=>s+p.lon,0)/pts.length;
+    // Use velocity but pull toward SMA mean (mean reversion)
+    const velLat=MA.smaVelLat,velLon=MA.smaVelLon;
+    const pullLat=(mLat-pos.lat)*0.02; // gentle pull to mean
+    const pullLon=(mLon-pos.lon)*0.02;
+    return{
+      lat:pos.lat+velLat*dt+pullLat,
+      lon:pos.lon+velLon*dt+pullLon
+    };
+  }
+}
+
+// Strategy E: "Adaptive" — auto-tunes EMA alpha based on last drill error
+class AdaptiveStrategy extends Strategy{
+  constructor(){super('Adaptive',{emaA:0.15,smaW:15},'#2ecc71','Auto-tunes α and window from drill results');}
+  predict(pos,dt){
+    if(!pos||MA.count<3)return pos;
+    const W=Math.min(this.params.smaW,MA.speeds.length);
+    const spds=MA.speeds.slice(-W);
+    const smaSpd=spds.reduce((a,b)=>a+b,0)/spds.length;
+    const hds=MA.headings.slice(-W);
+    let ema=hds[0]||0;
+    for(let i=1;i<hds.length;i++)ema=this.params.emaA*hds[i]+(1-this.params.emaA)*ema;
+    // Blend velocity + heading projection
+    const h=ema*Math.PI/180;
+    const dLat_h=(smaSpd*Math.cos(h)*dt)/111320;
+    const dLon_h=(smaSpd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    const dLat_v=MA.smaVelLat*dt;
+    const dLon_v=MA.smaVelLon*dt;
+    return{lat:pos.lat+dLat_h*0.5+dLat_v*0.5,lon:pos.lon+dLon_h*0.5+dLon_v*0.5};
+  }
+  // After each drill, tune parameters
+  tune(){
+    if(this.drillCount<1)return;
+    const avgRate=this.avgDriftRate();
+    // If drifting too fast, slow down (bigger window, smaller alpha)
+    if(avgRate>2){this.params.smaW=Math.min(40,this.params.smaW+3);this.params.emaA=Math.max(0.03,this.params.emaA-0.02);}
+    // If good, speed up a bit for responsiveness
+    else if(avgRate<0.5){this.params.smaW=Math.max(5,this.params.smaW-2);this.params.emaA=Math.min(0.3,this.params.emaA+0.01);}
+  }
+}
+
+const strategies=[new TrendStrategy(),new SmoothStrategy(),new MACDStrategy(),new BollingerStrategy(),new AdaptiveStrategy()];
+
+// Update strategy weights after drill based on accuracy
+function updateStratWeights(){
+  const tot=strategies.reduce((s,st)=>s+Math.max(0.01,1/(1+st.totalErr)),0);
+  strategies.forEach(st=>{st.weight=Math.max(0.01,1/(1+st.totalErr))/tot;});
+}
+
+// Weighted strategy consensus position
+function stratConsensus(){
+  let tLa=0,tLo=0,tw=0;
+  strategies.forEach(st=>{if(!st.pos)return;tLa+=st.pos.lat*st.weight;tLo+=st.pos.lon*st.weight;tw+=st.weight;});
+  return tw>0?{lat:tLa/tw,lon:tLo/tw}:null;
+}
+
+function renderStratCards(){
+  let bestI=0,bestW=0;
+  strategies.forEach((s,i)=>{if(s.weight>bestW){bestW=s.weight;bestI=i;}});
+  let h='';
+  strategies.forEach((s,i)=>{
+    const e=s.lastErr!==null?s.lastErr.toFixed(1)+'m':'--';
+    const ec=s.lastErr===null?'':(s.lastErr<15?' g':s.lastErr<50?' y':' r');
+    const dr=s.avgDriftRate();
+    h+=`<div class="ag${i===bestI?' best':''}"><div class="an">${s.name}</div><div class="ae vl${ec}">${e}</div><div class="aw">w:${(s.weight*100).toFixed(0)}% | ${dr.toFixed(2)}m/s</div><div class="ab"><div class="af" style="width:${s.weight*100*5}%;background:${s.color}"></div></div></div>`;
+  });
+  $('stC').innerHTML=h;
+}
+
+function renderDriftCards(){
+  let h='';
+  strategies.forEach(s=>{
+    const dr=s.avgDriftRate();
+    const cls=dr<0.5?'g':dr<2?'y':'r';
+    h+=`<div class="mac"><div class="ml">${s.name}</div><div class="mv ${cls}">${dr.toFixed(2)}</div><div class="ms">m/s drift</div></div>`;
+  });
+  $('driftC').innerHTML=h;
+}
 
 // ═══════════════════════════════════════════════
 // MATH AGENTS — now use MA baseline for better accuracy
@@ -558,22 +749,32 @@ function tick(){
         renderUI();
       }
     }
+    // Init strategies at current position
+    strategies.forEach(st=>{if(!st.pos&&lastGP)st.init(lastGP.lat,lastGP.lon);else if(gpsSys)st.pos={lat:gpsSys.lat,lon:gpsSys.lon};});
     const aPos=agents.map(a=>a.pos?{...a.pos}:null);
     schools.forEach(s=>s.update(aPos));
     const c2=consensus();if(c2)schools[5].pos={...c2};
+    if(doUI){renderStratCards();renderDriftCards();}
   }
 
   if(phase==='jammed'||phase==='spoofed'){
     // Each agent predicts using MA baseline
     agents.forEach(a=>a.predict(dt,sensorPack));
+    // Each strategy predicts independently
+    strategies.forEach(st=>{if(st.pos)st.pos=st.predict(st.pos,dt);});
     const con=consensus();
+    const stCon=stratConsensus();
     if(con){
-      // Also blend consensus with MA prediction for extra accuracy
+      // Triple blend: 40% agents, 30% strategies, 30% MA prediction
       const maPred=MA.predict(drPos||con,dt);
-      if(maPred&&MA.count>10){
-        drPos={lat:con.lat*0.6+maPred.lat*0.4,lon:con.lon*0.6+maPred.lon*0.4};
-      }else{
-        drPos={lat:con.lat,lon:con.lon};
+      let lat=con.lat*0.4,lon=con.lon*0.4;
+      if(stCon){lat+=stCon.lat*0.3;lon+=stCon.lon*0.3;}else{lat+=con.lat*0.3;lon+=con.lon*0.3;}
+      if(maPred&&MA.count>10){lat+=maPred.lat*0.3;lon+=maPred.lon*0.3;}else{lat+=con.lat*0.3;lon+=con.lon*0.3;}
+      drPos={lat,lon};
+      // Record drift for each strategy
+      if(gpsTrue&&drillStart){
+        const bs=(now-drillStart)/1000;
+        strategies.forEach(st=>{if(st.pos)st.recordDrift(bs,hav(st.pos,gpsTrue));});
       }
       const ll=[drPos.lat,drPos.lon];
       drTrail.push(ll);capArr(drTrail);
@@ -603,7 +804,7 @@ function tick(){
       $('maSMA').textContent=MA.smaSpeed.toFixed(1);
       $('maEMA').textContent=MA.emaHeading.toFixed(0)+'°';
       $('maVWMA').textContent='predicting';$('maVWMA').className='mv y';
-      renderUI();
+      renderUI();renderStratCards();renderDriftCards();
     }
   }
   if(startTime&&doUI)$('mTI').textContent=fmt((now-startTime)/1000);
@@ -660,6 +861,7 @@ function startDrive(){
   $('badge').textContent='DRIVING';$('badge').className='b-drive';
   $('bIdle').style.display='none';$('bDrive').style.display='grid';$('dcfg').style.display='block';
   agents.forEach(a=>{a.init(gpsTrue.lat,gpsTrue.lon);a.conf=0.9;});
+  strategies.forEach(st=>st.init(gpsTrue.lat,gpsTrue.lon));
   schools.forEach(s=>{s.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};s.score=50;});
   tickIv=setInterval(tick,500);
   timerIv=setInterval(()=>{if(startTime)$('mTI').textContent=fmt((performance.now()-startTime)/1000);},1000);
@@ -698,6 +900,20 @@ function resurface(){
     if(gpsSys)a.onGPS(gpsSys);
   });
   updateWeights();
+  // Score strategies
+  let bestSt=null,bestStErr=Infinity;
+  strategies.forEach(st=>{
+    if(st.pos&&gpsTrue){
+      const e=hav(st.pos,gpsTrue);st.lastErr=e;st.totalErr+=e;st.drillCount++;
+      if(e<bestStErr){bestStErr=e;bestSt=st;}
+    }
+    st.finishDrill();
+    if(gpsSys)st.pos={lat:gpsSys.lat,lon:gpsSys.lon};
+  });
+  updateStratWeights();
+  // Tune adaptive strategy
+  const adaptive=strategies.find(s=>s.name==='Adaptive');
+  if(adaptive&&adaptive.tune)adaptive.tune();
   schools.forEach(s=>{if(gpsTrue)s.scoreVs(gpsTrue);});
   let bsi=0,bss=0;schools.forEach((s,i)=>{if(s.score>bss){bss=s.score;bsi=i;}});
   schools[5].leaderIdx=schools[bsi].leaderIdx;
@@ -706,7 +922,10 @@ function resurface(){
   const dps=bs>0?conD/bs:0;
   let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
   drills.push({blindSec:bs,driftM:conD,distBlind:distB,type:currentDrill?currentDrill.type:'jam',bestAgent:bestA?bestA.name:'--',bestErr:bestE,grade,
-    agentErrors:agents.map(a=>({name:a.name,err:a.lastErr})),baselineSamples:MA.count});
+    agentErrors:agents.map(a=>({name:a.name,err:a.lastErr})),
+    stratErrors:strategies.map(s=>({name:s.name,err:s.lastErr,driftRate:s.avgDriftRate(),params:{...s.params}})),
+    bestStrategy:bestSt?bestSt.name:'--',bestStratErr:bestStErr,
+    baselineSamples:MA.count});
   if(gpsTrue){
     L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#9b59b6',fillColor:'#9b59b6',fillOpacity:1}).bindPopup(`Resurface #${drills.length}<br>Drift: ${conD.toFixed(1)}m<br>Grade: ${grade}<br>Best: ${bestA?bestA.name:'--'}<br>Baseline: ${MA.count} pts`).addTo(map);
     if(drPos)L.polyline([[drPos.lat,drPos.lon],[gpsTrue.lat,gpsTrue.lon]],{color:'#9b59b6',weight:2,dashArray:'3,4'}).addTo(map);
@@ -716,7 +935,7 @@ function resurface(){
   $('jalrt').style.display='none';$('salrt').style.display='none';
   $('dGPS').className='ld on';$('vGPS').textContent='±'+Math.round(gpsTrue?gpsTrue.acc:20)+'m';
   $('maVWMA').className='mv p';$('maVWMA').textContent='active';
-  log(`RESURFACED #${drills.length}: blind ${fmt(bs)}, drift ${conD.toFixed(1)}m, grade ${grade}, best: ${bestA?bestA.name:'--'}, baseline: ${MA.count}pts`,'#9b59b6');
+  log(`RESURFACED #${drills.length}: drift ${conD.toFixed(1)}m [${grade}] agent:${bestA?bestA.name:'--'} strat:${bestSt?bestSt.name:'--'} (${MA.count}pts)`,'#9b59b6');
   currentDrill=null;renderUI();
 }
 function setDrill(s){
@@ -778,6 +997,10 @@ function showReport(dur){
       ${dH||'<div class="rr"><span>No drills</span></div>'}
     </div>
     <div class="rc"><div class="rct p">Agent Weights</div>${aS}</div>
+    <div class="rc"><div class="rct" style="color:#e67e22">Strategy Layer Performance</div>
+      ${strategies.map(st=>{const dr=st.avgDriftRate();const cls=dr<0.5?'ok':dr<2?'w':'bad';return`<div class="rr"><span>${st.name} (w:${(st.weight*100).toFixed(0)}%)</span><span class="rv ${cls}">${st.drillCount?((st.totalErr/st.drillCount)).toFixed(1)+'m avg, '+dr.toFixed(2)+'m/s drift':'--'}</span></div>`;}).join('')}
+      ${strategies.find(s=>s.name==='Adaptive')?`<div class="rr"><span>Adaptive tuned params</span><span class="rv">α:${strategies.find(s=>s.name==='Adaptive').params.emaA.toFixed(3)} W:${strategies.find(s=>s.name==='Adaptive').params.smaW}</span></div>`:''}
+    </div>
     <div class="rc"><div class="rct y">Fish Schools</div><div class="fg">${fH}</div></div>
     <div class="rc" style="border:1px solid #2ecc7122"><div style="font-weight:700;font-size:14px" class="${vc}">${v} — avg blind drift ${aD.toFixed(1)}m</div></div>`;
   $('rpt').style.display='block';
@@ -787,6 +1010,8 @@ function exportCSV(){
   drills.forEach((d,i)=>{c+=`${i+1},${d.type},${d.blindSec.toFixed(1)},${d.driftM.toFixed(1)},${d.distBlind.toFixed(1)},${d.grade},${d.bestAgent},${d.bestErr.toFixed(1)},${d.baselineSamples}\n`;});
   c+='\nAgent,Weight,AvgErr,Drills\n';agents.forEach(a=>{c+=`${a.name},${(a.weight*100).toFixed(1)}%,${a.drillCount?(a.totalErr/a.drillCount).toFixed(1):'0'},${a.drillCount}\n`;});
   c+='\nSchool,Score,Leader\n';schools.forEach(s=>{c+=`${s.name},${s.score},${s.leaderIdx<5?agents[s.leaderIdx].name:'Con'}\n`;});
+  c+='\nStrategy,Weight,AvgErr,DriftRate(m/s),Drills\n';
+  strategies.forEach(st=>{c+=`${st.name},${(st.weight*100).toFixed(1)}%,${st.drillCount?(st.totalErr/st.drillCount).toFixed(1):'0'},${st.avgDriftRate().toFixed(3)},${st.drillCount}\n`;});
   c+='\nBaseline\nSMA_Speed,'+MA.smaSpeed.toFixed(3)+'\nEMA_Heading,'+MA.emaHeading.toFixed(1)+'\nVel_SMA_Lat,'+(MA.smaVelLat*111320).toFixed(4)+'\nSamples,'+MA.count+'\n';
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v2-report.csv';a.click();
 }
