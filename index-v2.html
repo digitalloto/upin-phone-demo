@@ -156,6 +156,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <div class="agents" id="agC"></div>
   <div class="stitle">Fish Schools</div>
   <div class="fish" id="fsC"></div>
+  <!-- Profile selector -->
+  <div class="dcfg" id="profileBox">
+    <div class="dt">User Profile</div>
+    <div class="cr">
+      <select id="profileSelect" style="background:#0d1a2a;color:#7a9ab8;border:1px solid #2a3a4f;border-radius:7px;padding:8px;font-size:11px;flex:1"><option value="">New profile...</option></select>
+      <input id="profileName" type="text" placeholder="Name" style="background:#0d1a2a;color:#e0e0e0;border:1px solid #2a3a4f;border-radius:7px;padding:8px;font-size:11px;width:80px">
+      <div class="co" onclick="U.saveProfile()">Save</div>
+      <div class="co" onclick="U.loadProfile()">Load</div>
+    </div>
+    <div style="font-size:8px;color:#445;margin-top:4px" id="profileStatus">No profile loaded — formulas will learn from scratch</div>
+  </div>
   <div id="bIdle" class="btns">
     <button class="btn btn-b" onclick="U.calibrate()">CALIBRATE</button>
     <button class="btn btn-g" id="bStart" onclick="U.startDrive()" disabled style="opacity:.4">START DRIVE</button>
@@ -384,80 +395,148 @@ const CAL={
 };
 
 // ═══════════════════════════════════════════════
-// BACKGROUND VALIDATION — agents predict without GPS every 30s
-// then compare to GPS and auto-tune parameters
+// CONTINUOUS LEARNING — every tick is a learning opportunity
+// Agents predict 1 tick ahead AND 30s ahead, compare to GPS, auto-tune
+// The longer you use it, the better every formula gets
 // ═══════════════════════════════════════════════
-const VALIDATOR={
-  interval:30, // seconds between validation checks
-  lastCheck:0,
-  checkCount:0,
-  // Each agent stores a "shadow" prediction made without GPS
-  shadows:new Map(), // agentName -> {lat,lon,predictedAt}
-  strategyShadows:new Map(),
-  results:[], // [{agent,predicted,actual,error,params}]
+const LEARN={
+  microShadows:new Map(),
+  stratMicroShadows:new Map(),
+  microCount:0,
+  microErrs:new Map(),
+  macroInterval:30,
+  lastMacro:0,
+  macroCount:0,
+  macroShadows:new Map(),
+  stratMacroShadows:new Map(),
+  results:[],
 
-  // Called every tick during DRIVING phase
-  tick(nowSec,agents,strategies,gpsSys){
+  tick(nowSec,agents,strategies,gpsSys,sensorPack){
     if(!gpsSys)return;
-    const elapsed=nowSec-this.lastCheck;
 
-    // Every 30s: check previous predictions, then make new ones
-    if(elapsed>=this.interval&&this.lastCheck>0){
-      this.checkCount++;
-      // Score shadow predictions against actual GPS
+    // MICRO-LEARN: check last tick's 0.5s prediction
+    agents.forEach(a=>{
+      const sh=this.microShadows.get(a.name);
+      if(sh){
+        const err=hav(sh,gpsSys);
+        const prev=this.microErrs.get(a.name)||err;
+        this.microErrs.set(a.name,prev*0.9+err*0.1);
+        a.microTune(err,sh,gpsSys);
+      }
+    });
+    strategies.forEach(st=>{
+      const sh=this.stratMicroShadows.get(st.name);
+      if(sh){const err=hav(sh,gpsSys);st.microTune(err,sh,gpsSys);}
+    });
+    // Fish schools also micro-learn
+    schools.forEach(s=>{
+      if(s.pos&&gpsSys){
+        const err=hav(s.pos,gpsSys);
+        // Micro-tune school parameters
+        if(err>10){s.params.smaW=Math.min(50,s.params.smaW+0.1);s.params.emaA=Math.max(0.01,s.params.emaA-0.001);}
+        else if(err<3){s.params.smaW=Math.max(3,s.params.smaW-0.05);s.params.emaA=Math.min(0.5,s.params.emaA+0.0005);}
+      }
+    });
+    this.microCount++;
+
+    // Make next-tick predictions (0.5s ahead)
+    agents.forEach(a=>{
+      if(!a.pos)return;
+      const p=a.predictForward(0.5,sensorPack);
+      if(p)this.microShadows.set(a.name,p);
+    });
+    strategies.forEach(st=>{
+      if(!st.pos)return;
+      const p=st.predict({lat:st.pos.lat,lon:st.pos.lon},0.5);
+      if(p)this.stratMicroShadows.set(st.name,p);
+    });
+
+    // MACRO-LEARN: 30s predictions for bigger adjustments
+    const elapsed=nowSec-this.lastMacro;
+    if(elapsed>=this.macroInterval&&this.lastMacro>0){
+      this.macroCount++;
       agents.forEach(a=>{
-        const shadow=this.shadows.get(a.name);
-        if(shadow){
-          const err=hav(shadow,gpsSys);
-          this.results.push({name:a.name,type:'agent',err,params:shadow.params?{...shadow.params}:null});
-          // AUTO-TUNE: adjust agent based on error
-          a.tuneFromError(err,shadow,gpsSys);
-        }
+        const sh=this.macroShadows.get(a.name);
+        if(sh){const err=hav(sh,gpsSys);this.results.push({name:a.name,type:'agent',err});a.tuneFromError(err,sh,gpsSys);}
       });
       strategies.forEach(st=>{
-        const shadow=this.strategyShadows.get(st.name);
-        if(shadow){
-          const err=hav(shadow,gpsSys);
-          this.results.push({name:st.name,type:'strategy',err,params:{...st.params}});
-          // AUTO-TUNE strategy parameters
-          st.tuneFromError(err,shadow,gpsSys);
-        }
+        const sh=this.stratMacroShadows.get(st.name);
+        if(sh){const err=hav(sh,gpsSys);this.results.push({name:st.name,type:'strategy',err});st.tuneFromError(err,sh,gpsSys);}
       });
-      // Log best/worst
       if(this.results.length>0){
-        const last=this.results.slice(-agents.length-strategies.length);
+        const last=this.results.slice(-(agents.length+strategies.length));
         const best=last.reduce((b,r)=>r.err<b.err?r:b,last[0]);
-        log(`Validation #${this.checkCount}: best=${best.name} ${best.err.toFixed(1)}m`,'#3498db');
+        log('Learn #'+this.macroCount+': best='+best.name+' '+best.err.toFixed(1)+'m ('+this.microCount+' micro-tunes)','#3498db');
       }
+      // Auto-save profile after every macro validation
+      if(PROFILES.currentProfile)PROFILES.save(PROFILES.currentProfile);
     }
-
-    // Make new shadow predictions (predict where GPS will be in 30s)
-    if(elapsed>=this.interval||this.lastCheck===0){
-      this.lastCheck=nowSec;
+    if(elapsed>=this.macroInterval||this.lastMacro===0){
+      this.lastMacro=nowSec;
       agents.forEach(a=>{
         if(!a.pos)return;
-        // Clone position and predict 30s forward without GPS
-        const shadow=a.predictForward(this.interval,{accel,gyro,mag,compassHdg,steps:stepCount,stepSpeed:stepFreq*strideLen||0.5});
-        if(shadow)this.shadows.set(a.name,shadow);
+        const sh=a.predictForward(this.macroInterval,sensorPack);
+        if(sh)this.macroShadows.set(a.name,sh);
       });
       strategies.forEach(st=>{
         if(!st.pos)return;
         let p={lat:st.pos.lat,lon:st.pos.lon};
-        // Predict 30s forward in small steps
-        for(let t=0;t<this.interval;t+=0.5){p=st.predict(p,0.5);}
-        this.strategyShadows.set(st.name,{lat:p.lat,lon:p.lon});
+        for(let t=0;t<this.macroInterval;t+=0.5){p=st.predict(p,0.5);}
+        this.stratMacroShadows.set(st.name,{lat:p.lat,lon:p.lon});
       });
     }
   },
 
-  avgError(name){
-    const r=this.results.filter(r=>r.name===name);
-    if(!r.length)return null;
-    return r.reduce((s,r)=>s+r.err,0)/r.length;
-  }
+  avgError(name){const r=this.results.filter(r=>r.name===name);return r.length?r.reduce((s,r)=>s+r.err,0)/r.length:null;},
+  microAvg(name){return this.microErrs.get(name)||null;},
+  checkCount(){return this.macroCount;}
 };
 
 // ═══════════════════════════════════════════════
+// USER PROFILES — save/load learned params to localStorage
+// Different users can have their own tuned system
+// ═══════════════════════════════════════════════
+const PROFILES={
+  currentProfile:null,
+  list(){const r=localStorage.getItem('upin_profiles');return r?JSON.parse(r):{};},
+  save(name){
+    const profiles=this.list();
+    profiles[name]={
+      savedAt:Date.now(),
+      agents:agents.map(a=>({name:a.name,weight:a.weight,totalErr:a.totalErr,drillCount:a.drillCount,
+        maBlend:a.maBlend,friction:a.friction,spread:a.spread,priorW:a.priorW,strideMult:a.strideMult,
+        vel:a.vel?{...a.vel}:null})),
+      strategies:strategies.map(st=>({name:st.name,weight:st.weight,totalErr:st.totalErr,drillCount:st.drillCount,params:{...st.params}})),
+      schools:schools.map(s=>({name:s.name,score:s.score,params:{...s.params},leaderIdx:s.leaderIdx})),
+      cal:{accelBias:{...CAL.accelBias},gyroBias:{...CAL.gyroBias},compassOffset:CAL.compassOffset,sampleCount:CAL.sampleCount},
+      microTunes:LEARN.microCount,macroTunes:LEARN.macroCount
+    };
+    localStorage.setItem('upin_profiles',JSON.stringify(profiles));
+    this.currentProfile=name;
+  },
+  load(name){
+    const profiles=this.list();const p=profiles[name];
+    if(!p){log('Profile "'+name+'" not found','#e74c3c');return false;}
+    p.agents.forEach(saved=>{
+      const a=agents.find(a=>a.name===saved.name);if(!a)return;
+      a.weight=saved.weight;a.totalErr=saved.totalErr;a.drillCount=saved.drillCount;
+      if(saved.maBlend!==undefined)a.maBlend=saved.maBlend;
+      if(saved.friction!==undefined)a.friction=saved.friction;
+      if(saved.spread!==undefined)a.spread=saved.spread;
+      if(saved.priorW!==undefined)a.priorW=saved.priorW;
+      if(saved.strideMult!==undefined)a.strideMult=saved.strideMult;
+      if(saved.vel)a.vel={...saved.vel};
+    });
+    p.strategies.forEach(saved=>{const st=strategies.find(s=>s.name===saved.name);if(!st)return;st.weight=saved.weight;st.totalErr=saved.totalErr;st.drillCount=saved.drillCount;st.params={...saved.params};});
+    p.schools.forEach(saved=>{const s=schools.find(s=>s.name===saved.name);if(!s)return;s.score=saved.score;s.params={...saved.params};s.leaderIdx=saved.leaderIdx;});
+    if(p.cal){CAL.accelBias={...p.cal.accelBias};CAL.gyroBias={...p.cal.gyroBias};CAL.compassOffset=p.cal.compassOffset;CAL.sampleCount=p.cal.sampleCount;CAL.calibrated=true;}
+    this.currentProfile=name;
+    log('Profile "'+name+'" loaded — '+((p.microTunes||0))+' previous micro-tunes','#2ecc71');
+    return true;
+  },
+  delete(name){const profiles=this.list();delete profiles[name];localStorage.setItem('upin_profiles',JSON.stringify(profiles));}
+};
+
 // STRATEGY LAYERS — different indicator combos
 // Like stacking trading indicators to find confluence
 // ═══════════════════════════════════════════════
@@ -474,6 +553,17 @@ class Strategy{
   predict(pos,dt){return pos;}
   recordDrift(secBlind,driftM){this.currentCurve.push({t:secBlind,drift:driftM});}
   finishDrill(){if(this.currentCurve.length)this.driftCurve.push([...this.currentCurve]);this.currentCurve=[];}
+  microTune(err,pred,actual){
+    // Micro-adjustments every 0.5s — very gentle
+    if(this.params.smaW!==undefined){
+      if(err>8)this.params.smaW=Math.min(50,this.params.smaW+0.05);
+      else if(err<2)this.params.smaW=Math.max(3,this.params.smaW-0.02);
+    }
+    if(this.params.emaA!==undefined){
+      if(err>8)this.params.emaA=Math.max(0.01,this.params.emaA-0.0005);
+      else if(err<2)this.params.emaA=Math.min(0.5,this.params.emaA+0.0002);
+    }
+  }
   tuneFromError(err,pred,actual){
     this.validationErrs.push(err);if(this.validationErrs.length>20)this.validationErrs.shift();
     // Auto-adjust SMA window and EMA alpha
@@ -670,6 +760,7 @@ class Agent{
     this.validationErrs.push(err);
     if(this.validationErrs.length>20)this.validationErrs.shift();
   }
+  microTune(err,predicted,actual){}
 }
 
 class KalmanAgent extends Agent{
@@ -691,9 +782,12 @@ class KalmanAgent extends Agent{
     this.conf=Math.max(0,1-this.P*400);
   }
   onGPS(g){if(!this.pos||!g)return;const K=this.P/(this.P+0.00004);this.pos.lat+=K*(g.lat-this.pos.lat);this.pos.lon+=K*(g.lon-this.pos.lon);this.P=(1-K)*this.P;this.conf=Math.min(1,0.88+Math.random()*0.08);}
+  microTune(err,pred,actual){
+    if(err>5){this.maBlend=Math.min(0.98,this.maBlend+0.002);this.friction=Math.min(0.998,this.friction+0.0005);}
+    else if(err<2){this.maBlend=Math.max(0.5,this.maBlend-0.001);this.friction=Math.max(0.9,this.friction-0.0002);}
+  }
   tuneFromError(err,pred,actual){
     super.tuneFromError(err,pred,actual);
-    // If error is large, trust MA more and increase friction
     if(err>20){this.maBlend=Math.min(0.98,this.maBlend+0.02);this.friction=Math.min(0.995,this.friction+0.005);}
     else if(err<5){this.maBlend=Math.max(0.5,this.maBlend-0.01);this.friction=Math.max(0.9,this.friction-0.002);}
   }
@@ -730,11 +824,14 @@ class ParticleAgent extends Agent{
     if(nP.length===this.N)this.particles=nP;
     this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.84+Math.random()*0.1);
   }
+  microTune(err,pred,actual){
+    if(err>5)this.spread=Math.max(0.000001,this.spread*0.995);
+    else if(err<2)this.spread=Math.min(0.00001,this.spread*1.002);
+  }
   tuneFromError(err,pred,actual){
     super.tuneFromError(err,pred,actual);
-    // Tighten or loosen particle spread based on error
-    if(err>20)this.spread=Math.max(0.000001,this.spread*0.8); // tighter
-    else if(err<5)this.spread=Math.min(0.00001,this.spread*1.1); // wider ok
+    if(err>20)this.spread=Math.max(0.000001,this.spread*0.8);
+    else if(err<5)this.spread=Math.min(0.00001,this.spread*1.1);
   }
 }
 
@@ -755,6 +852,10 @@ class BayesianAgent extends Agent{
     this.conf=Math.max(0.1,this.conf-0.002*dt);
   }
   onGPS(g){if(!this.pos||!g)return;this.pos.lat=this.pos.lat*0.2+g.lat*0.8;this.pos.lon=this.pos.lon*0.2+g.lon*0.8;this.conf=Math.min(1,0.85+Math.random()*0.1);}
+  microTune(err,pred,actual){
+    if(err>5)this.priorW=Math.min(0.98,this.priorW+0.002);
+    else if(err<2)this.priorW=Math.max(0.5,this.priorW-0.001);
+  }
   tuneFromError(err,pred,actual){
     super.tuneFromError(err,pred,actual);
     if(err>15)this.priorW=Math.min(0.98,this.priorW+0.02);
@@ -781,6 +882,10 @@ class StepNavAgent extends Agent{
     this.conf=Math.max(0.2,this.conf-0.001*dt);
   }
   onGPS(g){if(!g)return;this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.9+Math.random()*0.06);this.lastSteps=stepCount;}
+  microTune(err,pred,actual){
+    if(err>5)this.strideMult=Math.max(0.3,this.strideMult*0.998);
+    else if(err<2)this.strideMult=Math.min(2.0,this.strideMult*1.001);
+  }
   tuneFromError(err,pred,actual){
     super.tuneFromError(err,pred,actual);
     // Adjust stride multiplier
@@ -805,6 +910,10 @@ class MomentumAgent extends Agent{
     this.conf=Math.max(0.1,this.conf-0.003*dt);
   }
   onGPS(g){if(!this.pos||!g)return;this.vel.lat=(g.lat-this.pos.lat)*0.4;this.vel.lon=(g.lon-this.pos.lon)*0.4;this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.8+Math.random()*0.13);}
+  microTune(err,pred,actual){
+    if(err>5){this.maBlend=Math.min(0.95,this.maBlend+0.003);this.friction=Math.min(0.998,this.friction+0.0005);}
+    else if(err<2){this.maBlend=Math.max(0.3,this.maBlend-0.001);this.friction=Math.max(0.9,this.friction-0.0003);}
+  }
   tuneFromError(err,pred,actual){
     super.tuneFromError(err,pred,actual);
     if(err>20){this.maBlend=Math.min(0.95,this.maBlend+0.03);this.friction=Math.min(0.995,this.friction+0.005);}
@@ -964,7 +1073,7 @@ function tick(){
     }
     // Background validation: agents predict blind, compare every 30s
     const nowSec=(now-startTime)/1000;
-    VALIDATOR.tick(nowSec,agents,strategies,gpsSys);
+    LEARN.tick(nowSec,agents,strategies,gpsSys,sensorPack);
     const con=consensus();
     if(con){
       const ll=[con.lat,con.lon];
@@ -1245,9 +1354,9 @@ function showReport(dur){
       <div class="rr"><span>Accel EMA</span><span class="rv">${MA.emaAccelFwd.toFixed(3)} m/s²</span></div>
     </div>
     <div class="rc"><div class="rct" style="color:#3498db">Background Validation (30s predictions while GPS on)</div>
-      <div class="rr"><span>Validation checks</span><span class="rv">${VALIDATOR.checkCount}</span></div>
-      ${agents.map(a=>{const ve=VALIDATOR.avgError(a.name);return`<div class="rr"><span>${a.name}</span><span class="rv${ve!==null?(ve<10?' ok':ve<30?' w':' bad'):''}">${ve!==null?ve.toFixed(1)+'m avg':'--'}</span></div>`;}).join('')}
-      ${strategies.map(st=>{const ve=VALIDATOR.avgError(st.name);return`<div class="rr"><span>${st.name}</span><span class="rv${ve!==null?(ve<10?' ok':ve<30?' w':' bad'):''}">${ve!==null?ve.toFixed(1)+'m avg':'--'}</span></div>`;}).join('')}
+      <div class="rr"><span>Validation checks</span><span class="rv">${LEARN.macroCount}</span></div>
+      ${agents.map(a=>{const ve=LEARN.avgError(a.name);return`<div class="rr"><span>${a.name}</span><span class="rv${ve!==null?(ve<10?' ok':ve<30?' w':' bad'):''}">${ve!==null?ve.toFixed(1)+'m avg':'--'}</span></div>`;}).join('')}
+      ${strategies.map(st=>{const ve=LEARN.avgError(st.name);return`<div class="rr"><span>${st.name}</span><span class="rv${ve!==null?(ve<10?' ok':ve<30?' w':' bad'):''}">${ve!==null?ve.toFixed(1)+'m avg':'--'}</span></div>`;}).join('')}
     </div>
     <div class="rc"><div class="rct" style="color:#1abc9c">Sensor Calibration</div>
       <div class="rr"><span>Accel bias</span><span class="rv">x:${CAL.accelBias.x.toFixed(3)} y:${CAL.accelBias.y.toFixed(3)}</span></div>
@@ -1318,9 +1427,39 @@ function stopReplay(){
 // ═══════════════════════════════════════════════
 // BOOT
 // ═══════════════════════════════════════════════
-window.addEventListener('load',()=>{initMap();initGPS();renderUI();log('UPIN Field Test v2 ready — waiting for GPS...','#5a7a9a');});
+window.addEventListener('load',()=>{initMap();initGPS();renderUI();refreshProfileList();log('UPIN Field Test v2 ready — load a profile or start fresh','#5a7a9a');});
 
-return{calibrate,startDrive,jamGPS,spoofGPS,resurface,endTest,setDrill,showReplay,stopReplay,exportCSV};
+function saveProfile(){
+  const name=$('profileName').value||'default';
+  PROFILES.save(name);
+  refreshProfileList();
+  $('profileStatus').textContent='Saved "'+name+'" — '+LEARN.microCount+' micro-tunes learned';
+  $('profileStatus').style.color='#2ecc71';
+}
+function loadProfile(){
+  const sel=$('profileSelect').value;
+  if(!sel){log('Select a profile first','#f39c12');return;}
+  if(PROFILES.load(sel)){
+    $('profileName').value=sel;
+    $('profileStatus').textContent='Loaded "'+sel+'" — pre-trained formulas active';
+    $('profileStatus').style.color='#2ecc71';
+    renderUI();renderStratCards();renderDriftCards();
+  }
+}
+function refreshProfileList(){
+  const sel=$('profileSelect');
+  const profiles=PROFILES.list();
+  sel.innerHTML='<option value="">New profile...</option>';
+  Object.keys(profiles).forEach(name=>{
+    const p=profiles[name];
+    const opt=document.createElement('option');
+    opt.value=name;
+    opt.textContent=name+' ('+(p.microTunes||0)+' tunes)';
+    sel.appendChild(opt);
+  });
+}
+
+return{calibrate,startDrive,jamGPS,spoofGPS,resurface,endTest,setDrill,showReplay,stopReplay,exportCSV,saveProfile,loadProfile};
 })();
 </script>
 </body>
