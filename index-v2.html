@@ -312,6 +312,152 @@ const MA={
 };
 
 // ═══════════════════════════════════════════════
+// SENSOR CALIBRATION — learns THIS phone's biases
+// ═══════════════════════════════════════════════
+const CAL={
+  // Accelerometer bias (what it reads when stationary)
+  accelBias:{x:0,y:0,z:0},
+  // Gyro drift rate (degrees/sec when stationary)
+  gyroBias:{x:0,y:0,z:0},
+  // Compass offset (difference between compass and GPS heading)
+  compassOffset:0,
+  // Samples for calibration
+  accelSamples:[],
+  gyroSamples:[],
+  headingSamples:[], // {compass, gpsHeading}
+  calibrated:false,
+  sampleCount:0,
+
+  // Called during calibration phase (phone still)
+  addStillSample(accel,gyro){
+    this.accelSamples.push({...accel});
+    this.gyroSamples.push({...gyro});
+    if(this.accelSamples.length>30)this.accelSamples.shift();
+    if(this.gyroSamples.length>30)this.gyroSamples.shift();
+    if(this.accelSamples.length>=10){
+      // Average = bias (should be 0,0,9.8 when still)
+      const n=this.accelSamples.length;
+      this.accelBias.x=this.accelSamples.reduce((s,a)=>s+a.x,0)/n;
+      this.accelBias.y=this.accelSamples.reduce((s,a)=>s+a.y,0)/n;
+      this.accelBias.z=this.accelSamples.reduce((s,a)=>s+a.z,0)/n-9.8;
+      this.gyroBias.x=this.gyroSamples.reduce((s,g)=>s+g.x,0)/n;
+      this.gyroBias.y=this.gyroSamples.reduce((s,g)=>s+g.y,0)/n;
+      this.gyroBias.z=this.gyroSamples.reduce((s,g)=>s+g.z,0)/n;
+      this.calibrated=true;
+    }
+  },
+
+  // Learn compass offset from GPS heading vs compass reading
+  addHeadingSample(compassDeg,gpsHeadingDeg){
+    if(gpsHeadingDeg===null||gpsHeadingDeg===undefined)return;
+    this.headingSamples.push({c:compassDeg,g:gpsHeadingDeg});
+    if(this.headingSamples.length>20)this.headingSamples.shift();
+    if(this.headingSamples.length>=5){
+      // Average offset
+      let totalOff=0;
+      this.headingSamples.forEach(s=>{
+        let diff=s.g-s.c;
+        if(diff>180)diff-=360;if(diff<-180)diff+=360;
+        totalOff+=diff;
+      });
+      this.compassOffset=totalOff/this.headingSamples.length;
+    }
+    this.sampleCount++;
+  },
+
+  // Apply calibration to raw sensor data
+  correct(accel,gyro,compass){
+    return{
+      accel:{
+        x:accel.x-this.accelBias.x,
+        y:accel.y-this.accelBias.y,
+        z:accel.z-this.accelBias.z
+      },
+      gyro:{
+        x:gyro.x-this.gyroBias.x,
+        y:gyro.y-this.gyroBias.y,
+        z:gyro.z-this.gyroBias.z
+      },
+      compass:compass+this.compassOffset
+    };
+  }
+};
+
+// ═══════════════════════════════════════════════
+// BACKGROUND VALIDATION — agents predict without GPS every 30s
+// then compare to GPS and auto-tune parameters
+// ═══════════════════════════════════════════════
+const VALIDATOR={
+  interval:30, // seconds between validation checks
+  lastCheck:0,
+  checkCount:0,
+  // Each agent stores a "shadow" prediction made without GPS
+  shadows:new Map(), // agentName -> {lat,lon,predictedAt}
+  strategyShadows:new Map(),
+  results:[], // [{agent,predicted,actual,error,params}]
+
+  // Called every tick during DRIVING phase
+  tick(nowSec,agents,strategies,gpsSys){
+    if(!gpsSys)return;
+    const elapsed=nowSec-this.lastCheck;
+
+    // Every 30s: check previous predictions, then make new ones
+    if(elapsed>=this.interval&&this.lastCheck>0){
+      this.checkCount++;
+      // Score shadow predictions against actual GPS
+      agents.forEach(a=>{
+        const shadow=this.shadows.get(a.name);
+        if(shadow){
+          const err=hav(shadow,gpsSys);
+          this.results.push({name:a.name,type:'agent',err,params:shadow.params?{...shadow.params}:null});
+          // AUTO-TUNE: adjust agent based on error
+          a.tuneFromError(err,shadow,gpsSys);
+        }
+      });
+      strategies.forEach(st=>{
+        const shadow=this.strategyShadows.get(st.name);
+        if(shadow){
+          const err=hav(shadow,gpsSys);
+          this.results.push({name:st.name,type:'strategy',err,params:{...st.params}});
+          // AUTO-TUNE strategy parameters
+          st.tuneFromError(err,shadow,gpsSys);
+        }
+      });
+      // Log best/worst
+      if(this.results.length>0){
+        const last=this.results.slice(-agents.length-strategies.length);
+        const best=last.reduce((b,r)=>r.err<b.err?r:b,last[0]);
+        log(`Validation #${this.checkCount}: best=${best.name} ${best.err.toFixed(1)}m`,'#3498db');
+      }
+    }
+
+    // Make new shadow predictions (predict where GPS will be in 30s)
+    if(elapsed>=this.interval||this.lastCheck===0){
+      this.lastCheck=nowSec;
+      agents.forEach(a=>{
+        if(!a.pos)return;
+        // Clone position and predict 30s forward without GPS
+        const shadow=a.predictForward(this.interval,{accel,gyro,mag,compassHdg,steps:stepCount,stepSpeed:stepFreq*strideLen||0.5});
+        if(shadow)this.shadows.set(a.name,shadow);
+      });
+      strategies.forEach(st=>{
+        if(!st.pos)return;
+        let p={lat:st.pos.lat,lon:st.pos.lon};
+        // Predict 30s forward in small steps
+        for(let t=0;t<this.interval;t+=0.5){p=st.predict(p,0.5);}
+        this.strategyShadows.set(st.name,{lat:p.lat,lon:p.lon});
+      });
+    }
+  },
+
+  avgError(name){
+    const r=this.results.filter(r=>r.name===name);
+    if(!r.length)return null;
+    return r.reduce((s,r)=>s+r.err,0)/r.length;
+  }
+};
+
+// ═══════════════════════════════════════════════
 // STRATEGY LAYERS — different indicator combos
 // Like stacking trading indicators to find confluence
 // ═══════════════════════════════════════════════
@@ -319,8 +465,8 @@ class Strategy{
   constructor(name,params,color,desc){
     this.name=name;this.params=params;this.color=color;this.desc=desc;
     this.pos=null;this.weight=0.2;this.totalErr=0;this.drillCount=0;this.lastErr=null;
-    // Drift curve: records drift over time during blind periods
-    this.driftCurve=[];// [{t,drift}] seconds blind vs drift meters
+    this.validationErrs=[];
+    this.driftCurve=[];
     this.currentCurve=[];
   }
   init(lat,lon){this.pos={lat,lon};this.currentCurve=[];}
@@ -328,6 +474,18 @@ class Strategy{
   predict(pos,dt){return pos;}
   recordDrift(secBlind,driftM){this.currentCurve.push({t:secBlind,drift:driftM});}
   finishDrill(){if(this.currentCurve.length)this.driftCurve.push([...this.currentCurve]);this.currentCurve=[];}
+  tuneFromError(err,pred,actual){
+    this.validationErrs.push(err);if(this.validationErrs.length>20)this.validationErrs.shift();
+    // Auto-adjust SMA window and EMA alpha
+    if(this.params.smaW!==undefined){
+      if(err>15)this.params.smaW=Math.min(50,this.params.smaW+1);
+      else if(err<5)this.params.smaW=Math.max(3,this.params.smaW-1);
+    }
+    if(this.params.emaA!==undefined){
+      if(err>15)this.params.emaA=Math.max(0.02,this.params.emaA-0.01);
+      else if(err<5)this.params.emaA=Math.min(0.4,this.params.emaA+0.005);
+    }
+  }
   avgDriftRate(){// m per second of blind time
     if(!this.driftCurve.length)return 0;
     let totalRate=0;
@@ -493,48 +651,68 @@ function renderDriftCards(){
 // MATH AGENTS — now use MA baseline for better accuracy
 // ═══════════════════════════════════════════════
 class Agent{
-  constructor(n,c){this.name=n;this.color=c;this.pos=null;this.weight=0.2;this.totalErr=0;this.drillCount=0;this.lastErr=null;this.conf=0;}
+  constructor(n,c){this.name=n;this.color=c;this.pos=null;this.weight=0.2;this.totalErr=0;this.drillCount=0;this.lastErr=null;this.conf=0;this.validationErrs=[];this.learnRate=0.1;}
   init(lat,lon){this.pos={lat,lon};}
   predict(dt,s){}
   onGPS(g){if(g)this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.85+Math.random()*0.1);}
   grade(){if(this.lastErr===null)return'-';if(this.lastErr<10)return'A';if(this.lastErr<30)return'B';if(this.lastErr<80)return'C';return'D';}
+  // Predict 30s forward without GPS for validation
+  predictForward(secs,s){
+    if(!this.pos)return null;
+    let p={lat:this.pos.lat,lon:this.pos.lon};
+    const fakeAgent=Object.create(Object.getPrototypeOf(this));
+    Object.assign(fakeAgent,this);fakeAgent.pos={...p};
+    for(let t=0;t<secs;t+=0.5){fakeAgent.predict(0.5,s);}
+    return fakeAgent.pos?{lat:fakeAgent.pos.lat,lon:fakeAgent.pos.lon}:p;
+  }
+  // Auto-tune: subclasses override to adjust their specific params
+  tuneFromError(err,predicted,actual){
+    this.validationErrs.push(err);
+    if(this.validationErrs.length>20)this.validationErrs.shift();
+  }
 }
 
 class KalmanAgent extends Agent{
-  constructor(){super('Kalman','#3498db');this.vLat=0;this.vLon=0;this.P=0.001;}
+  constructor(){super('Kalman','#3498db');this.vLat=0;this.vLon=0;this.P=0.001;this.maBlend=0.85;this.friction=0.97;}
   predict(dt,s){
     if(!this.pos)return;
-    // Use MA velocity as prediction basis instead of raw accel
+    const cal=CAL.correct(s.accel,s.gyro,s.compassHdg);
     if(MA.count>5){
-      this.vLat=MA.smaVelLat*0.7+this.vLat*0.3;
-      this.vLon=MA.smaVelLon*0.7+this.vLon*0.3;
+      this.vLat=MA.smaVelLat*this.maBlend+this.vLat*(1-this.maBlend);
+      this.vLon=MA.smaVelLon*this.maBlend+this.vLon*(1-this.maBlend);
     }else{
-      const h=s.compassHdg*Math.PI/180;
-      this.vLat+=(s.accel.x*Math.cos(h)*0.1*dt)/111320;
-      this.vLon+=(s.accel.x*Math.sin(h)*0.1*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180));
+      const h=cal.compass*Math.PI/180;
+      this.vLat+=(cal.accel.x*Math.cos(h)*0.08*dt)/111320;
+      this.vLon+=(cal.accel.x*Math.sin(h)*0.08*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180));
     }
     this.pos.lat+=this.vLat*dt;this.pos.lon+=this.vLon*dt;
-    this.vLat*=0.97;this.vLon*=0.97;
+    this.vLat*=this.friction;this.vLon*=this.friction;
     this.P+=0.000001*dt;
     this.conf=Math.max(0,1-this.P*400);
   }
   onGPS(g){if(!this.pos||!g)return;const K=this.P/(this.P+0.00004);this.pos.lat+=K*(g.lat-this.pos.lat);this.pos.lon+=K*(g.lon-this.pos.lon);this.P=(1-K)*this.P;this.conf=Math.min(1,0.88+Math.random()*0.08);}
+  tuneFromError(err,pred,actual){
+    super.tuneFromError(err,pred,actual);
+    // If error is large, trust MA more and increase friction
+    if(err>20){this.maBlend=Math.min(0.98,this.maBlend+0.02);this.friction=Math.min(0.995,this.friction+0.005);}
+    else if(err<5){this.maBlend=Math.max(0.5,this.maBlend-0.01);this.friction=Math.max(0.9,this.friction-0.002);}
+  }
 }
 
 class ParticleAgent extends Agent{
-  constructor(){super('Particle','#e67e22');this.particles=[];this.N=30;} // reduced from 80 to 30
-  init(lat,lon){this.pos={lat,lon};this.particles=[];for(let i=0;i<this.N;i++)this.particles.push({lat:lat+(Math.random()-.5)*0.00008,lon:lon+(Math.random()-.5)*0.00008,w:1/this.N});}
+  constructor(){super('Particle','#e67e22');this.particles=[];this.N=30;this.spread=0.000004;}
+  init(lat,lon){this.pos={lat,lon};this.particles=[];for(let i=0;i<this.N;i++)this.particles.push({lat:lat+(Math.random()-.5)*0.00005,lon:lon+(Math.random()-.5)*0.00005,w:1/this.N});}
   predict(dt,s){
     if(!this.particles.length)return;
-    // Use MA baseline to guide particles
     const predicted=MA.predict(this.pos,dt);
     if(predicted&&MA.count>5){
       const dLat=predicted.lat-this.pos.lat;
       const dLon=predicted.lon-this.pos.lon;
-      this.particles.forEach(p=>{p.lat+=dLat+(Math.random()-.5)*0.000006;p.lon+=dLon+(Math.random()-.5)*0.000006;});
+      this.particles.forEach(p=>{p.lat+=dLat+(Math.random()-.5)*this.spread;p.lon+=dLon+(Math.random()-.5)*this.spread;});
     }else{
-      const h=s.compassHdg*Math.PI/180,spd=(s.stepSpeed||0.5);
-      this.particles.forEach(p=>{p.lat+=(spd*Math.cos(h)*dt)/111320+(Math.random()-.5)*0.000006;p.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(p.lat*Math.PI/180))+(Math.random()-.5)*0.000006;});
+      const cal=CAL.correct(s.accel,s.gyro,s.compassHdg);
+      const h=cal.compass*Math.PI/180,spd=(s.stepSpeed||0.5);
+      this.particles.forEach(p=>{p.lat+=(spd*Math.cos(h)*dt)/111320+(Math.random()-.5)*this.spread;p.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(p.lat*Math.PI/180))+(Math.random()-.5)*this.spread;});
     }
     let tLa=0,tLo=0,tw=0;
     this.particles.forEach(p=>{tLa+=p.lat*p.w;tLo+=p.lon*p.w;tw+=p.w;});
@@ -552,59 +730,86 @@ class ParticleAgent extends Agent{
     if(nP.length===this.N)this.particles=nP;
     this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.84+Math.random()*0.1);
   }
+  tuneFromError(err,pred,actual){
+    super.tuneFromError(err,pred,actual);
+    // Tighten or loosen particle spread based on error
+    if(err>20)this.spread=Math.max(0.000001,this.spread*0.8); // tighter
+    else if(err<5)this.spread=Math.min(0.00001,this.spread*1.1); // wider ok
+  }
 }
 
 class BayesianAgent extends Agent{
-  constructor(){super('Bayesian','#1abc9c');}
+  constructor(){super('Bayesian','#1abc9c');this.priorW=0.85;} // how much to trust MA
   predict(dt,s){
     if(!this.pos)return;
-    // Use MA prediction as the prior
     const pred=MA.predict(this.pos,dt);
     if(pred&&MA.count>5){
-      this.pos.lat=pred.lat*0.8+this.pos.lat*0.2;
-      this.pos.lon=pred.lon*0.8+this.pos.lon*0.2;
+      this.pos.lat=pred.lat*this.priorW+this.pos.lat*(1-this.priorW);
+      this.pos.lon=pred.lon*this.priorW+this.pos.lon*(1-this.priorW);
     }else{
-      const h=s.compassHdg*Math.PI/180,spd=s.stepSpeed||0.3;
-      this.pos.lat+=(spd*Math.cos(h)*dt)/111320+(Math.random()-.5)*0.000004;
-      this.pos.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180))+(Math.random()-.5)*0.000004;
+      const cal=CAL.correct(s.accel,s.gyro,s.compassHdg);
+      const h=cal.compass*Math.PI/180,spd=s.stepSpeed||0.3;
+      this.pos.lat+=(spd*Math.cos(h)*dt)/111320;
+      this.pos.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180));
     }
     this.conf=Math.max(0.1,this.conf-0.002*dt);
   }
-  onGPS(g){if(!this.pos||!g)return;this.pos.lat=this.pos.lat*0.25+g.lat*0.75;this.pos.lon=this.pos.lon*0.25+g.lon*0.75;this.conf=Math.min(1,0.82+Math.random()*0.12);}
+  onGPS(g){if(!this.pos||!g)return;this.pos.lat=this.pos.lat*0.2+g.lat*0.8;this.pos.lon=this.pos.lon*0.2+g.lon*0.8;this.conf=Math.min(1,0.85+Math.random()*0.1);}
+  tuneFromError(err,pred,actual){
+    super.tuneFromError(err,pred,actual);
+    if(err>15)this.priorW=Math.min(0.98,this.priorW+0.02);
+    else if(err<3)this.priorW=Math.max(0.5,this.priorW-0.01);
+  }
 }
 
 class StepNavAgent extends Agent{
-  constructor(){super('StepNav','#e74c3c');this.lastSteps=0;}
+  constructor(){super('StepNav','#e74c3c');this.lastSteps=0;this.strideMult=1.0;}
   predict(dt,s){
     if(!this.pos)return;
     const ns=s.steps-this.lastSteps;this.lastSteps=s.steps;
     if(ns>0){
-      // Use EMA heading from baseline if available
-      const hdg=(MA.count>5?MA.emaHeading:s.compassHdg)*Math.PI/180;
-      const d=ns*strideLen;
+      const cal=CAL.correct(s.accel,s.gyro,s.compassHdg);
+      const hdg=(MA.count>5?MA.emaHeading+CAL.compassOffset:cal.compass)*Math.PI/180;
+      const d=ns*strideLen*this.strideMult;
       this.pos.lat+=d*Math.cos(hdg)/111320;
       this.pos.lon+=d*Math.sin(hdg)/(111320*Math.cos(this.pos.lat*Math.PI/180));
+    }else if(MA.count>5){
+      // No steps? Use MA velocity to keep moving
+      this.pos.lat+=MA.smaVelLat*dt;
+      this.pos.lon+=MA.smaVelLon*dt;
     }
-    this.pos.lat+=(Math.random()-.5)*0.0000015;this.pos.lon+=(Math.random()-.5)*0.0000015;
     this.conf=Math.max(0.2,this.conf-0.001*dt);
   }
   onGPS(g){if(!g)return;this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.9+Math.random()*0.06);this.lastSteps=stepCount;}
+  tuneFromError(err,pred,actual){
+    super.tuneFromError(err,pred,actual);
+    // Adjust stride multiplier
+    if(err>15&&pred&&actual){
+      const predDist=hav(this.pos||pred,pred);
+      const actDist=hav(this.pos||pred,actual);
+      if(predDist>0)this.strideMult*=Math.min(1.5,Math.max(0.5,actDist/predDist));
+    }
+  }
 }
 
 class MomentumAgent extends Agent{
-  constructor(){super('Momentum','#f39c12');this.vel={lat:0,lon:0};}
+  constructor(){super('Momentum','#f39c12');this.vel={lat:0,lon:0};this.maBlend=0.7;this.friction=0.96;}
   predict(dt,s){
     if(!this.pos)return;
-    // Use MA velocity as momentum basis
     if(MA.count>5){
-      this.vel.lat=this.vel.lat*0.5+MA.smaVelLat*0.5;
-      this.vel.lon=this.vel.lon*0.5+MA.smaVelLon*0.5;
+      this.vel.lat=this.vel.lat*(1-this.maBlend)+MA.smaVelLat*this.maBlend;
+      this.vel.lon=this.vel.lon*(1-this.maBlend)+MA.smaVelLon*this.maBlend;
     }
-    this.vel.lat*=0.96;this.vel.lon*=0.96;
+    this.vel.lat*=this.friction;this.vel.lon*=this.friction;
     this.pos.lat+=this.vel.lat*dt;this.pos.lon+=this.vel.lon*dt;
     this.conf=Math.max(0.1,this.conf-0.003*dt);
   }
   onGPS(g){if(!this.pos||!g)return;this.vel.lat=(g.lat-this.pos.lat)*0.4;this.vel.lon=(g.lon-this.pos.lon)*0.4;this.pos={lat:g.lat,lon:g.lon};this.conf=Math.min(1,0.8+Math.random()*0.13);}
+  tuneFromError(err,pred,actual){
+    super.tuneFromError(err,pred,actual);
+    if(err>20){this.maBlend=Math.min(0.95,this.maBlend+0.03);this.friction=Math.min(0.995,this.friction+0.005);}
+    else if(err<5){this.maBlend=Math.max(0.3,this.maBlend-0.01);this.friction=Math.max(0.9,this.friction-0.003);}
+  }
 }
 
 const agents=[new KalmanAgent(),new ParticleAgent(),new BayesianAgent(),new StepNavAgent(),new MomentumAgent()];
@@ -613,14 +818,44 @@ const agents=[new KalmanAgent(),new ParticleAgent(),new BayesianAgent(),new Step
 // FISH SCHOOLING
 // ═══════════════════════════════════════════════
 const SNAMES=['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'];
+// Each school runs the SAME formula with DIFFERENT parameters — grid search
+const SCHOOL_PARAMS=[
+  {smaW:5,emaA:0.3,blend:0.9},   // Alpha: very fast, aggressive MA trust
+  {smaW:10,emaA:0.2,blend:0.85},  // Bravo: fast
+  {smaW:20,emaA:0.12,blend:0.8},  // Charlie: medium (default-ish)
+  {smaW:30,emaA:0.06,blend:0.75}, // Delta: slow
+  {smaW:40,emaA:0.03,blend:0.7},  // Echo: very slow, max smoothing
+  {smaW:15,emaA:0.15,blend:0.85}, // Foxtrot: adaptive, will mutate
+];
 class School{
-  constructor(n,li){this.name=n;this.leaderIdx=li;this.score=0;this.pos=null;this.totalErr=0;this.checks=0;}
+  constructor(n,li,params){this.name=n;this.leaderIdx=li;this.params={...params};this.score=0;this.pos=null;this.totalErr=0;this.checks=0;}
+  // Each school predicts using ITS OWN parameters on the MA data
+  predict(pos,dt){
+    if(!pos||MA.count<3)return pos;
+    const W=Math.min(this.params.smaW,MA.speeds.length);
+    if(W<2)return pos;
+    const spds=MA.speeds.slice(-W);
+    const smaSpd=spds.reduce((a,b)=>a+b,0)/spds.length;
+    const hds=MA.headings.slice(-W);
+    let ema=hds[0]||0;
+    for(let i=1;i<hds.length;i++)ema=this.params.emaA*hds[i]+(1-this.params.emaA)*ema;
+    const h=ema*Math.PI/180;
+    const dLat_h=(smaSpd*Math.cos(h)*dt)/111320;
+    const dLon_h=(smaSpd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    const dLat_v=MA.smaVelLat*dt;
+    const dLon_v=MA.smaVelLon*dt;
+    return{
+      lat:pos.lat+dLat_h*this.params.blend+dLat_v*(1-this.params.blend),
+      lon:pos.lon+dLon_h*this.params.blend+dLon_v*(1-this.params.blend)
+    };
+  }
   update(aPos){
-    const ldr=aPos[this.leaderIdx];if(!ldr)return;
-    if(!this.pos){this.pos={...ldr};return;}
-    let aLa=0,aLo=0,n=0;aPos.forEach(p=>{if(p){aLa+=p.lat;aLo+=p.lon;n++;}});
-    if(!n)return;aLa/=n;aLo/=n;
-    this.pos.lat=ldr.lat*0.7+aLa*0.3;this.pos.lon=ldr.lon*0.7+aLo*0.3;
+    // During GPS denied: run own formula
+    if(this.pos)this.pos=this.predict(this.pos,0.5);
+    else{
+      const ldr=aPos[this.leaderIdx];
+      if(ldr)this.pos={...ldr};
+    }
   }
   scoreVs(truth){
     if(!this.pos||!truth)return;
@@ -628,8 +863,15 @@ class School{
     const s=Math.max(0,Math.min(100,100-e*0.5));
     this.score=Math.round((this.score*(this.checks-1)+s)/this.checks);
   }
+  // After scoring, Foxtrot mutates toward the best school's params
+  mutateToward(bestParams){
+    const lr=0.3;
+    this.params.smaW=Math.round(this.params.smaW*(1-lr)+bestParams.smaW*lr);
+    this.params.emaA=this.params.emaA*(1-lr)+bestParams.emaA*lr;
+    this.params.blend=this.params.blend*(1-lr)+bestParams.blend*lr;
+  }
 }
-const schools=SNAMES.map((n,i)=>new School(n,i<5?i:0));
+const schools=SNAMES.map((n,i)=>new School(n,i<5?i:0,SCHOOL_PARAMS[i]));
 
 function consensus(){
   let tLa=0,tLo=0,tw=0;
@@ -715,6 +957,14 @@ function tick(){
 
   if(phase==='driving'&&gpsSys){
     agents.forEach(a=>{if(!a.pos)a.init(gpsSys.lat,gpsSys.lon);a.onGPS(gpsSys);});
+    // Compass calibration: learn offset between compass and GPS heading
+    if(lastGP&&gpsSys){
+      const gpsHdg=Math.atan2(gpsSys.lon-lastGP.lon,gpsSys.lat-lastGP.lat)*180/Math.PI;
+      if(totalDist>5)CAL.addHeadingSample(compassHdg,gpsHdg);
+    }
+    // Background validation: agents predict blind, compare every 30s
+    const nowSec=(now-startTime)/1000;
+    VALIDATOR.tick(nowSec,agents,strategies,gpsSys);
     const con=consensus();
     if(con){
       const ll=[con.lat,con.lon];
@@ -727,7 +977,6 @@ function tick(){
       fusionConfs.push(avgConf);if(fusionConfs.length>500)fusionConfs.shift();
       if(lastGP)totalDist+=hav(lastGP,{lat:con.lat,lon:con.lon});
       lastGP={lat:con.lat,lon:con.lon};drPos={lat:con.lat,lon:con.lon};
-      // Feed moving average baseline
       MA.addSample(con.lat,con.lon,avgConf,compassHdg,aFwd);
       if(doUI){
         $('mFE').textContent=fErr.toFixed(1);$('mFE').className='vl';
@@ -825,8 +1074,7 @@ function renderUI(){
   $('agC').innerHTML=h;
   h='';
   schools.forEach(s=>{
-    const l=s.leaderIdx<5?agents[s.leaderIdx].name:'Con';
-    h+=`<div class="fs"><div class="fn">${s.name}</div><div class="fv">${s.score}/100</div><div class="fl">${l}</div></div>`;
+    h+=`<div class="fs"><div class="fn">${s.name}</div><div class="fv">${s.score}/100</div><div class="fl">sma:${s.params.smaW} α:${s.params.emaA.toFixed(2)}</div></div>`;
   });
   $('fsC').innerHTML=h;
 }
@@ -851,8 +1099,15 @@ function drawTrail(t,ref,c,dash){
 // ═══════════════════════════════════════════════
 function calibrate(){
   log('Requesting motion & compass...','#f39c12');initSensors();
-  setTimeout(()=>{log('Hold still 5s...','#f39c12');
-    setTimeout(()=>{calibrated=true;log('Calibrated. IMU + Compass ready','#2ecc71');$('dIMU').className='ld on';$('vIMU').textContent='ready';$('dCMP').className='ld on';$('vCMP').textContent='ready';},3000);
+  setTimeout(()=>{log('Hold phone still 5s — calibrating sensors...','#f39c12');
+    // Collect sensor samples while phone is still
+    const calIv=setInterval(()=>CAL.addStillSample(accel,gyro),100);
+    setTimeout(()=>{
+      clearInterval(calIv);calibrated=true;
+      log(`Calibrated. Accel bias: x=${CAL.accelBias.x.toFixed(3)} y=${CAL.accelBias.y.toFixed(3)} z=${CAL.accelBias.z.toFixed(3)}`,'#2ecc71');
+      log(`Gyro bias: x=${CAL.gyroBias.x.toFixed(2)} y=${CAL.gyroBias.y.toFixed(2)} z=${CAL.gyroBias.z.toFixed(2)}`,'#2ecc71');
+      $('dIMU').className='ld on';$('vIMU').textContent='cal';$('dCMP').className='ld on';$('vCMP').textContent='cal';
+    },5000);
   },500);
 }
 function startDrive(){
@@ -917,6 +1172,8 @@ function resurface(){
   schools.forEach(s=>{if(gpsTrue)s.scoreVs(gpsTrue);});
   let bsi=0,bss=0;schools.forEach((s,i)=>{if(s.score>bss){bss=s.score;bsi=i;}});
   schools[5].leaderIdx=schools[bsi].leaderIdx;
+  // Foxtrot mutates its parameters toward the best school
+  schools[5].mutateToward(schools[bsi].params);
   const conD=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
   const distB=currentDrill&&currentDrill.startPos&&gpsTrue?hav(currentDrill.startPos,gpsTrue):0;
   const dps=bs>0?conD/bs:0;
@@ -986,6 +1243,20 @@ function showReport(dur){
       <div class="rr"><span>EMA Heading</span><span class="rv">${MA.emaHeading.toFixed(1)}°</span></div>
       <div class="rr"><span>Velocity SMA</span><span class="rv">${(MA.smaVelLat*111320).toFixed(3)} m/s</span></div>
       <div class="rr"><span>Accel EMA</span><span class="rv">${MA.emaAccelFwd.toFixed(3)} m/s²</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:#3498db">Background Validation (30s predictions while GPS on)</div>
+      <div class="rr"><span>Validation checks</span><span class="rv">${VALIDATOR.checkCount}</span></div>
+      ${agents.map(a=>{const ve=VALIDATOR.avgError(a.name);return`<div class="rr"><span>${a.name}</span><span class="rv${ve!==null?(ve<10?' ok':ve<30?' w':' bad'):''}">${ve!==null?ve.toFixed(1)+'m avg':'--'}</span></div>`;}).join('')}
+      ${strategies.map(st=>{const ve=VALIDATOR.avgError(st.name);return`<div class="rr"><span>${st.name}</span><span class="rv${ve!==null?(ve<10?' ok':ve<30?' w':' bad'):''}">${ve!==null?ve.toFixed(1)+'m avg':'--'}</span></div>`;}).join('')}
+    </div>
+    <div class="rc"><div class="rct" style="color:#1abc9c">Sensor Calibration</div>
+      <div class="rr"><span>Accel bias</span><span class="rv">x:${CAL.accelBias.x.toFixed(3)} y:${CAL.accelBias.y.toFixed(3)}</span></div>
+      <div class="rr"><span>Gyro bias</span><span class="rv">x:${CAL.gyroBias.x.toFixed(2)} y:${CAL.gyroBias.y.toFixed(2)}</span></div>
+      <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOffset.toFixed(1)}°</span></div>
+      <div class="rr"><span>Heading samples</span><span class="rv">${CAL.sampleCount}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:#e67e22">Fish School Parameters (Grid Search)</div>
+      ${schools.map(s=>`<div class="rr"><span>${s.name} (sma:${s.params.smaW} ema:${s.params.emaA.toFixed(3)} blend:${s.params.blend.toFixed(2)})</span><span class="rv${s.score>70?' ok':s.score>40?' w':' bad'}">${s.score}/100</span></div>`).join('')}
     </div>
     <div class="rc"><div class="rct g">Normal Driving</div>
       <div class="rr"><span>Avg fusion error</span><span class="rv ok">${aFE.toFixed(1)}m</span></div>
