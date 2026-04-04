@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UPIN Phone Demo — Development Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a1628;color:#e0e0e0;padding:20px;max-width:900px;margin:0 auto}
+h1{font-size:22px;color:#2ecc71;margin-bottom:4px}
+.sub{font-size:12px;color:#556;margin-bottom:20px}
+h2{font-size:16px;color:#2ecc71;margin:20px 0 10px;border-bottom:1px solid #1a2a3f;padding-bottom:6px}
+h3{font-size:13px;color:#f39c12;margin:14px 0 6px}
+.card{background:#111d2e;border-radius:10px;padding:14px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #0d1a2a;font-size:13px}
+.row:last-child{border:none}
+.label{color:#7a9ab8}
+.val{font-weight:600}
+.ok{color:#2ecc71}.warn{color:#f39c12}.bad{color:#e74c3c}.info{color:#3498db}.purple{color:#9b59b6}
+.tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:4px}
+.tag-done{background:#2ecc71;color:#000}
+.tag-active{background:#3498db;color:#fff}
+.tag-planned{background:#333;color:#aaa}
+.progress{height:8px;background:#1a2a3f;border-radius:4px;overflow:hidden;margin:6px 0}
+.progress-fill{height:100%;border-radius:4px;background:#2ecc71}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:8px 0}
+th{text-align:left;color:#5a7a9a;font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:6px 4px;border-bottom:1px solid #1a2a3f}
+td{padding:6px 4px;border-bottom:1px solid #0d1a2a}
+a{color:#3498db;text-decoration:none}
+a:hover{text-decoration:underline}
+.links{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.link-btn{display:inline-block;padding:8px 16px;background:#1a2a3f;border:1px solid #2ecc7133;border-radius:8px;font-size:12px;font-weight:600;color:#2ecc71}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:600px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<h1>UPIN Phone Demo — Dashboard</h1>
+<div class="sub">Development tracker and system status | Last updated: 2026-04-04</div>
+
+<div class="links">
+  <a href="index-v2.html" class="link-btn">Open v2 Demo</a>
+  <a href="index.html" class="link-btn">Open v1 Demo</a>
+  <a href="https://github.com/digitalloto/upin-phone-demo" class="link-btn">GitHub Repo</a>
+  <a href="https://github.com/digitalloto/upin" class="link-btn">Main UPIN Repo</a>
+</div>
+
+<h2>System Completion Status</h2>
+
+<div class="card">
+  <div class="row"><span class="label">Overall Progress</span><span class="val ok">v2.5 — Continuous Learning</span></div>
+  <div class="progress"><div class="progress-fill" style="width:85%"></div></div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h3>Core Layers</h3>
+    <div class="row"><span class="label">Sensor Calibration (CAL)</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Moving Avg Baseline (MA)</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Math Agents (5)</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Strategy Layers (5)</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Fish Schooling (6)</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Continuous Learning</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">User Profiles</span><span class="tag tag-done">DONE</span></div>
+  </div>
+  <div class="card">
+    <h3>Field Testing</h3>
+    <div class="row"><span class="label">GPS Lock + Map</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Manual Jam/Spoof</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Resurface + Scoring</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Drill Grading (A-D)</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Full Report</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">CSV Export</span><span class="tag tag-done">DONE</span></div>
+    <div class="row"><span class="label">Replay</span><span class="tag tag-done">DONE</span></div>
+  </div>
+</div>
+
+<h2>Architecture — 7 Layers</h2>
+
+<div class="card">
+<table>
+<tr><th>#</th><th>Layer</th><th>Purpose</th><th>Status</th></tr>
+<tr><td>1</td><td>Sensor Calibration</td><td>Learns device-specific accel/gyro bias, compass offset</td><td class="ok">Active</td></tr>
+<tr><td>2</td><td>Moving Average Baseline</td><td>SMA/EMA/VWMA of speed, heading, velocity, position</td><td class="ok">Active</td></tr>
+<tr><td>3</td><td>Math Agents (5)</td><td>Kalman, Particle, Bayesian, StepNav, Momentum — each with auto-tuning params</td><td class="ok">Active</td></tr>
+<tr><td>4</td><td>Strategy Layers (5)</td><td>Trend, Smooth, MACD, Bollinger, Adaptive — indicator combos like trading charts</td><td class="ok">Active</td></tr>
+<tr><td>5</td><td>Fish Schooling (6)</td><td>Grid search over SMA/EMA/blend parameters — natural selection for best config</td><td class="ok">Active</td></tr>
+<tr><td>6</td><td>Continuous Learning</td><td>Micro-tune every 0.5s + macro-tune every 30s — formulas always improving</td><td class="ok">Active</td></tr>
+<tr><td>7</td><td>Position Blend</td><td>40% agents + 30% strategies + 30% MA projection</td><td class="ok">Active</td></tr>
+</table>
+</div>
+
+<h2>Math Agents</h2>
+
+<div class="card">
+<table>
+<tr><th>Agent</th><th>Algorithm</th><th>Auto-Tunes</th><th>Best For</th></tr>
+<tr><td class="info">Kalman</td><td>Linear state estimation</td><td>maBlend, friction</td><td>Straight lines</td></tr>
+<tr><td class="warn">Particle</td><td>30 weighted particles</td><td>spread (cloud size)</td><td>Turns, curves</td></tr>
+<tr><td class="ok">Bayesian</td><td>Prior × likelihood</td><td>priorW (MA trust)</td><td>High uncertainty</td></tr>
+<tr><td class="bad">StepNav</td><td>Pedometer + compass</td><td>strideMult</td><td>Walking</td></tr>
+<tr><td class="warn">Momentum</td><td>Physics velocity + decay</td><td>maBlend, friction</td><td>Vehicles</td></tr>
+</table>
+</div>
+
+<h2>Strategy Layers (Indicator Combos)</h2>
+
+<div class="card">
+<table>
+<tr><th>Strategy</th><th>Indicators</th><th>Trading Equivalent</th></tr>
+<tr><td class="bad">Trend</td><td>SMA(5) + EMA(0.25)</td><td>Fast crossover</td></tr>
+<tr><td class="info">Smooth</td><td>SMA(30) + EMA(0.05)</td><td>Slow MA</td></tr>
+<tr><td class="warn">MACD</td><td>VelEMA(0.2) - VelEMA(0.05)</td><td>MACD signal</td></tr>
+<tr><td class="purple">Bollinger</td><td>SMA(20) + mean reversion</td><td>Bollinger bands</td></tr>
+<tr><td class="ok">Adaptive</td><td>Auto-tunes W and α</td><td>Self-optimizing</td></tr>
+</table>
+</div>
+
+<h2>Fish Schools (Parameter Grid Search)</h2>
+
+<div class="card">
+<table>
+<tr><th>School</th><th>SMA Window</th><th>EMA Alpha</th><th>Blend</th><th>Role</th></tr>
+<tr><td>Alpha</td><td>5</td><td>0.30</td><td>0.90</td><td>Very fast</td></tr>
+<tr><td>Bravo</td><td>10</td><td>0.20</td><td>0.85</td><td>Fast</td></tr>
+<tr><td>Charlie</td><td>20</td><td>0.12</td><td>0.80</td><td>Medium</td></tr>
+<tr><td>Delta</td><td>30</td><td>0.06</td><td>0.75</td><td>Slow</td></tr>
+<tr><td>Echo</td><td>40</td><td>0.03</td><td>0.70</td><td>Very slow</td></tr>
+<tr><td class="ok">Foxtrot</td><td>adaptive</td><td>adaptive</td><td>adaptive</td><td>Mutates to winner</td></tr>
+</table>
+</div>
+
+<h2>Version History</h2>
+
+<div class="card">
+<table>
+<tr><th>Version</th><th>Date</th><th>Changes</th></tr>
+<tr><td class="ok">v2.5</td><td>2026-04-04</td><td>Continuous micro-learning (every 0.5s), user profiles with localStorage</td></tr>
+<tr><td>v2.4</td><td>2026-04-04</td><td>Background validation, sensor calibration, fish grid search, auto-tuning</td></tr>
+<tr><td>v2.3</td><td>2026-04-04</td><td>5 strategy layers (Trend/Smooth/MACD/Bollinger/Adaptive), drift curves</td></tr>
+<tr><td>v2.2</td><td>2026-04-04</td><td>Moving average baseline (SMA/EMA/VWMA), freeze fixes, performance caps</td></tr>
+<tr><td>v2.1</td><td>2026-04-04</td><td>5 math agents, 6 fish schools, configurable drills, grading, replay</td></tr>
+<tr><td>v2.0</td><td>2026-04-04</td><td>Field test UI overhaul, metric cards, positioning layers, event log, report</td></tr>
+<tr><td>v1.0</td><td>2026-04-04</td><td>GPS deny/resurface, dual trails, interval jam, drift comparison</td></tr>
+<tr><td>v0.1</td><td>2026-04-04</td><td>Initial demo: map, basic fusion, spoof/jam buttons</td></tr>
+</table>
+</div>
+
+<h2>Next Steps</h2>
+
+<div class="card">
+<div class="row"><span class="label">Improve agent accuracy (target <10m/60s)</span><span class="tag tag-planned">PLANNED</span></div>
+<div class="row"><span class="label">Multi-session learning (profiles persist across days)</span><span class="tag tag-done">DONE</span></div>
+<div class="row"><span class="label">Flight path presets (known routes)</span><span class="tag tag-planned">PLANNED</span></div>
+<div class="row"><span class="label">Altitude tracking + barometer</span><span class="tag tag-planned">PLANNED</span></div>
+<div class="row"><span class="label">Real-time drift graph (chart.js)</span><span class="tag tag-planned">PLANNED</span></div>
+<div class="row"><span class="label">Integration tests with main UPIN Python system</span><span class="tag tag-planned">PLANNED</span></div>
+</div>
+
+<h2>Files in This Repo</h2>
+
+<div class="card">
+<table>
+<tr><th>File</th><th>Description</th><th>Lines</th></tr>
+<tr><td><a href="index-v2.html">index-v2.html</a></td><td>Full multi-agent demo with learning</td><td>~1466</td></tr>
+<tr><td><a href="index.html">index.html</a></td><td>Simple v1 demo (jam/spoof/resurface)</td><td>~609</td></tr>
+<tr><td><a href="dashboard.html">dashboard.html</a></td><td>This dashboard</td><td>—</td></tr>
+<tr><td>README.md</td><td>Full system documentation</td><td>—</td></tr>
+<tr><td>docs/ARCHITECTURE.md</td><td>System architecture + data flow</td><td>—</td></tr>
+<tr><td>docs/CHANGELOG.md</td><td>Version history</td><td>—</td></tr>
+</table>
+</div>
+
+<div style="text-align:center;margin:20px 0;font-size:11px;color:#333">
+  UPIN Phone Demo — digitalloto/upin-phone-demo
+</div>
+
+</body>
+</html>
