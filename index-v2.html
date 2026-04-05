@@ -148,6 +148,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <div class="mac"><div class="ml">Accel EMA</div><div class="mv" id="maAcc">--</div><div class="ms">m/s² fwd</div></div>
     <div class="mac"><div class="ml">Samples</div><div class="mv g" id="maSamp">0</div><div class="ms">baseline pts</div></div>
   </div>
+  <div class="stitle">Sensor-Position Mapping</div>
+  <div class="ma-cards">
+    <div class="mac"><div class="ml">Accel→Move</div><div class="mv" id="slAM">--</div><div class="ms">learned mult</div></div>
+    <div class="mac"><div class="ml">Gyro→Turn</div><div class="mv" id="slGT">--</div><div class="ms">learned mult</div></div>
+    <div class="mac"><div class="ml">Compass Acc</div><div class="mv" id="slCA">--</div><div class="ms">vs GPS heading</div></div>
+    <div class="mac"><div class="ml">Sensor Logs</div><div class="mv g" id="slCt">0</div><div class="ms">entries</div></div>
+    <div class="mac"><div class="ml">Learn Count</div><div class="mv g" id="slLC">0</div><div class="ms">adjustments</div></div>
+    <div class="mac"><div class="ml">Status</div><div class="mv" id="slSt">--</div><div class="ms">&nbsp;</div></div>
+  </div>
   <div class="stitle">Strategy Layers (Indicator Combos)</div>
   <div class="agents" id="stC"></div>
   <div class="stitle">Drift Curve (m/s blind)</div>
@@ -323,6 +332,107 @@ const MA={
 };
 
 // ═══════════════════════════════════════════════
+// SENSOR LOG — records every sensor reading alongside GPS position
+// Learns: "when accel reads X, phone actually moved Y meters in Z direction"
+// This creates a sensor-to-position mapping that improves over time
+// ═══════════════════════════════════════════════
+const SLOG={
+  // Circular buffer of recent sensor+position pairs (max 200)
+  entries:[],
+  MAX:200,
+  // Learned mappings: sensor pattern → actual movement
+  accelToMove:{x:0,y:0,z:0}, // multiplier: accel * this = actual movement
+  gyroToTurn:0,                // multiplier: gyro * this = actual heading change
+  compassAccuracy:0,           // how reliable is compass vs GPS heading
+  learnCount:0,
+
+  // Record a sensor snapshot paired with actual GPS position change
+  record(accel,gyro,compass,gpsLat,gpsLon,dt){
+    const entry={
+      t:performance.now(),
+      ax:accel.x, ay:accel.y, az:accel.z,
+      gx:gyro.x, gy:gyro.y, gz:gyro.z,
+      compass,
+      lat:gpsLat, lon:gpsLon, dt
+    };
+    this.entries.push(entry);
+    if(this.entries.length>this.MAX)this.entries.shift();
+
+    // Need at least 2 entries to compute movement
+    if(this.entries.length<2)return;
+    const prev=this.entries[this.entries.length-2];
+    const curr=entry;
+    const timeDelta=curr.dt;
+    if(timeDelta<=0)return;
+
+    // Actual movement in meters
+    const dLatM=(curr.lat-prev.lat)*111320;
+    const dLonM=(curr.lon-prev.lon)*111320*Math.cos(curr.lat*Math.PI/180);
+    const actualDist=Math.sqrt(dLatM*dLatM+dLonM*dLonM);
+    const actualHeading=Math.atan2(dLonM,dLatM)*180/Math.PI;
+
+    // What accelerometer predicted
+    const accelMag=Math.sqrt(prev.ax*prev.ax+prev.ay*prev.ay);
+    const predictedDist=accelMag*timeDelta;
+
+    // Learn the multiplier: actual/predicted
+    if(predictedDist>0.01&&actualDist>0.01){
+      const ratio=actualDist/predictedDist;
+      // EMA update the accel-to-movement multiplier
+      const lr=0.05; // learning rate
+      this.accelToMove.x=this.accelToMove.x*(1-lr)+(ratio*prev.ax/accelMag)*lr;
+      this.accelToMove.y=this.accelToMove.y*(1-lr)+(ratio*prev.ay/accelMag)*lr;
+    }
+
+    // Learn gyro-to-turn: how much gyro.z correlates with actual heading change
+    if(prev.compass!==undefined){
+      let hdgChange=actualHeading-prev.compass;
+      if(hdgChange>180)hdgChange-=360;if(hdgChange<-180)hdgChange+=360;
+      if(Math.abs(prev.gz)>0.5){
+        const gyroRatio=hdgChange/(prev.gz*timeDelta);
+        this.gyroToTurn=this.gyroToTurn*0.95+gyroRatio*0.05;
+      }
+    }
+
+    // Learn compass accuracy: how close is compass to GPS-derived heading
+    if(actualDist>0.5){ // only when actually moving
+      let compassErr=Math.abs(actualHeading-prev.compass);
+      if(compassErr>180)compassErr=360-compassErr;
+      this.compassAccuracy=this.compassAccuracy*0.95+(1-compassErr/180)*0.05;
+    }
+
+    this.learnCount++;
+  },
+
+  // Use learned mapping to predict position from sensors (when GPS denied)
+  predictMove(accel,gyro,compass,dt){
+    if(this.learnCount<10)return null;
+    // Apply learned multipliers to sensor data
+    const moveX=accel.x*this.accelToMove.x*dt;
+    const moveY=accel.y*this.accelToMove.y*dt;
+    // Heading: blend compass (weighted by accuracy) with gyro integration
+    const gyroHdgDelta=gyro.z*this.gyroToTurn*dt;
+    return{
+      dLat:(moveX*Math.cos(compass*Math.PI/180))/111320,
+      dLon:(moveY*Math.sin(compass*Math.PI/180))/111320,
+      hdgDelta:gyroHdgDelta,
+      compassWeight:this.compassAccuracy
+    };
+  },
+
+  // Stats for report
+  stats(){
+    return{
+      entries:this.entries.length,
+      learnCount:this.learnCount,
+      accelMult:{x:this.accelToMove.x.toFixed(4),y:this.accelToMove.y.toFixed(4)},
+      gyroMult:this.gyroToTurn.toFixed(4),
+      compassAcc:(this.compassAccuracy*100).toFixed(1)+'%'
+    };
+  }
+};
+
+// ═══════════════════════════════════════════════
 // SENSOR CALIBRATION — learns THIS phone's biases
 // ═══════════════════════════════════════════════
 const CAL={
@@ -411,47 +521,50 @@ const LEARN={
   stratMacroShadows:new Map(),
   results:[],
 
+  tickCount:0,
   tick(nowSec,agents,strategies,gpsSys,sensorPack){
     if(!gpsSys)return;
+    this.tickCount++;
 
-    // MICRO-LEARN: check last tick's 0.5s prediction
-    agents.forEach(a=>{
-      const sh=this.microShadows.get(a.name);
-      if(sh){
-        const err=hav(sh,gpsSys);
-        const prev=this.microErrs.get(a.name)||err;
-        this.microErrs.set(a.name,prev*0.9+err*0.1);
-        a.microTune(err,sh,gpsSys);
+    // MICRO-LEARN: run every 4th tick (every 2s) to avoid freeze
+    if(this.tickCount%4===0){
+      // Check previous micro predictions
+      agents.forEach(a=>{
+        const sh=this.microShadows.get(a.name);
+        if(sh){
+          const err=hav(sh,gpsSys);
+          const prev=this.microErrs.get(a.name)||err;
+          this.microErrs.set(a.name,prev*0.9+err*0.1);
+          a.microTune(err,sh,gpsSys);
+        }
+      });
+      // Only tune 1 strategy per cycle (round-robin) to spread load
+      const stIdx=Math.floor(this.tickCount/4)%strategies.length;
+      const st=strategies[stIdx];
+      const stSh=this.stratMicroShadows.get(st.name);
+      if(stSh){st.microTune(hav(stSh,gpsSys),stSh,gpsSys);}
+      // Tune 1 school per cycle
+      const scIdx=Math.floor(this.tickCount/4)%schools.length;
+      const sc=schools[scIdx];
+      if(sc.pos){
+        const err=hav(sc.pos,gpsSys);
+        if(err>10){sc.params.smaW=Math.min(50,sc.params.smaW+0.1);sc.params.emaA=Math.max(0.01,sc.params.emaA-0.001);}
+        else if(err<3){sc.params.smaW=Math.max(3,sc.params.smaW-0.05);sc.params.emaA=Math.min(0.5,sc.params.emaA+0.0005);}
       }
-    });
-    strategies.forEach(st=>{
-      const sh=this.stratMicroShadows.get(st.name);
-      if(sh){const err=hav(sh,gpsSys);st.microTune(err,sh,gpsSys);}
-    });
-    // Fish schools also micro-learn
-    schools.forEach(s=>{
-      if(s.pos&&gpsSys){
-        const err=hav(s.pos,gpsSys);
-        // Micro-tune school parameters
-        if(err>10){s.params.smaW=Math.min(50,s.params.smaW+0.1);s.params.emaA=Math.max(0.01,s.params.emaA-0.001);}
-        else if(err<3){s.params.smaW=Math.max(3,s.params.smaW-0.05);s.params.emaA=Math.min(0.5,s.params.emaA+0.0005);}
+      this.microCount++;
+      // Make next 2s predictions (lightweight: just use MA.predict)
+      agents.forEach(a=>{
+        if(!a.pos)return;
+        const p=MA.predict({lat:a.pos.lat,lon:a.pos.lon},2);
+        if(p)this.microShadows.set(a.name,p);
+      });
+      if(st.pos){
+        const p=st.predict({lat:st.pos.lat,lon:st.pos.lon},2);
+        if(p)this.stratMicroShadows.set(st.name,p);
       }
-    });
-    this.microCount++;
+    }
 
-    // Make next-tick predictions (0.5s ahead)
-    agents.forEach(a=>{
-      if(!a.pos)return;
-      const p=a.predictForward(0.5,sensorPack);
-      if(p)this.microShadows.set(a.name,p);
-    });
-    strategies.forEach(st=>{
-      if(!st.pos)return;
-      const p=st.predict({lat:st.pos.lat,lon:st.pos.lon},0.5);
-      if(p)this.stratMicroShadows.set(st.name,p);
-    });
-
-    // MACRO-LEARN: 30s predictions for bigger adjustments
+    // MACRO-LEARN: every 30s
     const elapsed=nowSec-this.lastMacro;
     if(elapsed>=this.macroInterval&&this.lastMacro>0){
       this.macroCount++;
@@ -463,26 +576,26 @@ const LEARN={
         const sh=this.stratMacroShadows.get(st.name);
         if(sh){const err=hav(sh,gpsSys);this.results.push({name:st.name,type:'strategy',err});st.tuneFromError(err,sh,gpsSys);}
       });
+      if(this.results.length>200)this.results.splice(0,this.results.length-200);
       if(this.results.length>0){
         const last=this.results.slice(-(agents.length+strategies.length));
         const best=last.reduce((b,r)=>r.err<b.err?r:b,last[0]);
-        log('Learn #'+this.macroCount+': best='+best.name+' '+best.err.toFixed(1)+'m ('+this.microCount+' micro-tunes)','#3498db');
+        log('Learn #'+this.macroCount+': best='+best.name+' '+best.err.toFixed(1)+'m ('+this.microCount+' tunes)','#3498db');
       }
-      // Auto-save profile after every macro validation
       if(PROFILES.currentProfile)PROFILES.save(PROFILES.currentProfile);
     }
     if(elapsed>=this.macroInterval||this.lastMacro===0){
       this.lastMacro=nowSec;
+      // Lightweight macro predictions
       agents.forEach(a=>{
         if(!a.pos)return;
-        const sh=a.predictForward(this.macroInterval,sensorPack);
-        if(sh)this.macroShadows.set(a.name,sh);
+        const p=MA.predict({lat:a.pos.lat,lon:a.pos.lon},this.macroInterval);
+        if(p)this.macroShadows.set(a.name,p);
       });
       strategies.forEach(st=>{
         if(!st.pos)return;
-        let p={lat:st.pos.lat,lon:st.pos.lon};
-        for(let t=0;t<this.macroInterval;t+=0.5){p=st.predict(p,0.5);}
-        this.stratMacroShadows.set(st.name,{lat:p.lat,lon:p.lon});
+        const p=st.predict({lat:st.pos.lat,lon:st.pos.lon},this.macroInterval);
+        if(p)this.stratMacroShadows.set(st.name,p);
       });
     }
   },
@@ -749,11 +862,8 @@ class Agent{
   // Predict 30s forward without GPS for validation
   predictForward(secs,s){
     if(!this.pos)return null;
-    let p={lat:this.pos.lat,lon:this.pos.lon};
-    const fakeAgent=Object.create(Object.getPrototypeOf(this));
-    Object.assign(fakeAgent,this);fakeAgent.pos={...p};
-    for(let t=0;t<secs;t+=0.5){fakeAgent.predict(0.5,s);}
-    return fakeAgent.pos?{lat:fakeAgent.pos.lat,lon:fakeAgent.pos.lon}:p;
+    // Lightweight: just use MA.predict instead of cloning the agent
+    return MA.predict({lat:this.pos.lat,lon:this.pos.lon},secs);
   }
   // Auto-tune: subclasses override to adjust their specific params
   tuneFromError(err,predicted,actual){
@@ -1087,6 +1197,8 @@ function tick(){
       if(lastGP)totalDist+=hav(lastGP,{lat:con.lat,lon:con.lon});
       lastGP={lat:con.lat,lon:con.lon};drPos={lat:con.lat,lon:con.lon};
       MA.addSample(con.lat,con.lon,avgConf,compassHdg,aFwd);
+      // Record sensor→position mapping
+      SLOG.record(accel,gyro,compassHdg,con.lat,con.lon,dt);
       if(doUI){
         $('mFE').textContent=fErr.toFixed(1);$('mFE').className='vl';
         $('mCO').textContent=(avgConf*100).toFixed(0)+'%';
@@ -1104,7 +1216,13 @@ function tick(){
         $('maVel').textContent=MA.count>2?(MA.smaVelLat*111320).toFixed(2):'--';
         $('maAcc').textContent=MA.emaAccelFwd.toFixed(2);
         $('maSamp').textContent=MA.count;
-        renderUI();
+        const sl=SLOG.stats();
+        $('slAM').textContent=sl.accelMult.x;$('slGT').textContent=sl.gyroMult;
+        $('slCA').textContent=sl.compassAcc;$('slCt').textContent=sl.entries;
+        $('slLC').textContent=sl.learnCount;
+        $('slSt').textContent=sl.learnCount>20?'Active':'Learning';
+        $('slSt').className='mv '+(sl.learnCount>20?'g':'y');
+        renderUI();renderStratCards();renderDriftCards();
       }
     }
     // Init strategies at current position
@@ -1122,12 +1240,17 @@ function tick(){
     strategies.forEach(st=>{if(st.pos)st.pos=st.predict(st.pos,dt);});
     const con=consensus();
     const stCon=stratConsensus();
+    // SLOG prediction: use learned sensor-to-position mapping
+    const slogPred=SLOG.predictMove(accel,gyro,compassHdg,dt);
     if(con){
-      // Triple blend: 40% agents, 30% strategies, 30% MA prediction
+      // Quad blend: 30% agents, 25% strategies, 25% MA, 20% SLOG sensor mapping
       const maPred=MA.predict(drPos||con,dt);
-      let lat=con.lat*0.4,lon=con.lon*0.4;
-      if(stCon){lat+=stCon.lat*0.3;lon+=stCon.lon*0.3;}else{lat+=con.lat*0.3;lon+=con.lon*0.3;}
-      if(maPred&&MA.count>10){lat+=maPred.lat*0.3;lon+=maPred.lon*0.3;}else{lat+=con.lat*0.3;lon+=con.lon*0.3;}
+      let lat=con.lat*0.3,lon=con.lon*0.3;
+      if(stCon){lat+=stCon.lat*0.25;lon+=stCon.lon*0.25;}else{lat+=con.lat*0.25;lon+=con.lon*0.25;}
+      if(maPred&&MA.count>10){lat+=maPred.lat*0.25;lon+=maPred.lon*0.25;}else{lat+=con.lat*0.25;lon+=con.lon*0.25;}
+      if(slogPred&&SLOG.learnCount>20&&drPos){
+        lat+=(drPos.lat+slogPred.dLat)*0.2;lon+=(drPos.lon+slogPred.dLon)*0.2;
+      }else{lat+=con.lat*0.2;lon+=con.lon*0.2;}
       drPos={lat,lon};
       // Record drift for each strategy
       if(gpsTrue&&drillStart){
@@ -1363,6 +1486,13 @@ function showReport(dur){
       <div class="rr"><span>Gyro bias</span><span class="rv">x:${CAL.gyroBias.x.toFixed(2)} y:${CAL.gyroBias.y.toFixed(2)}</span></div>
       <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOffset.toFixed(1)}°</span></div>
       <div class="rr"><span>Heading samples</span><span class="rv">${CAL.sampleCount}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:#e74c3c">Sensor-Position Mapping (SLOG)</div>
+      <div class="rr"><span>Sensor log entries</span><span class="rv">${SLOG.entries.length}</span></div>
+      <div class="rr"><span>Learn count</span><span class="rv">${SLOG.learnCount}</span></div>
+      <div class="rr"><span>Accel→Move multiplier</span><span class="rv">x:${SLOG.accelToMove.x.toFixed(4)} y:${SLOG.accelToMove.y.toFixed(4)}</span></div>
+      <div class="rr"><span>Gyro→Turn multiplier</span><span class="rv">${SLOG.gyroToTurn.toFixed(4)}</span></div>
+      <div class="rr"><span>Compass accuracy</span><span class="rv">${(SLOG.compassAccuracy*100).toFixed(1)}%</span></div>
     </div>
     <div class="rc"><div class="rct" style="color:#e67e22">Fish School Parameters (Grid Search)</div>
       ${schools.map(s=>`<div class="rr"><span>${s.name} (sma:${s.params.smaW} ema:${s.params.emaA.toFixed(3)} blend:${s.params.blend.toFixed(2)})</span><span class="rv${s.score>70?' ok':s.score>40?' w':' bad'}">${s.score}/100</span></div>`).join('')}
