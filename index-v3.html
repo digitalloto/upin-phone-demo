@@ -745,16 +745,33 @@ function tick(){
   }
 
   if(phase==='jammed'||phase==='spoofed'){
-    // USE THE BEST FORMULA to predict position
     if(drPos){
       const bi=bestFormulaIdx();
       drPos=FORMULAS[bi].predict(drPos,dt)||drPos;
-      // Also let all other formulas predict (for comparison in report)
-      FORMULAS.forEach((f,i)=>{if(i!==bi&&f.pos)f.pos=f.predict(f.pos,dt)||f.pos;});
+      // ALL formulas predict independently — track their paths
+      FORMULAS.forEach((f,i)=>{
+        if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;
+        if(!f.drillTrail)f.drillTrail=[];
+        if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);
+        if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();
+        // Track per-formula drift from GPS truth during denial
+        if(f.pos&&gpsTrue)f.drillDrift=hav(f.pos,gpsTrue);
+      });
       const ll=[drPos.lat,drPos.lon];
       drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
       if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
       drawPos(ll,20,'#FFB800');
+      // Draw top 5 formula trails on map (every 5th tick to avoid lag)
+      if(uiFrame%5===0){
+        const ranked=[...FORMULAS].map((f,i)=>({i,err:f.drillDrift||f.errAvg||999})).sort((a,b)=>a.err-b.err);
+        const top5Colors=['#00E5FF','#00FF88','#FFB800','#3B82F6','#A855F7'];
+        for(let r=0;r<5&&r<ranked.length;r++){
+          const f=FORMULAS[ranked[r].i];
+          if(!f.drillTrail||f.drillTrail.length<2)continue;
+          if(!f.mapLine)f.mapLine=L.polyline(f.drillTrail,{color:top5Colors[r],weight:2,opacity:.5,dashArray:'4,4'}).addTo(map);
+          else f.mapLine.setLatLngs(f.drillTrail);
+        }
+      }
     }
     // Ground truth keeps recording
     if(gpsTrue){gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();}
@@ -889,7 +906,9 @@ function jamGPS(){
   $('alertJam').style.display='block';$('alertSpoof').style.display='none';
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jamT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
-  log('GPS JAMMED — predicting from '+DATA.count()+' sensor samples','var(--amber)');
+  // Init all formula positions and clear trails for this drill
+  FORMULAS.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  log('GPS JAMMED — 20 formulas predicting from '+DATA.count()+' samples','var(--amber)');
 }
 function spoofGPS(){
   if(phase!=='recording')return;
@@ -899,7 +918,8 @@ function spoofGPS(){
   $('alertSpoof').style.display='block';$('alertJam').style.display='none';
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('spoofT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
-  log('GPS SPOOFED — fake signal rejected, using sensor map','var(--red)');
+  FORMULAS.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  log('GPS SPOOFED — 20 formulas predicting from '+DATA.count()+' samples','var(--red)');
 }
 function resurface(){
   if(phase!=='jammed'&&phase!=='spoofed')return;
@@ -909,7 +929,11 @@ function resurface(){
   const distBlind=drills.length>0||lastPos?hav(lastPos||drPos,gpsTrue||drPos):0;
   const dps=bs>0?drift/bs:0;
   let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
-  drills.push({blindSec:bs,driftM:drift,distBlind,type:phase,grade,samples:DATA.count(),predAcc:CAL.predictionErr});
+  // Rank all formulas by drift for this drill
+  const formulaResults=FORMULAS.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999,errAvg:f.errAvg})).sort((a,b)=>a.drift-b.drift);
+  drills.push({blindSec:bs,driftM:drift,distBlind,type:phase,grade,samples:DATA.count(),predAcc:CAL.predictionErr,formulaResults});
+  // Clean up formula map lines
+  FORMULAS.forEach(f=>{if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
   // Purple marker
   if(gpsTrue){
     L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1})
@@ -939,42 +963,111 @@ function endTest(){
 function showReport(dur){
   const avgD=drills.length?drills.reduce((s,d)=>s+d.driftM,0)/drills.length:0;
   const maxD=drills.length?Math.max(...drills.map(d=>d.driftM)):0;
-  let dH=drills.map((d,i)=>`<div class="rr"><span>Drill ${i+1} (${fmt(d.blindSec)} ${d.type})</span><span class="rv" style="color:${d.driftM<20?'var(--green)':d.driftM<50?'var(--amber)':'var(--red)'}">${d.driftM.toFixed(1)}m [${d.grade}]</span></div>`).join('');
+  const bi=bestFormulaIdx();
+
+  // Top 5 formulas overall (by calibration error)
+  const ranked=[...FORMULAS].map((f,i)=>({name:f.name,i,errAvg:f.errAvg,errHistory:f.errHistory})).sort((a,b)=>a.errAvg-b.errAvg);
+  const top5=ranked.slice(0,5);
+
+  // Movement data summary from sensor samples
+  const N=DATA.samples.length;
+  let avgSpd=0,maxSpd=0,avgAccelMag=0,maxAccelMag=0,avgGyroZ=0,maxGyroZ=0;
+  if(N>0){
+    DATA.samples.forEach(s=>{
+      avgSpd+=s.speed;if(s.speed>maxSpd)maxSpd=s.speed;
+      const am=Math.sqrt(s.ax*s.ax+s.ay*s.ay);avgAccelMag+=am;if(am>maxAccelMag)maxAccelMag=am;
+      avgGyroZ+=Math.abs(s.gz);if(Math.abs(s.gz)>maxGyroZ)maxGyroZ=Math.abs(s.gz);
+    });
+    avgSpd/=N;avgAccelMag/=N;avgGyroZ/=N;
+  }
+
+  // Per-drill detailed breakdown with formula ranking
+  let drillsHTML=drills.map((d,di)=>{
+    let fRows='';
+    if(d.formulaResults){
+      const top=d.formulaResults.slice(0,5);
+      fRows=top.map((f,ri)=>{
+        const medal=ri===0?'◈ ':ri===1?'◇ ':ri===2?'○ ':'  ';
+        const c=f.drift<15?'var(--green)':f.drift<40?'var(--amber)':'var(--red)';
+        return`<div class="rr"><span>${medal}${f.name}</span><span class="rv" style="color:${c}">${f.drift<999?f.drift.toFixed(1)+'m':'--'}</span></div>`;
+      }).join('');
+    }
+    return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:8px;margin:6px 0">
+      <div style="font-family:'Orbitron',sans-serif;font-size:9px;font-weight:700;color:var(--amber);letter-spacing:2px;margin-bottom:4px">DRILL ${di+1} — ${fmt(d.blindSec)} ${d.type.toUpperCase()}</div>
+      <div class="rr"><span>Consensus drift</span><span class="rv" style="color:${d.driftM<20?'var(--green)':d.driftM<50?'var(--amber)':'var(--red)'}">${d.driftM.toFixed(1)}m [${d.grade}]</span></div>
+      <div class="rr"><span>Distance blind</span><span class="rv">${Math.round(d.distBlind)}m</span></div>
+      <div class="rr"><span>Baseline samples</span><span class="rv">${d.samples}</span></div>
+      ${fRows?'<div style="font-size:8px;color:var(--td);letter-spacing:1px;margin-top:4px">TOP 5 FORMULAS THIS DRILL:</div>'+fRows:''}
+    </div>`;
+  }).join('');
+
   $('rptBody').innerHTML=`
     <div class="rc"><div class="rct" style="color:var(--cyan)">TEST SUMMARY</div>
       <div class="rr"><span>Duration</span><span class="rv">${fmt(dur)}</span></div>
-      <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
+      <div class="rr"><span>Total distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
       <div class="rr"><span>Sensor samples</span><span class="rv">${DATA.count()}</span></div>
-      <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
+      <div class="rr"><span>GPS denial drills</span><span class="rv">${drills.length}</span></div>
+      <div class="rr"><span>Active formulas</span><span class="rv">20</span></div>
     </div>
-    <div class="rc"><div class="rct" style="color:var(--cyan)">FORMULA COMPETITION</div>
-      ${FORMULAS.map((f,i)=>`<div class="rr"><span>${f.name}${i===bestFormulaIdx()?' ◈':''}</span><span class="rv" style="color:${f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)'}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`).join('')}
+
+    <div class="rc"><div class="rct" style="color:var(--green)">TOP 5 FORMULAS (Calibration Accuracy)</div>
+      ${top5.map((f,i)=>{
+        const medal=i===0?'1st ◈':i===1?'2nd ◇':i===2?'3rd ○':i===3?'4th':'5th';
+        const c=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)';
+        return`<div class="rr"><span>${medal} — ${f.name}</span><span class="rv" style="color:${c}">${f.errAvg<999?f.errAvg.toFixed(1)+'m avg':'--'}</span></div>`;
+      }).join('')}
     </div>
-    <div class="rc"><div class="rct" style="color:var(--green)">CALIBRATION LEARNED</div>
+
+    <div class="rc"><div class="rct" style="color:var(--cyan)">ALL 20 FORMULAS</div>
+      ${ranked.map((f,i)=>{
+        const c=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':f.errAvg<999?'var(--red)':'var(--td)';
+        return`<div class="rr"><span>#${i+1} ${f.name}</span><span class="rv" style="color:${c}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`;
+      }).join('')}
+    </div>
+
+    <div class="rc"><div class="rct" style="color:var(--amber)">MOVEMENT DATA</div>
+      <div class="rr"><span>Avg speed</span><span class="rv">${(avgSpd*3.6).toFixed(1)} km/h</span></div>
+      <div class="rr"><span>Max speed</span><span class="rv">${(maxSpd*3.6).toFixed(1)} km/h</span></div>
+      <div class="rr"><span>Avg accel magnitude</span><span class="rv">${avgAccelMag.toFixed(2)} m/s²</span></div>
+      <div class="rr"><span>Max accel magnitude</span><span class="rv">${maxAccelMag.toFixed(2)} m/s²</span></div>
+      <div class="rr"><span>Avg gyro turn rate</span><span class="rv">${avgGyroZ.toFixed(1)} °/s</span></div>
+      <div class="rr"><span>Max gyro turn rate</span><span class="rv">${maxGyroZ.toFixed(1)} °/s</span></div>
+    </div>
+
+    <div class="rc"><div class="rct" style="color:var(--green)">SENSOR CALIBRATION</div>
       <div class="rr"><span>Accel→Speed scale</span><span class="rv">${CAL.accelScale.toFixed(4)}</span></div>
       <div class="rr"><span>Gyro→Turn scale</span><span class="rv">${CAL.gyroScale.toFixed(4)}</span></div>
       <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOff.toFixed(1)}°</span></div>
       <div class="rr"><span>Speed multiplier</span><span class="rv">${CAL.speedMult.toFixed(4)}</span></div>
-      <div class="rr"><span>Best formula</span><span class="rv" style="color:var(--green)">${FORMULAS[bestFormulaIdx()].name} (${FORMULAS[bestFormulaIdx()].errAvg.toFixed(1)}m)</span></div>
       <div class="rr"><span>Calibration rounds</span><span class="rv">${CAL.calibCount}</span></div>
     </div>
-    <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED RESULTS</div>
-      <div class="rr"><span>Avg drift</span><span class="rv" style="color:${avgD<20?'var(--green)':avgD<50?'var(--amber)':'var(--red)'}">${avgD.toFixed(1)}m</span></div>
-      <div class="rr"><span>Max drift</span><span class="rv" style="color:var(--red)">${maxD.toFixed(1)}m</span></div>
-      ${dH||'<div class="rr"><span>No drills</span></div>'}
-    </div>
-    <div class="rc"><div class="rct" style="color:var(--cyan)">SENSOR BIAS</div>
+
+    <div class="rc"><div class="rct" style="color:var(--cyan)">SENSOR BIAS (Device-Specific)</div>
       <div class="rr"><span>Accel bias</span><span class="rv">x:${CAL.accelBias.x.toFixed(3)} y:${CAL.accelBias.y.toFixed(3)} z:${CAL.accelBias.z.toFixed(3)}</span></div>
       <div class="rr"><span>Gyro bias</span><span class="rv">x:${CAL.gyroBias.x.toFixed(2)} y:${CAL.gyroBias.y.toFixed(2)} z:${CAL.gyroBias.z.toFixed(2)}</span></div>
+    </div>
+
+    <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED RESULTS</div>
+      <div class="rr"><span>Avg drift (consensus)</span><span class="rv" style="color:${avgD<20?'var(--green)':avgD<50?'var(--amber)':'var(--red)'}">${avgD.toFixed(1)}m</span></div>
+      <div class="rr"><span>Max drift</span><span class="rv" style="color:var(--red)">${maxD.toFixed(1)}m</span></div>
+      ${drillsHTML||'<div class="rr"><span>No drills performed</span></div>'}
     </div>`;
   $('rpt').style.display='block';
 }
 function exportCSV(){
-  let c='Time,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,Lat,Lon,Speed,Heading\n';
-  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)}\n`;});
-  c+='\nCalibration\nAccelScale,'+CAL.accelScale+'\nGyroScale,'+CAL.gyroScale+'\nCompassOff,'+CAL.compassOff+'\nSpeedMult,'+CAL.speedMult+'\nPredictionErr,'+CAL.predictionErr+'\n';
-  c+='\nDrills\nDrill,Type,Blind(s),Drift(m),Grade,Samples\n';
-  drills.forEach((d,i)=>{c+=`${i+1},${d.type},${d.blindSec.toFixed(1)},${d.driftM.toFixed(1)},${d.grade},${d.samples}\n`;});
+  let c='Time,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,MagB,MagG,Lat,Lon,Speed,Heading\n';
+  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.compass.toFixed(1)},${s.magB||0},${s.magG||0},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)}\n`;});
+  c+='\nFormula Rankings\nRank,Formula,AvgError(m)\n';
+  [...FORMULAS].map((f,i)=>({name:f.name,err:f.errAvg})).sort((a,b)=>a.err-b.err).forEach((f,i)=>{c+=`${i+1},${f.name},${f.err<999?f.err.toFixed(1):'--'}\n`;});
+  c+='\nCalibration\nAccelScale,'+CAL.accelScale.toFixed(4)+'\nGyroScale,'+CAL.gyroScale.toFixed(4)+'\nCompassOff,'+CAL.compassOff.toFixed(1)+'\nSpeedMult,'+CAL.speedMult.toFixed(4)+'\n';
+  c+='\nDrills\nDrill,Type,Blind(s),Drift(m),Grade,Samples,Top1,Top1Err,Top2,Top2Err,Top3,Top3Err\n';
+  drills.forEach((d,i)=>{
+    const top=d.formulaResults?d.formulaResults.slice(0,3):[];
+    c+=`${i+1},${d.type},${d.blindSec.toFixed(1)},${d.driftM.toFixed(1)},${d.grade},${d.samples}`;
+    top.forEach(f=>{c+=`,${f.name},${f.drift<999?f.drift.toFixed(1):'--'}`;});
+    c+='\n';
+  });
+  c+='\nSensor Bias\nAccelBiasX,'+CAL.accelBias.x.toFixed(4)+'\nAccelBiasY,'+CAL.accelBias.y.toFixed(4)+'\nGyroBiasX,'+CAL.gyroBias.x.toFixed(3)+'\nGyroBiasY,'+CAL.gyroBias.y.toFixed(3)+'\nGyroBiasZ,'+CAL.gyroBias.z.toFixed(3)+'\n';
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v3-data.csv';a.click();
 }
 
