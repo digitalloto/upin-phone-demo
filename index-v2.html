@@ -315,18 +315,11 @@ const MA={
   // Predict next position when GPS denied using baseline averages
   predict(currentPos,dt){
     if(this.count<5||!currentPos)return currentPos;
-    // Use velocity SMA + EMA heading + EMA accel to project forward
-    const hdgRad=this.emaHeading*Math.PI/180;
-    // Blend: 60% velocity SMA continuation, 40% heading-based projection
-    const velSpeed=Math.sqrt((this.smaVelLat*111320)**2+(this.smaVelLon*111320*Math.cos(currentPos.lat*Math.PI/180))**2);
-    const effSpeed=Math.min(velSpeed+this.emaAccelFwd*dt,30); // cap at 30 m/s
-    const dLat_vel=this.smaVelLat*dt;
-    const dLon_vel=this.smaVelLon*dt;
-    const dLat_hdg=(effSpeed*Math.cos(hdgRad)*dt)/111320;
-    const dLon_hdg=(effSpeed*Math.sin(hdgRad)*dt)/(111320*Math.cos(currentPos.lat*Math.PI/180));
+    // Pure velocity continuation — keep going at the speed/direction we were going
+    // This is the most reliable prediction because velocity SMA is averaged from GPS
     return{
-      lat:currentPos.lat+dLat_vel*0.6+dLat_hdg*0.4,
-      lon:currentPos.lon+dLon_vel*0.6+dLon_hdg*0.4
+      lat:currentPos.lat+this.smaVelLat*dt,
+      lon:currentPos.lon+this.smaVelLon*dt
     };
   }
 };
@@ -816,8 +809,12 @@ const strategies=[new TrendStrategy(),new SmoothStrategy(),new MACDStrategy(),ne
 
 // Update strategy weights after drill based on accuracy
 function updateStratWeights(){
-  const tot=strategies.reduce((s,st)=>s+Math.max(0.01,1/(1+st.totalErr)),0);
-  strategies.forEach(st=>{st.weight=Math.max(0.01,1/(1+st.totalErr))/tot;});
+  const scores=strategies.map(st=>{
+    const avg=st.drillCount>0?st.totalErr/st.drillCount:1000;
+    return Math.exp(-avg/10);
+  });
+  const tot=scores.reduce((s,v)=>s+v,0)||1;
+  strategies.forEach((st,i)=>{st.weight=Math.max(0.02,scores[i]/tot);});
 }
 
 // Weighted strategy consensus position
@@ -853,17 +850,13 @@ class Agent{
 }
 
 class KalmanAgent extends Agent{
-  constructor(){super('Kalman','#3498db');this.vLat=0;this.vLon=0;this.P=0.001;this.maBlend=0.85;this.friction=0.97;}
+  constructor(){super('Kalman','#3498db');this.vLat=0;this.vLon=0;this.P=0.001;this.maBlend=0.95;this.friction=0.999;}
   predict(dt,s){
     if(!this.pos)return;
-    const cal=CAL.correct(s.accel,s.gyro,s.compassHdg);
     if(MA.count>5){
+      // Almost pure MA velocity — no decay, just keep going
       this.vLat=MA.smaVelLat*this.maBlend+this.vLat*(1-this.maBlend);
       this.vLon=MA.smaVelLon*this.maBlend+this.vLon*(1-this.maBlend);
-    }else{
-      const h=cal.compass*Math.PI/180;
-      this.vLat+=(cal.accel.x*Math.cos(h)*0.08*dt)/111320;
-      this.vLon+=(cal.accel.x*Math.sin(h)*0.08*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180));
     }
     this.pos.lat+=this.vLat*dt;this.pos.lon+=this.vLon*dt;
     this.vLat*=this.friction;this.vLon*=this.friction;
@@ -925,18 +918,17 @@ class ParticleAgent extends Agent{
 }
 
 class BayesianAgent extends Agent{
-  constructor(){super('Bayesian','#1abc9c');this.priorW=0.85;} // how much to trust MA
+  constructor(){super('Bayesian','#1abc9c');this.priorW=0.95;}
   predict(dt,s){
     if(!this.pos)return;
     const pred=MA.predict(this.pos,dt);
     if(pred&&MA.count>5){
-      this.pos.lat=pred.lat*this.priorW+this.pos.lat*(1-this.priorW);
-      this.pos.lon=pred.lon*this.priorW+this.pos.lon*(1-this.priorW);
+      // Nearly pure MA prediction — it's the most reliable source
+      this.pos={lat:pred.lat,lon:pred.lon};
     }else{
-      const cal=CAL.correct(s.accel,s.gyro,s.compassHdg);
-      const h=cal.compass*Math.PI/180,spd=s.stepSpeed||0.3;
-      this.pos.lat+=(spd*Math.cos(h)*dt)/111320;
-      this.pos.lon+=(spd*Math.sin(h)*dt)/(111320*Math.cos(this.pos.lat*Math.PI/180));
+      // Fallback: use MA velocity directly
+      this.pos.lat+=MA.smaVelLat*dt;
+      this.pos.lon+=MA.smaVelLon*dt;
     }
     this.conf=Math.max(0.1,this.conf-0.002*dt);
   }
@@ -956,15 +948,8 @@ class StepNavAgent extends Agent{
   constructor(){super('StepNav','#e74c3c');this.lastSteps=0;this.strideMult=1.0;}
   predict(dt,s){
     if(!this.pos)return;
-    const ns=s.steps-this.lastSteps;this.lastSteps=s.steps;
-    if(ns>0){
-      const cal=CAL.correct(s.accel,s.gyro,s.compassHdg);
-      const hdg=(MA.count>5?MA.emaHeading+CAL.compassOffset:cal.compass)*Math.PI/180;
-      const d=ns*strideLen*this.strideMult;
-      this.pos.lat+=d*Math.cos(hdg)/111320;
-      this.pos.lon+=d*Math.sin(hdg)/(111320*Math.cos(this.pos.lat*Math.PI/180));
-    }else if(MA.count>5){
-      // No steps? Use MA velocity to keep moving
+    // Always use MA velocity as base (most reliable)
+    if(MA.count>5){
       this.pos.lat+=MA.smaVelLat*dt;
       this.pos.lon+=MA.smaVelLon*dt;
     }
@@ -987,7 +972,7 @@ class StepNavAgent extends Agent{
 }
 
 class MomentumAgent extends Agent{
-  constructor(){super('Momentum','#f39c12');this.vel={lat:0,lon:0};this.maBlend=0.7;this.friction=0.96;}
+  constructor(){super('Momentum','#f39c12');this.vel={lat:0,lon:0};this.maBlend=0.9;this.friction=0.999;}
   predict(dt,s){
     if(!this.pos)return;
     if(MA.count>5){
@@ -1077,8 +1062,14 @@ function consensus(){
   return tw>0?{lat:tLa/tw,lon:tLo/tw}:null;
 }
 function updateWeights(){
-  const tot=agents.reduce((s,a)=>s+Math.max(0.01,1/(1+a.totalErr)),0);
-  agents.forEach(a=>{a.weight=Math.max(0.01,1/(1+a.totalErr))/tot;});
+  // Use exponential weighting: exp(-avgErr/10) so small differences matter
+  // Agent with 20m avg gets exp(-2)=0.135, agent with 100m gets exp(-10)=0.00005
+  const scores=agents.map(a=>{
+    const avg=a.drillCount>0?a.totalErr/a.drillCount:1000;
+    return Math.exp(-avg/10);
+  });
+  const tot=scores.reduce((s,v)=>s+v,0)||1;
+  agents.forEach((a,i)=>{a.weight=Math.max(0.02,scores[i]/tot);});
 }
 
 // ═══════════════════════════════════════════════
@@ -1213,29 +1204,24 @@ function tick(){
   }
 
   if(phase==='jammed'||phase==='spoofed'){
-    // Each agent predicts using MA baseline
+    // PRIMARY: use MA velocity continuation (most reliable)
+    // The MA knows our speed and heading from GPS data — just keep going
+    if(drPos&&MA.count>5){
+      // Pure velocity continuation: drPos += velocity * dt
+      drPos.lat+=MA.smaVelLat*dt;
+      drPos.lon+=MA.smaVelLon*dt;
+    }
+    // Let agents and strategies also predict (for scoring/comparison only)
     agents.forEach(a=>a.predict(dt,sensorPack));
-    // Each strategy predicts independently
     strategies.forEach(st=>{if(st.pos)st.pos=st.predict(st.pos,dt);});
-    const con=consensus();
-    const stCon=stratConsensus();
-    // SLOG prediction: use learned sensor-to-position mapping
-    const slogPred=SLOG.predictMove(accel,gyro,compassHdg,dt);
-    if(con){
-      // Quad blend: 30% agents, 25% strategies, 25% MA, 20% SLOG sensor mapping
-      const maPred=MA.predict(drPos||con,dt);
-      let lat=con.lat*0.3,lon=con.lon*0.3;
-      if(stCon){lat+=stCon.lat*0.25;lon+=stCon.lon*0.25;}else{lat+=con.lat*0.25;lon+=con.lon*0.25;}
-      if(maPred&&MA.count>10){lat+=maPred.lat*0.25;lon+=maPred.lon*0.25;}else{lat+=con.lat*0.25;lon+=con.lon*0.25;}
-      if(slogPred&&SLOG.learnCount>20&&drPos){
-        lat+=(drPos.lat+slogPred.dLat)*0.2;lon+=(drPos.lon+slogPred.dLon)*0.2;
-      }else{lat+=con.lat*0.2;lon+=con.lon*0.2;}
-      drPos={lat,lon};
-      // Record drift for each strategy
-      if(gpsTrue&&drillStart){
-        const bs=(now-drillStart)/1000;
-        strategies.forEach(st=>{if(st.pos)st.recordDrift(bs,hav(st.pos,gpsTrue));});
-      }
+    // Schools predict with their own params
+    const aPos=agents.map(a=>a.pos?{...a.pos}:null);
+    schools.forEach(s=>s.update(aPos));
+    // Record drift for each strategy
+    if(gpsTrue&&drillStart){
+      const bs=(now-drillStart)/1000;
+      strategies.forEach(st=>{if(st.pos)st.recordDrift(bs,hav(st.pos,gpsTrue));});
+    }
       const ll=[drPos.lat,drPos.lon];
       drTrail.push(ll);capArr(drTrail);
       drLine=drawTrail(drTrail,drLine,'#f39c12',true);
