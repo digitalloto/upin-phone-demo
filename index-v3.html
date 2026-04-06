@@ -119,16 +119,27 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
     <div class="sbar"><div class="sn">Mag Beta</div><div class="sv" id="sMb">--</div><div class="sb"><div class="sf" id="sMbB" style="width:50%;background:var(--green)"></div></div></div>
     <div class="sbar"><div class="sn">Mag Gamma</div><div class="sv" id="sMg">--</div><div class="sb"><div class="sf" id="sMgB" style="width:50%;background:var(--green)"></div></div></div>
   </div>
-  <!-- Calibration mapping -->
-  <div class="sh"><div class="sh-bar" style="background:var(--green)"></div><div class="sh-text" style="color:var(--green)">Sensor-Position Mapping</div></div>
-  <table class="ctable" id="calTable">
-    <tr><th>Mapping</th><th>Learned Value</th></tr>
-    <tr><td>Accel→Distance (m/s²→m)</td><td id="cAD">--</td></tr>
-    <tr><td>Gyro→Turn (°/s→°)</td><td id="cGT">--</td></tr>
-    <tr><td>Compass Accuracy</td><td id="cCA">--</td></tr>
+  <!-- Formula Competition -->
+  <div class="sh"><div class="sh-bar" style="background:var(--cyan)"></div><div class="sh-text" style="color:var(--cyan)">Formula Competition (all vs GPS)</div></div>
+  <table class="ctable" id="fTable">
+    <tr><th>Formula</th><th>Error</th><th>Status</th></tr>
+    <tr id="f0"><td><span class="sdot off" id="fd0"></span>Velocity</td><td id="fe0">--</td><td id="fs0">--</td></tr>
+    <tr id="f1"><td><span class="sdot off" id="fd1"></span>Accel+Compass</td><td id="fe1">--</td><td id="fs1">--</td></tr>
+    <tr id="f2"><td><span class="sdot off" id="fd2"></span>Gyro Heading</td><td id="fe2">--</td><td id="fs2">--</td></tr>
+    <tr id="f3"><td><span class="sdot off" id="fd3"></span>Step+Compass</td><td id="fe3">--</td><td id="fs3">--</td></tr>
+    <tr id="f4"><td><span class="sdot off" id="fd4"></span>Weighted Blend</td><td id="fe4">--</td><td id="fs4">--</td></tr>
+    <tr id="f5"><td><span class="sdot off" id="fd5"></span>Adaptive Best</td><td id="fe5">--</td><td id="fs5">--</td></tr>
+  </table>
+  <!-- Calibration values -->
+  <div class="sh"><div class="sh-bar" style="background:var(--green)"></div><div class="sh-text" style="color:var(--green)">Learned Calibration</div></div>
+  <table class="ctable">
+    <tr><th>Parameter</th><th>Value</th></tr>
+    <tr><td>Accel Scale</td><td id="cAD">--</td></tr>
+    <tr><td>Gyro Scale</td><td id="cGT">--</td></tr>
+    <tr><td>Compass Offset</td><td id="cHO">--</td></tr>
     <tr><td>Speed Multiplier</td><td id="cSM">--</td></tr>
-    <tr><td>Heading Offset</td><td id="cHO">--</td></tr>
-    <tr><td>Prediction Accuracy</td><td id="cPA">--</td></tr>
+    <tr><td>Best Formula</td><td id="cPA">--</td></tr>
+    <tr><td>Best Error</td><td id="cCA">--</td></tr>
   </table>
   <!-- Buttons: phase 1 -->
   <div id="b1" class="btns">
@@ -388,6 +399,117 @@ const CAL={
 };
 
 // ═══════════════════════════════════════
+// 6 PREDICTION FORMULAS — all run in parallel against GPS
+// Each learns its own parameters, scored every tick
+// ═══════════════════════════════════════
+const FORMULAS=[
+  // F0: Pure velocity continuation — keep going at last known speed/direction
+  {name:'Velocity',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--green)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    const r=DATA.samples.slice(-5);
+    let vLat=0,vLon=0;
+    for(let i=1;i<r.length;i++){const d=r[i].dt||1;vLat+=(r[i].lat-r[i-1].lat)/d;vLon+=(r[i].lon-r[i-1].lon)/d;}
+    vLat/=Math.max(1,r.length-1);vLon/=Math.max(1,r.length-1);
+    return{lat:pos.lat+vLat*dt,lon:pos.lon+vLon*dt};
+  }},
+
+  // F1: Accel magnitude + compass heading — sensor-derived speed and direction
+  {name:'Accel+Compass',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--cyan)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    const aMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
+    const spd=aMag*CAL.accelScale*CAL.speedMult;
+    const hdg=(compass+CAL.compassOff)*Math.PI/180;
+    return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+  }},
+
+  // F2: Gyro-integrated heading + velocity speed — uses gyro for turns
+  {name:'Gyro Heading',pos:null,err:999,errAvg:999,errHistory:[],hdg:0,color:'var(--amber)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    this.hdg+=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;
+    const r=DATA.samples.slice(-5);
+    let spd=0;r.forEach(s=>spd+=s.speed);spd/=r.length;
+    const h=this.hdg*Math.PI/180;
+    return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+  }},
+
+  // F3: Step counting + compass — pedometer-based distance
+  {name:'Step+Compass',pos:null,err:999,errAvg:999,errHistory:[],lastSteps:0,stride:0.72,color:'var(--blue)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    const ns=stepCount-this.lastSteps;this.lastSteps=stepCount;
+    const hdg=(compass+CAL.compassOff)*Math.PI/180;
+    if(ns>0){
+      const d=ns*this.stride;
+      return{lat:pos.lat+(d*Math.cos(hdg))/111320,lon:pos.lon+(d*Math.sin(hdg))/(111320*Math.cos(pos.lat*Math.PI/180))};
+    }
+    // No steps: fall back to velocity
+    if(DATA.samples.length<3)return pos;
+    const r=DATA.samples.slice(-3);
+    let vLat=0,vLon=0;
+    for(let i=1;i<r.length;i++){vLat+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLon+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
+    vLat/=(r.length-1);vLon/=(r.length-1);
+    return{lat:pos.lat+vLat*dt,lon:pos.lon+vLon*dt};
+  }},
+
+  // F4: Weighted blend — combines velocity + accel + compass, weights learned from errors
+  {name:'Weighted Blend',pos:null,err:999,errAvg:999,errHistory:[],w:[0.5,0.3,0.2],color:'var(--purple)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    const p0=FORMULAS[0].predict({...pos},dt);
+    const p1=FORMULAS[1].predict({...pos},dt);
+    const p2=FORMULAS[2].predict({...pos},dt);
+    if(!p0||!p1||!p2)return pos;
+    return{lat:p0.lat*this.w[0]+p1.lat*this.w[1]+p2.lat*this.w[2],
+           lon:p0.lon*this.w[0]+p1.lon*this.w[1]+p2.lon*this.w[2]};
+  }},
+
+  // F5: Adaptive — always copies the formula with lowest error
+  {name:'Adaptive Best',pos:null,err:999,errAvg:999,errHistory:[],bestIdx:0,color:'var(--green)',
+   predict(pos,dt){
+    // Use whichever of F0-F4 has the lowest running average error
+    let minErr=Infinity;
+    for(let i=0;i<5;i++){if(FORMULAS[i].errAvg<minErr){minErr=FORMULAS[i].errAvg;this.bestIdx=i;}}
+    return FORMULAS[this.bestIdx].predict(pos?{...pos}:null,dt);
+  }}
+];
+
+// Score all formulas against GPS — called every tick during recording
+function scoreFormulas(gpsSys,dt){
+  if(!gpsSys||DATA.samples.length<5)return;
+  FORMULAS.forEach((f,i)=>{
+    if(!f.pos){f.pos={lat:gpsSys.lat,lon:gpsSys.lon};return;}
+    // Predict one step from last position
+    const pred=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
+    if(pred){
+      const err=hav(pred,gpsSys);
+      f.err=err;
+      f.errHistory.push(err);
+      if(f.errHistory.length>30)f.errHistory.shift();
+      f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
+    }
+    // Reset position to GPS (so next tick predicts from truth)
+    f.pos={lat:gpsSys.lat,lon:gpsSys.lon};
+  });
+
+  // Update weighted blend weights based on F0-F2 errors
+  const f4=FORMULAS[4];
+  const errs=[FORMULAS[0].errAvg,FORMULAS[1].errAvg,FORMULAS[2].errAvg];
+  const invErrs=errs.map(e=>1/Math.max(0.1,e));
+  const total=invErrs.reduce((s,v)=>s+v,0);
+  if(total>0)f4.w=invErrs.map(v=>v/total);
+}
+
+// Get the best formula index
+function bestFormulaIdx(){
+  let best=0,bestErr=Infinity;
+  FORMULAS.forEach((f,i)=>{if(f.errAvg<bestErr){bestErr=f.errAvg;best=i;}});
+  return best;
+}
+
+// ═══════════════════════════════════════
 // SENSORS + GPS
 // ═══════════════════════════════════════
 function initMap(){
@@ -446,11 +568,10 @@ function tick(){
   const doUI=(uiFrame%3===0);
 
   if(phase==='recording'&&gpsSys){
-    // Record sensor data mapped to GPS position
     DATA.record(accel,gyro,compass,magB,magG,gpsSys,dt);
-    // Every 10 samples, re-learn calibration
     if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
-    // Update map
+    // Score all 6 formulas against GPS every tick
+    scoreFormulas(gpsSys,dt);
     const ll=[gpsSys.lat,gpsSys.lon];
     gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
     if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
@@ -458,12 +579,17 @@ function tick(){
     if(lastPos)totalDist+=hav(lastPos,gpsSys);
     lastPos={lat:gpsSys.lat,lon:gpsSys.lon};
     drPos={lat:gpsSys.lat,lon:gpsSys.lon};
+    // Init all formula positions to current GPS
+    FORMULAS.forEach(f=>{if(!f.pos)f.pos={lat:gpsSys.lat,lon:gpsSys.lon};});
   }
 
   if(phase==='jammed'||phase==='spoofed'){
-    // PREDICT using calibrated sensor mapping
+    // USE THE BEST FORMULA to predict position
     if(drPos){
-      drPos=CAL.predict(drPos,accel,gyro,compass,dt);
+      const bi=bestFormulaIdx();
+      drPos=FORMULAS[bi].predict(drPos,dt)||drPos;
+      // Also let all other formulas predict (for comparison in report)
+      FORMULAS.forEach((f,i)=>{if(i!==bi&&f.pos)f.pos=f.predict(f.pos,dt)||f.pos;});
       const ll=[drPos.lat,drPos.lon];
       drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
       if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
@@ -501,15 +627,26 @@ function tick(){
       $('mHdg').textContent=Math.round(last.heading)+'°';
     }
     // Calibration values
+    // Formula competition table
+    const bi=bestFormulaIdx();
+    FORMULAS.forEach((f,i)=>{
+      $('fe'+i).textContent=f.errAvg<999?f.errAvg.toFixed(1)+'m':'--';
+      $('fe'+i).style.color=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)';
+      $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'off');
+      $('fs'+i).textContent=i===bi?'BEST':(f.errAvg<10?'READY':'LEARNING');
+      $('fs'+i).style.color=i===bi?'var(--green)':(f.errAvg<10?'var(--cyan)':'var(--td)');
+      if(i===bi)$('f'+i).style.background='rgba(0,255,136,.06)';else $('f'+i).style.background='';
+    });
+    // Calibration values
     $('cAD').textContent=CAL.accelScale.toFixed(3);
     $('cGT').textContent=CAL.gyroScale.toFixed(3);
-    $('cCA').textContent=Math.round(compass+CAL.compassOff)+'° (off:'+CAL.compassOff.toFixed(1)+')';
-    $('cSM').textContent=CAL.speedMult.toFixed(3);
     $('cHO').textContent=CAL.compassOff.toFixed(1)+'°';
-    $('cPA').textContent=CAL.predictionErr<999?CAL.predictionErr.toFixed(1)+'m':'Learning...';
+    $('cSM').textContent=CAL.speedMult.toFixed(3);
+    $('cPA').textContent=FORMULAS[bi].name;
+    $('cCA').textContent=FORMULAS[bi].errAvg<999?FORMULAS[bi].errAvg.toFixed(1)+'m':'--';
     // Calibration readiness meter
     if(phase==='recording'){
-      const err=CAL.predictionErr;
+      const err=FORMULAS[bi].errAvg;
       const ready=err<10&&DATA.count()>30;
       const good=err<20&&DATA.count()>20;
       $('calAccVal').textContent=err<999?err.toFixed(1):'--';
@@ -646,12 +783,15 @@ function showReport(dur){
       <div class="rr"><span>Sensor samples</span><span class="rv">${DATA.count()}</span></div>
       <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
     </div>
+    <div class="rc"><div class="rct" style="color:var(--cyan)">FORMULA COMPETITION</div>
+      ${FORMULAS.map((f,i)=>`<div class="rr"><span>${f.name}${i===bestFormulaIdx()?' ◈':''}</span><span class="rv" style="color:${f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)'}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`).join('')}
+    </div>
     <div class="rc"><div class="rct" style="color:var(--green)">CALIBRATION LEARNED</div>
       <div class="rr"><span>Accel→Speed scale</span><span class="rv">${CAL.accelScale.toFixed(4)}</span></div>
       <div class="rr"><span>Gyro→Turn scale</span><span class="rv">${CAL.gyroScale.toFixed(4)}</span></div>
       <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOff.toFixed(1)}°</span></div>
       <div class="rr"><span>Speed multiplier</span><span class="rv">${CAL.speedMult.toFixed(4)}</span></div>
-      <div class="rr"><span>Prediction accuracy</span><span class="rv" style="color:${CAL.predictionErr<5?'var(--green)':CAL.predictionErr<20?'var(--amber)':'var(--red)'}">${CAL.predictionErr.toFixed(1)}m</span></div>
+      <div class="rr"><span>Best formula</span><span class="rv" style="color:var(--green)">${FORMULAS[bestFormulaIdx()].name} (${FORMULAS[bestFormulaIdx()].errAvg.toFixed(1)}m)</span></div>
       <div class="rr"><span>Calibration rounds</span><span class="rv">${CAL.calibCount}</span></div>
     </div>
     <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED RESULTS</div>
