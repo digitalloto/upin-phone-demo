@@ -827,28 +827,7 @@ function stratConsensus(){
   return tw>0?{lat:tLa/tw,lon:tLo/tw}:null;
 }
 
-function renderStratCards(){
-  let bestI=0,bestW=0;
-  strategies.forEach((s,i)=>{if(s.weight>bestW){bestW=s.weight;bestI=i;}});
-  let h='';
-  strategies.forEach((s,i)=>{
-    const e=s.lastErr!==null?s.lastErr.toFixed(1)+'m':'--';
-    const ec=s.lastErr===null?'':(s.lastErr<15?' g':s.lastErr<50?' y':' r');
-    const dr=s.avgDriftRate();
-    h+=`<div class="ag${i===bestI?' best':''}"><div class="an">${s.name}</div><div class="ae vl${ec}">${e}</div><div class="aw">w:${(s.weight*100).toFixed(0)}% | ${dr.toFixed(2)}m/s</div><div class="ab"><div class="af" style="width:${s.weight*100*5}%;background:${s.color}"></div></div></div>`;
-  });
-  $('stC').innerHTML=h;
-}
-
-function renderDriftCards(){
-  let h='';
-  strategies.forEach(s=>{
-    const dr=s.avgDriftRate();
-    const cls=dr<0.5?'g':dr<2?'y':'r';
-    h+=`<div class="mac"><div class="ml">${s.name}</div><div class="mv ${cls}">${dr.toFixed(2)}</div><div class="ms">m/s drift</div></div>`;
-  });
-  $('driftC').innerHTML=h;
-}
+// renderStratCards and renderDriftCards defined in renderUI block above
 
 // ═══════════════════════════════════════════════
 // MATH AGENTS — now use MA baseline for better accuracy
@@ -1153,7 +1132,7 @@ function initSensors(){
       compassHdg=mag.alpha;
       if(phase!=='idle'&&Math.random()>0.45)detectStepSim();
     }
-  },250);
+  },500);
 }
 function detectStep(){
   const m=Math.sqrt(accel.x**2+accel.y**2+accel.z**2);
@@ -1170,7 +1149,7 @@ let lastTick=null;
 function tick(){
   const now=performance.now(),dt=lastTick?(now-lastTick)/1000:0.5;
   lastTick=now;uiFrame++;
-  const doUI=(uiFrame%4===0); // update DOM every 4th tick (every 2s)
+  const doUI=(uiFrame%3===0); // update DOM every 4th tick (every 2s)
   const aFwd=Math.sqrt(accel.x**2+accel.y**2);
   const sensorPack={accel,gyro,mag,compassHdg,steps:stepCount,stepSpeed:stepFreq*strideLen||0.5};
 
@@ -1198,7 +1177,7 @@ function tick(){
       lastGP={lat:con.lat,lon:con.lon};drPos={lat:con.lat,lon:con.lon};
       MA.addSample(con.lat,con.lon,avgConf,compassHdg,aFwd);
       // Record sensor→position mapping
-      SLOG.record(accel,gyro,compassHdg,con.lat,con.lon,dt);
+      if(uiFrame%3===0)SLOG.record(accel,gyro,compassHdg,con.lat,con.lon,dt);
       if(doUI){
         $('mFE').textContent=fErr.toFixed(1);$('mFE').className='vl';
         $('mCO').textContent=(avgConf*100).toFixed(0)+'%';
@@ -1294,21 +1273,60 @@ function tick(){
 // ═══════════════════════════════════════════════
 // UI RENDERING — cached, only update on change
 // ═══════════════════════════════════════════════
+let uiBuilt=false;
 function renderUI(){
+  // Build DOM once, then only update text content (no innerHTML thrashing)
+  if(!uiBuilt){
+    let h='';
+    agents.forEach((a,i)=>{h+=`<div class="ag" id="ag${i}"><div class="an">${a.name}</div><div class="ae vl" id="age${i}">--</div><div class="aw" id="agw${i}">w:20%</div><div class="ab"><div class="af" id="agb${i}" style="width:50%;background:${a.color}"></div></div></div>`;});
+    $('agC').innerHTML=h;
+    h='';
+    schools.forEach((s,i)=>{h+=`<div class="fs"><div class="fn">${s.name}</div><div class="fv" id="fsv${i}">50/100</div><div class="fl" id="fsl${i}">--</div></div>`;});
+    $('fsC').innerHTML=h;
+    h='';
+    strategies.forEach((s,i)=>{h+=`<div class="ag" id="st${i}"><div class="an">${s.name}</div><div class="ae vl" id="ste${i}">--</div><div class="aw" id="stw${i}">w:20%</div><div class="ab"><div class="af" id="stb${i}" style="width:50%;background:${s.color}"></div></div></div>`;});
+    $('stC').innerHTML=h;
+    h='';
+    strategies.forEach((s,i)=>{h+=`<div class="mac"><div class="ml">${s.name}</div><div class="mv" id="drc${i}">--</div><div class="ms">m/s drift</div></div>`;});
+    $('driftC').innerHTML=h;
+    uiBuilt=true;
+  }
+  // Update text only (fast)
   let bestI=0,bestC=0;
   agents.forEach((a,i)=>{if(a.conf>bestC){bestC=a.conf;bestI=i;}});
-  let h='';
   agents.forEach((a,i)=>{
-    const e=a.lastErr!==null?a.lastErr.toFixed(1)+'m':'--';
-    const ec=a.lastErr===null?'':(a.lastErr<15?' g':a.lastErr<50?' y':' r');
-    h+=`<div class="ag${i===bestI?' best':''}"><div class="an">${a.name}</div><div class="ae vl${ec}">${e}</div><div class="aw">w:${(a.weight*100).toFixed(0)}%</div><div class="ab"><div class="af" style="width:${a.conf*100}%;background:${a.color}"></div></div></div>`;
+    const el=$('age'+i);if(!el)return;
+    el.textContent=a.lastErr!==null?a.lastErr.toFixed(1)+'m':'--';
+    el.className='ae vl'+(a.lastErr===null?'':(a.lastErr<15?' g':a.lastErr<50?' y':' r'));
+    $('agw'+i).textContent='w:'+(a.weight*100).toFixed(0)+'%';
+    $('agb'+i).style.width=(a.conf*100)+'%';
+    $('ag'+i).className='ag'+(i===bestI?' best':'');
   });
-  $('agC').innerHTML=h;
-  h='';
-  schools.forEach(s=>{
-    h+=`<div class="fs"><div class="fn">${s.name}</div><div class="fv">${s.score}/100</div><div class="fl">sma:${s.params.smaW} α:${s.params.emaA.toFixed(2)}</div></div>`;
+  schools.forEach((s,i)=>{
+    const v=$('fsv'+i);if(!v)return;
+    v.textContent=s.score+'/100';
+    $('fsl'+i).textContent='sma:'+Math.round(s.params.smaW)+' α:'+s.params.emaA.toFixed(2);
   });
-  $('fsC').innerHTML=h;
+}
+function renderStratCards(){
+  let bestI=0,bestW=0;
+  strategies.forEach((s,i)=>{if(s.weight>bestW){bestW=s.weight;bestI=i;}});
+  strategies.forEach((s,i)=>{
+    const el=$('ste'+i);if(!el)return;
+    el.textContent=s.lastErr!==null?s.lastErr.toFixed(1)+'m':'--';
+    el.className='ae vl'+(s.lastErr===null?'':(s.lastErr<15?' g':s.lastErr<50?' y':' r'));
+    $('stw'+i).textContent='w:'+(s.weight*100).toFixed(0)+'%';
+    $('stb'+i).style.width=(s.weight*100*5)+'%';
+    $('st'+i).className='ag'+(i===bestI?' best':'');
+  });
+}
+function renderDriftCards(){
+  strategies.forEach((s,i)=>{
+    const el=$('drc'+i);if(!el)return;
+    const dr=s.avgDriftRate();
+    el.textContent=dr.toFixed(2);
+    el.className='mv '+(dr<0.5?'g':dr<2?'y':'r');
+  });
 }
 
 // ── Map drawing ──────────────────────────────
@@ -1317,7 +1335,7 @@ function drawMarker(ll,r,c){
   else posMarker=L.circleMarker(ll,{radius:8,color:c,fillColor:c,fillOpacity:1}).addTo(map);
   if(accCircle){accCircle.setLatLng(ll);accCircle.setRadius(r);accCircle.setStyle({color:c});}
   else accCircle=L.circle(ll,{radius:r,color:c,fillOpacity:.1,weight:1}).addTo(map);
-  map.panTo(ll);
+  if(uiFrame%8===0)map.panTo(ll);
 }
 function drawTrail(t,ref,c,dash){
   if(t.length<2)return ref;
@@ -1350,7 +1368,7 @@ function startDrive(){
   agents.forEach(a=>{a.init(gpsTrue.lat,gpsTrue.lon);a.conf=0.9;});
   strategies.forEach(st=>st.init(gpsTrue.lat,gpsTrue.lon));
   schools.forEach(s=>{s.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};s.score=50;});
-  tickIv=setInterval(tick,500);
+  tickIv=setInterval(tick,1000);
   timerIv=setInterval(()=>{if(startTime)$('mTI').textContent=fmt((performance.now()-startTime)/1000);},1000);
   document.querySelectorAll('.co').forEach(e=>e.classList.remove('active'));$('d0').classList.add('active');
   log('TEST STARTED — drive to build baseline. Press JAM/SPOOF when ready.','#2ecc71');
@@ -1363,7 +1381,8 @@ function jamGPS(){
   $('bDrive').style.display='none';$('bDenied').style.display='grid';
   $('jalrt').style.display='block';$('salrt').style.display='none';
   currentDrill={start:drillStart,startPos:gpsTrue?{...gpsTrue}:null,type:'jam'};
-  const iv=setInterval(()=>{if(phase!=='jammed'){clearInterval(iv);return;}$('jTmr').textContent=fmt((performance.now()-drillStart)/1000);},500);
+  if(window._alertIv)clearInterval(window._alertIv);
+  window._alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(window._alertIv);return;}$('jTmr').textContent=fmt((performance.now()-drillStart)/1000);},1000);
   log('GPS JAMMED — using MA baseline + agents ('+MA.count+' baseline samples)','#f39c12');
 }
 function spoofGPS(){
@@ -1374,7 +1393,8 @@ function spoofGPS(){
   $('bDrive').style.display='none';$('bDenied').style.display='grid';
   $('salrt').style.display='block';$('jalrt').style.display='none';
   currentDrill={start:drillStart,startPos:gpsTrue?{...gpsTrue}:null,type:'spoof'};
-  const iv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(iv);return;}$('sTmr').textContent=fmt((performance.now()-drillStart)/1000);},500);
+  if(window._alertIv)clearInterval(window._alertIv);
+  window._alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(window._alertIv);return;}$('sTmr').textContent=fmt((performance.now()-drillStart)/1000);},1000);
   log('GPS SPOOFED — signal rejected, using MA baseline + agents','#e74c3c');
 }
 function resurface(){
