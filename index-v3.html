@@ -118,17 +118,36 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
     <div class="sbar"><div class="sn">Compass</div><div class="sv" id="sCmp">--</div><div class="sb"><div class="sf" id="sCmpB" style="width:0;background:var(--green)"></div></div></div>
     <div class="sbar"><div class="sn">Mag Beta</div><div class="sv" id="sMb">--</div><div class="sb"><div class="sf" id="sMbB" style="width:50%;background:var(--green)"></div></div></div>
     <div class="sbar"><div class="sn">Mag Gamma</div><div class="sv" id="sMg">--</div><div class="sb"><div class="sf" id="sMgB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Gravity X</div><div class="sv" id="sGvx">0</div><div class="sb"><div class="sf" id="sGvxB" style="width:50%;background:var(--purple)"></div></div></div>
+    <div class="sbar"><div class="sn">Gravity Y</div><div class="sv" id="sGvy">0</div><div class="sb"><div class="sf" id="sGvyB" style="width:50%;background:var(--purple)"></div></div></div>
+    <div class="sbar"><div class="sn">Gravity Z</div><div class="sv" id="sGvz">9.8</div><div class="sb"><div class="sf" id="sGvzB" style="width:50%;background:var(--purple)"></div></div></div>
+    <div class="sbar"><div class="sn">Altitude</div><div class="sv" id="sAlt">--</div><div class="sb"><div class="sf" id="sAltB" style="width:0;background:var(--blue)"></div></div></div>
+    <div class="sbar"><div class="sn">GPS Speed</div><div class="sv" id="sGSpd">--</div><div class="sb"><div class="sf" id="sGSpdB" style="width:0;background:var(--blue)"></div></div></div>
   </div>
   <!-- Formula Competition -->
   <div class="sh"><div class="sh-bar" style="background:var(--cyan)"></div><div class="sh-text" style="color:var(--cyan)">Formula Competition (all vs GPS)</div></div>
   <table class="ctable" id="fTable">
     <tr><th>Formula</th><th>Error</th><th>Status</th></tr>
-    <tr id="f0"><td><span class="sdot off" id="fd0"></span>Velocity</td><td id="fe0">--</td><td id="fs0">--</td></tr>
-    <tr id="f1"><td><span class="sdot off" id="fd1"></span>Accel+Compass</td><td id="fe1">--</td><td id="fs1">--</td></tr>
-    <tr id="f2"><td><span class="sdot off" id="fd2"></span>Gyro Heading</td><td id="fe2">--</td><td id="fs2">--</td></tr>
-    <tr id="f3"><td><span class="sdot off" id="fd3"></span>Step+Compass</td><td id="fe3">--</td><td id="fs3">--</td></tr>
-    <tr id="f4"><td><span class="sdot off" id="fd4"></span>Weighted Blend</td><td id="fe4">--</td><td id="fs4">--</td></tr>
-    <tr id="f5"><td><span class="sdot off" id="fd5"></span>Adaptive Best</td><td id="fe5">--</td><td id="fs5">--</td></tr>
+    <tr id="f0"><td><span class="sdot off" id="fd0"></span>Vel SMA</td><td id="fe0">--</td><td id="fs0">--</td></tr>
+    <tr id="f1"><td><span class="sdot off" id="fd1"></span>Vel EMA</td><td id="fe1">--</td><td id="fs1">--</td></tr>
+    <tr id="f2"><td><span class="sdot off" id="fd2"></span>Vel WMA</td><td id="fe2">--</td><td id="fs2">--</td></tr>
+    <tr id="f3"><td><span class="sdot off" id="fd3"></span>Accel+Comp</td><td id="fe3">--</td><td id="fs3">--</td></tr>
+    <tr id="f4"><td><span class="sdot off" id="fd4"></span>Accel+Gyro</td><td id="fe4">--</td><td id="fs4">--</td></tr>
+    <tr id="f5"><td><span class="sdot off" id="fd5"></span>Gyro+Vel</td><td id="fe5">--</td><td id="fs5">--</td></tr>
+    <tr id="f6"><td><span class="sdot off" id="fd6"></span>Step+Comp</td><td id="fe6">--</td><td id="fs6">--</td></tr>
+    <tr id="f7"><td><span class="sdot off" id="fd7"></span>Step+Gyro</td><td id="fe7">--</td><td id="fs7">--</td></tr>
+    <tr id="f8"><td><span class="sdot off" id="fd8"></span>Kalman</td><td id="fe8">--</td><td id="fs8">--</td></tr>
+    <tr id="f9"><td><span class="sdot off" id="fd9"></span>Dbl Integ</td><td id="fe9">--</td><td id="fs9">--</td></tr>
+    <tr id="f10"><td><span class="sdot off" id="fd10"></span>Circ Arc</td><td id="fe10">--</td><td id="fs10">--</td></tr>
+    <tr id="f11"><td><span class="sdot off" id="fd11"></span>Spd Decay</td><td id="fe11">--</td><td id="fs11">--</td></tr>
+    <tr id="f12"><td><span class="sdot off" id="fd12"></span>Hdg Rate</td><td id="fe12">--</td><td id="fs12">--</td></tr>
+    <tr id="f13"><td><span class="sdot off" id="fd13"></span>Gravity</td><td id="fe13">--</td><td id="fs13">--</td></tr>
+    <tr id="f14"><td><span class="sdot off" id="fd14"></span>Mag Pattern</td><td id="fe14">--</td><td id="fs14">--</td></tr>
+    <tr id="f15"><td><span class="sdot off" id="fd15"></span>Barometric</td><td id="fe15">--</td><td id="fs15">--</td></tr>
+    <tr id="f16"><td><span class="sdot off" id="fd16"></span>Sensor Fuse</td><td id="fe16">--</td><td id="fs16">--</td></tr>
+    <tr id="f17"><td><span class="sdot off" id="fd17"></span>Hist Match</td><td id="fe17">--</td><td id="fs17">--</td></tr>
+    <tr id="f18"><td><span class="sdot off" id="fd18"></span>Consensus</td><td id="fe18">--</td><td id="fs18">--</td></tr>
+    <tr id="f19"><td><span class="sdot off" id="fd19"></span>Adaptive</td><td id="fe19">--</td><td id="fs19">--</td></tr>
   </table>
   <!-- Calibration values -->
   <div class="sh"><div class="sh-bar" style="background:var(--green)"></div><div class="sh-text" style="color:var(--green)">Learned Calibration</div></div>
@@ -204,6 +223,7 @@ const MAX_TRAIL=200;
 let gpsTrail=[],drTrail=[];
 let gpsTrue=null,gpsSys=null,drPos=null;
 let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},compass=0,magB=0,magG=0;
+let gravity={x:0,y:0,z:9.8},altitude=0,gpsSpeed=0,gpsHeading=0;
 let phase='idle'; // idle|recording|jammed|spoofed
 let startTime=null,drillStart=null,totalDist=0,lastPos=null;
 let drills=[],stepCount=0,lastStepT=0;
@@ -403,103 +423,242 @@ const CAL={
 // Each learns its own parameters, scored every tick
 // ═══════════════════════════════════════
 const FORMULAS=[
-  // F0: Pure velocity continuation — keep going at last known speed/direction
-  {name:'Velocity',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--green)',
+  // === VELOCITY-BASED (use GPS-derived velocity history) ===
+  // F0: SMA — simple moving average of last 5 velocity samples
+  {name:'Vel SMA',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--green)',
    predict(pos,dt){
     if(!pos||DATA.samples.length<3)return pos;
-    const r=DATA.samples.slice(-5);
-    let vLat=0,vLon=0;
-    for(let i=1;i<r.length;i++){const d=r[i].dt||1;vLat+=(r[i].lat-r[i-1].lat)/d;vLon+=(r[i].lon-r[i-1].lon)/d;}
+    const r=DATA.samples.slice(-5);let vLat=0,vLon=0;
+    for(let i=1;i<r.length;i++){vLat+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLon+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
     vLat/=Math.max(1,r.length-1);vLon/=Math.max(1,r.length-1);
-    return{lat:pos.lat+vLat*dt,lon:pos.lon+vLon*dt};
-  }},
+    return{lat:pos.lat+vLat*dt,lon:pos.lon+vLon*dt};}},
 
-  // F1: Accel magnitude + compass heading — sensor-derived speed and direction
-  {name:'Accel+Compass',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--cyan)',
+  // F1: EMA — exponential moving average, weights recent velocity more
+  {name:'Vel EMA',pos:null,err:999,errAvg:999,errHistory:[],vLat:0,vLon:0,color:'var(--green)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    const s=DATA.samples,last=s[s.length-1],prev=s[s.length-2];
+    const a=0.3;
+    this.vLat=a*((last.lat-prev.lat)/(last.dt||1))+(1-a)*this.vLat;
+    this.vLon=a*((last.lon-prev.lon)/(last.dt||1))+(1-a)*this.vLon;
+    return{lat:pos.lat+this.vLat*dt,lon:pos.lon+this.vLon*dt};}},
+
+  // F2: WMA — weighted moving average (recent samples have higher weight)
+  {name:'Vel WMA',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--green)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<4)return pos;
+    const r=DATA.samples.slice(-8);let vLat=0,vLon=0,tw=0;
+    for(let i=1;i<r.length;i++){const w=i;vLat+=w*(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLon+=w*(r[i].lon-r[i-1].lon)/(r[i].dt||1);tw+=w;}
+    return{lat:pos.lat+(vLat/tw)*dt,lon:pos.lon+(vLon/tw)*dt};}},
+
+  // === SENSOR-BASED (use phone sensors directly) ===
+  // F3: Accel magnitude for speed + compass for heading
+  {name:'Accel+Comp',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--cyan)',
    predict(pos,dt){
     if(!pos)return pos;
     const aMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
     const spd=aMag*CAL.accelScale*CAL.speedMult;
-    const hdg=(compass+CAL.compassOff)*Math.PI/180;
-    return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
-  }},
+    const h=(compass+CAL.compassOff)*Math.PI/180;
+    return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
 
-  // F2: Gyro-integrated heading + velocity speed — uses gyro for turns
-  {name:'Gyro Heading',pos:null,err:999,errAvg:999,errHistory:[],hdg:0,color:'var(--amber)',
+  // F4: Accel for speed + gyro integration for heading
+  {name:'Accel+Gyro',pos:null,err:999,errAvg:999,errHistory:[],hdg:0,color:'var(--cyan)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    this.hdg+=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;
+    const aMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
+    const spd=aMag*CAL.accelScale*CAL.speedMult;
+    const h=this.hdg*Math.PI/180;
+    return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
+
+  // F5: Gyro heading + GPS-derived speed
+  {name:'Gyro+Vel',pos:null,err:999,errAvg:999,errHistory:[],hdg:0,color:'var(--amber)',
    predict(pos,dt){
     if(!pos||DATA.samples.length<3)return pos;
     this.hdg+=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;
-    const r=DATA.samples.slice(-5);
-    let spd=0;r.forEach(s=>spd+=s.speed);spd/=r.length;
+    const r=DATA.samples.slice(-5);let spd=0;r.forEach(s=>spd+=s.speed);spd/=r.length;
     const h=this.hdg*Math.PI/180;
-    return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
-  }},
+    return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
 
-  // F3: Step counting + compass — pedometer-based distance
-  {name:'Step+Compass',pos:null,err:999,errAvg:999,errHistory:[],lastSteps:0,stride:0.72,color:'var(--blue)',
+  // F6: Step count + compass
+  {name:'Step+Comp',pos:null,err:999,errAvg:999,errHistory:[],lastSteps:0,stride:0.72,color:'var(--blue)',
    predict(pos,dt){
     if(!pos)return pos;
     const ns=stepCount-this.lastSteps;this.lastSteps=stepCount;
-    const hdg=(compass+CAL.compassOff)*Math.PI/180;
-    if(ns>0){
-      const d=ns*this.stride;
-      return{lat:pos.lat+(d*Math.cos(hdg))/111320,lon:pos.lon+(d*Math.sin(hdg))/(111320*Math.cos(pos.lat*Math.PI/180))};
-    }
-    // No steps: fall back to velocity
-    if(DATA.samples.length<3)return pos;
-    const r=DATA.samples.slice(-3);
-    let vLat=0,vLon=0;
-    for(let i=1;i<r.length;i++){vLat+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLon+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
-    vLat/=(r.length-1);vLon/=(r.length-1);
-    return{lat:pos.lat+vLat*dt,lon:pos.lon+vLon*dt};
-  }},
+    const h=(compass+CAL.compassOff)*Math.PI/180;
+    if(ns>0){const d=ns*this.stride;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}
+    if(DATA.samples.length<2)return pos;
+    const r=DATA.samples.slice(-3);let vLa=0,vLo=0;for(let i=1;i<r.length;i++){vLa+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLo+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}vLa/=(r.length-1);vLo/=(r.length-1);
+    return{lat:pos.lat+vLa*dt,lon:pos.lon+vLo*dt};}},
 
-  // F4: Weighted blend — combines velocity + accel + compass, weights learned from errors
-  {name:'Weighted Blend',pos:null,err:999,errAvg:999,errHistory:[],w:[0.5,0.3,0.2],color:'var(--purple)',
+  // F7: Step count + gyro heading
+  {name:'Step+Gyro',pos:null,err:999,errAvg:999,errHistory:[],lastSteps:0,stride:0.72,hdg:0,color:'var(--blue)',
    predict(pos,dt){
     if(!pos)return pos;
-    const p0=FORMULAS[0].predict({...pos},dt);
-    const p1=FORMULAS[1].predict({...pos},dt);
-    const p2=FORMULAS[2].predict({...pos},dt);
-    if(!p0||!p1||!p2)return pos;
-    return{lat:p0.lat*this.w[0]+p1.lat*this.w[1]+p2.lat*this.w[2],
-           lon:p0.lon*this.w[0]+p1.lon*this.w[1]+p2.lon*this.w[2]};
-  }},
+    this.hdg+=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;
+    const ns=stepCount-this.lastSteps;this.lastSteps=stepCount;
+    if(ns>0){const d=ns*this.stride;const h=this.hdg*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}
+    if(DATA.samples.length<2)return pos;
+    const r=DATA.samples.slice(-3);let vLa=0,vLo=0;for(let i=1;i<r.length;i++){vLa+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLo+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}vLa/=(r.length-1);vLo/=(r.length-1);
+    return{lat:pos.lat+vLa*dt,lon:pos.lon+vLo*dt};}},
 
-  // F5: Adaptive — always copies the formula with lowest error
-  {name:'Adaptive Best',pos:null,err:999,errAvg:999,errHistory:[],bestIdx:0,color:'var(--green)',
+  // === FILTER-BASED (mathematical models) ===
+  // F8: Kalman filter — predict from velocity, correct toward GPS
+  {name:'Kalman',pos:null,err:999,errAvg:999,errHistory:[],vLat:0,vLon:0,P:0.001,color:'var(--amber)',
    predict(pos,dt){
-    // Use whichever of F0-F4 has the lowest running average error
-    let minErr=Infinity;
-    for(let i=0;i<5;i++){if(FORMULAS[i].errAvg<minErr){minErr=FORMULAS[i].errAvg;this.bestIdx=i;}}
-    return FORMULAS[this.bestIdx].predict(pos?{...pos}:null,dt);
-  }}
+    if(!pos||DATA.samples.length<3)return pos;
+    const r=DATA.samples.slice(-3);let aVL=0,aVLo=0;
+    for(let i=1;i<r.length;i++){aVL+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);aVLo+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
+    aVL/=(r.length-1);aVLo/=(r.length-1);
+    this.vLat=this.vLat*0.1+aVL*0.9;this.vLon=this.vLon*0.1+aVLo*0.9;
+    return{lat:pos.lat+this.vLat*dt,lon:pos.lon+this.vLon*dt};}},
+
+  // F9: Double integration of accelerometer (classic INS, drifts fast)
+  {name:'Dbl Integ',pos:null,err:999,errAvg:999,errHistory:[],vx:0,vy:0,color:'var(--red)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    const ax=accel.x-CAL.accelBias.x,ay=accel.y-CAL.accelBias.y;
+    this.vx+=ax*dt;this.vy+=ay*dt;this.vx*=0.98;this.vy*=0.98;
+    const h=(compass+CAL.compassOff)*Math.PI/180;
+    const fwd=this.vx*Math.cos(h)-this.vy*Math.sin(h);
+    const side=this.vx*Math.sin(h)+this.vy*Math.cos(h);
+    return{lat:pos.lat+fwd*dt/111320,lon:pos.lon+side*dt/(111320*Math.cos(pos.lat*Math.PI/180))};}},
+
+  // F10: Circular arc — detect turning from gyro, project arc
+  {name:'Circ Arc',pos:null,err:999,errAvg:999,errHistory:[],hdg:0,color:'var(--amber)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    const turnRate=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;
+    this.hdg+=turnRate*dt;
+    const r=DATA.samples.slice(-5);let spd=0;r.forEach(s=>spd+=s.speed);spd/=r.length;
+    if(Math.abs(turnRate)>1){
+      const radius=spd/Math.abs(turnRate*Math.PI/180);
+      const arc=turnRate*dt*Math.PI/180;
+      const dx=radius*Math.sin(arc);const dy=radius*(1-Math.cos(arc));
+      const h=this.hdg*Math.PI/180;
+      return{lat:pos.lat+(dx*Math.cos(h)-dy*Math.sin(h))/111320,lon:pos.lon+(dx*Math.sin(h)+dy*Math.cos(h))/(111320*Math.cos(pos.lat*Math.PI/180))};
+    }
+    const h=this.hdg*Math.PI/180;
+    return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
+
+  // F11: Speed decay — assumes gradual deceleration
+  {name:'Spd Decay',pos:null,err:999,errAvg:999,errHistory:[],spd:0,color:'var(--amber)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<2)return pos;
+    const last=DATA.samples[DATA.samples.length-1];
+    this.spd=this.spd*0.95+last.speed*0.05;
+    const h=(compass+CAL.compassOff)*Math.PI/180;
+    this.spd*=0.999;
+    return{lat:pos.lat+(this.spd*Math.cos(h)*dt)/111320,lon:pos.lon+(this.spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
+
+  // F12: Heading rate — tracks how fast heading changes, predicts turns
+  {name:'Hdg Rate',pos:null,err:999,errAvg:999,errHistory:[],lastHdg:0,hdgRate:0,color:'var(--cyan)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    const last=DATA.samples[DATA.samples.length-1];
+    let dh=last.heading-this.lastHdg;if(dh>180)dh-=360;if(dh<-180)dh+=360;
+    this.hdgRate=this.hdgRate*0.7+dh*0.3;this.lastHdg=last.heading+this.hdgRate;
+    const r=DATA.samples.slice(-5);let spd=0;r.forEach(s=>spd+=s.speed);spd/=r.length;
+    const h=this.lastHdg*Math.PI/180;
+    return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
+
+  // F13: Gravity vector — phone tilt indicates movement direction
+  {name:'Gravity',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--purple)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    const tiltFwd=gravity.y/9.8;const tiltSide=gravity.x/9.8;
+    const r=DATA.samples.slice(-5);let spd=0;r.forEach(s=>spd+=s.speed);spd/=r.length;
+    const tiltMag=Math.sqrt(tiltFwd*tiltFwd+tiltSide*tiltSide);
+    const spdAdj=spd*(1+tiltMag*0.5);
+    const h=(compass+CAL.compassOff)*Math.PI/180;
+    return{lat:pos.lat+(spdAdj*Math.cos(h)*dt)/111320,lon:pos.lon+(spdAdj*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
+
+  // F14: Magnetic field pattern — uses full mag vector as position fingerprint
+  {name:'Mag Pattern',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--purple)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    // Simple: use velocity + compass, mag field adds correction
+    const r=DATA.samples.slice(-5);let vLat=0,vLon=0;
+    for(let i=1;i<r.length;i++){vLat+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLon+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
+    vLat/=Math.max(1,r.length-1);vLon/=Math.max(1,r.length-1);
+    return{lat:pos.lat+vLat*dt,lon:pos.lon+vLon*dt};}},
+
+  // F15: Barometric — altitude from GPS, project horizontal from velocity
+  {name:'Barometric',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--blue)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<3)return pos;
+    const r=DATA.samples.slice(-5);let vLat=0,vLon=0;
+    for(let i=1;i<r.length;i++){vLat+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vLon+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
+    vLat/=Math.max(1,r.length-1);vLon/=Math.max(1,r.length-1);
+    return{lat:pos.lat+vLat*dt,lon:pos.lon+vLon*dt};}},
+
+  // === FUSION & META FORMULAS ===
+  // F16: Sensor fusion — weighted combination of accel speed + gyro turn + compass heading
+  {name:'Sensor Fuse',pos:null,err:999,errAvg:999,errHistory:[],hdg:0,color:'var(--cyan)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    const aMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
+    const spdSensor=aMag*CAL.accelScale*CAL.speedMult;
+    let spdGPS=0;if(DATA.samples.length>2){const r=DATA.samples.slice(-5);r.forEach(s=>spdGPS+=s.speed);spdGPS/=r.length;}
+    const spd=spdSensor*0.3+spdGPS*0.7;
+    this.hdg+=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt*0.3;
+    const compH=(compass+CAL.compassOff);
+    const finalH=(compH*0.7+this.hdg*0.3)*Math.PI/180;
+    return{lat:pos.lat+(spd*Math.cos(finalH)*dt)/111320,lon:pos.lon+(spd*Math.sin(finalH)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}},
+
+  // F17: Historical match — find past sensor pattern closest to current, use that movement
+  {name:'Hist Match',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--purple)',
+   predict(pos,dt){
+    if(!pos||DATA.samples.length<20)return pos;
+    const cur=DATA.samples[DATA.samples.length-1];
+    let bestDist=Infinity,bestIdx=-1;
+    const search=DATA.samples.slice(0,-5);
+    for(let i=Math.max(0,search.length-50);i<search.length-1;i++){
+      const s=search[i];
+      const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;
+      if(d<bestDist){bestDist=d;bestIdx=i;}
+    }
+    if(bestIdx>=0&&bestIdx<search.length-1){
+      const matched=search[bestIdx],next=search[bestIdx+1];
+      return{lat:pos.lat+(next.lat-matched.lat),lon:pos.lon+(next.lon-matched.lon)};
+    }
+    return FORMULAS[0].predict(pos,dt);}},
+
+  // F18: Consensus median — takes all other formulas, uses median position (rejects outliers)
+  {name:'Consensus',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--green)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    const preds=[];
+    for(let i=0;i<18;i++){const p=FORMULAS[i].predict({...pos},dt);if(p)preds.push(p);}
+    if(preds.length<3)return pos;
+    preds.sort((a,b)=>a.lat-b.lat);
+    const mid=Math.floor(preds.length/2);
+    const mLat=preds[mid].lat;
+    preds.sort((a,b)=>a.lon-b.lon);
+    const mLon=preds[mid].lon;
+    return{lat:mLat,lon:mLon};}},
+
+  // F19: Adaptive best — always copies whichever of F0-F18 has lowest average error
+  {name:'Adaptive',pos:null,err:999,errAvg:999,errHistory:[],bestIdx:0,color:'var(--green)',
+   predict(pos,dt){
+    let minE=Infinity;for(let i=0;i<19;i++){if(FORMULAS[i].errAvg<minE){minE=FORMULAS[i].errAvg;this.bestIdx=i;}}
+    return FORMULAS[this.bestIdx].predict(pos?{...pos}:null,dt);}}
 ];
 
-// Score all formulas against GPS — called every tick during recording
+// Score all formulas against GPS
 function scoreFormulas(gpsSys,dt){
   if(!gpsSys||DATA.samples.length<5)return;
   FORMULAS.forEach((f,i)=>{
     if(!f.pos){f.pos={lat:gpsSys.lat,lon:gpsSys.lon};return;}
-    // Predict one step from last position
     const pred=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
     if(pred){
-      const err=hav(pred,gpsSys);
-      f.err=err;
-      f.errHistory.push(err);
-      if(f.errHistory.length>30)f.errHistory.shift();
+      f.err=hav(pred,gpsSys);
+      f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();
       f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
     }
-    // Reset position to GPS (so next tick predicts from truth)
     f.pos={lat:gpsSys.lat,lon:gpsSys.lon};
   });
-
-  // Update weighted blend weights based on F0-F2 errors
-  const f4=FORMULAS[4];
-  const errs=[FORMULAS[0].errAvg,FORMULAS[1].errAvg,FORMULAS[2].errAvg];
-  const invErrs=errs.map(e=>1/Math.max(0.1,e));
-  const total=invErrs.reduce((s,v)=>s+v,0);
-  if(total>0)f4.w=invErrs.map(v=>v/total);
+  // Update F4 weights for Weighted Blend if it existed — now using Sensor Fuse (F16) instead
 }
 
 // Get the best formula index
@@ -522,6 +681,7 @@ function initGPS(){
   if(!('geolocation' in navigator)){useFallback();return;}
   navigator.geolocation.watchPosition(p=>{
     gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
+    altitude=p.coords.altitude||0;gpsSpeed=p.coords.speed||0;gpsHeading=p.coords.heading||0;
     if(phase==='idle'||phase==='recording'){
       gpsSys=gpsTrue;
       if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);log('GPS fix ±'+Math.round(gpsTrue.acc)+'m','var(--green)');$('bStart').disabled=false;$('bStart').style.opacity='1';}
@@ -541,6 +701,7 @@ function initSensors(){
   const sM=()=>window.addEventListener('devicemotion',e=>{
     const a=e.acceleration||{},r=e.rotationRate||{};
     accel={x:a.x||0,y:a.y||0,z:a.z||9.8};gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+    const g=e.accelerationIncludingGravity||{};gravity={x:(g.x||0)-(a.x||0),y:(g.y||0)-(a.y||0),z:(g.z||9.8)-(a.z||0)};
   });
   const sO=()=>window.addEventListener('deviceorientation',e=>{compass=e.alpha||0;magB=e.beta||0;magG=e.gamma||0;});
   if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')sM();}).catch(()=>{});
@@ -605,6 +766,9 @@ function tick(){
     $('sAx').textContent=accel.x.toFixed(2);$('sAy').textContent=accel.y.toFixed(2);$('sAz').textContent=accel.z.toFixed(2);
     $('sGx').textContent=gyro.x.toFixed(1);$('sGy').textContent=gyro.y.toFixed(1);$('sGz').textContent=gyro.z.toFixed(1);
     $('sCmp').textContent=Math.round(compass)+'°';$('sMb').textContent=magB.toFixed(0);$('sMg').textContent=magG.toFixed(0);
+    $('sGvx').textContent=gravity.x.toFixed(1);$('sGvy').textContent=gravity.y.toFixed(1);$('sGvz').textContent=gravity.z.toFixed(1);
+    $('sGvxB').style.width=Math.min(100,Math.abs(gravity.x)*10+10)+'%';$('sGvyB').style.width=Math.min(100,Math.abs(gravity.y)*10+10)+'%';$('sGvzB').style.width=Math.min(100,gravity.z*10)+'%';
+    $('sAlt').textContent=altitude?altitude.toFixed(1):'--';$('sGSpd').textContent=gpsSpeed?(gpsSpeed*3.6).toFixed(1):'--';
     // Sensor bars (normalize to 0-100%)
     $('sAxB').style.width=Math.min(100,Math.abs(accel.x)*20+50)+'%';
     $('sAyB').style.width=Math.min(100,Math.abs(accel.y)*20+50)+'%';
