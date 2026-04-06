@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>UPIN FIELD TEST v3</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#03060F;--panel:#080D1A;--navy:#0A1628;--border:#0F2040;--cyan:#00E5FF;--green:#00FF88;--amber:#FFB800;--red:#FF3131;--blue:#3B82F6;--purple:#A855F7;--tp:#E2EBF8;--tm:#7A9BC0;--td:#4A6080}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+/* Top bar */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#050A18;border-bottom:1px solid var(--border);flex-shrink:0}
+.topbar h1{font-family:'Orbitron',sans-serif;font-size:13px;font-weight:700;color:var(--cyan);letter-spacing:3px;text-transform:uppercase}
+.badge{font-size:9px;font-weight:700;padding:3px 10px;letter-spacing:1px;border-radius:2px}
+.b-idle{background:var(--border);color:var(--td)}
+.b-cal{background:var(--amber);color:#000}
+.b-rec{background:var(--green);color:#000;animation:blink 1s infinite}
+.b-jam{background:var(--red);color:#fff;animation:pulseGlow 1.5s infinite}
+.b-spoof{background:var(--red);color:#fff;animation:pulseGlow 1.5s infinite}
+/* Map */
+#map-wrap{position:relative;flex-shrink:0;height:35vh}
+#map{width:100%;height:100%}
+.map-ov{position:absolute;top:6px;left:6px;z-index:1000;background:rgba(3,6,15,.92);padding:6px 10px;border:1px solid var(--border);border-radius:2px;font-size:9px;line-height:1.7;pointer-events:none}
+.map-ov strong{color:var(--cyan)}
+/* Panel */
+#panel{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px 10px 20px;background:var(--bg)}
+/* Section title */
+.sh{display:flex;align-items:center;gap:8px;margin:10px 0 6px}
+.sh-bar{width:3px;height:14px;border-radius:1px}
+.sh-text{font-family:'Orbitron',sans-serif;font-size:9px;font-weight:700;letter-spacing:3px;text-transform:uppercase}
+/* Metric cards */
+.mrow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px}
+.mc{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:8px 6px;text-align:center}
+.mc .ml{font-size:8px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:2px;margin-bottom:2px}
+.mc .mv{font-size:20px;font-weight:700;color:var(--tp);line-height:1}
+.mc .mu{font-size:7px;color:var(--td);letter-spacing:1px;text-transform:uppercase}
+/* Sensor bars */
+.sbars{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px}
+.sbar{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:6px}
+.sbar .sn{font-size:7px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
+.sbar .sv{font-size:12px;font-weight:700;color:var(--tp)}
+.sbar .sb{height:3px;background:var(--border);border-radius:1px;margin-top:3px;overflow:hidden}
+.sbar .sf{height:100%;border-radius:1px}
+/* Status dots */
+.sdot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.sdot.live{background:var(--green);animation:blink 1s infinite}
+.sdot.off{background:var(--td)}
+.sdot.err{background:var(--red);animation:pulseGlow 1.5s infinite}
+/* Buttons */
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+.btn{padding:12px 6px;border:none;border-radius:2px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn:active{opacity:.6}
+.btn-cyan{color:var(--cyan);background:rgba(0,229,255,.06);border:1px solid var(--cyan)}
+.btn-green{color:var(--green);background:rgba(0,255,136,.06);border:1px solid var(--green)}
+.btn-amber{color:var(--amber);background:rgba(255,184,0,.06);border:1px solid var(--amber)}
+.btn-red{color:var(--red);background:rgba(255,49,49,.06);border:1px solid var(--red)}
+.btn-dim{color:var(--td);background:var(--panel);border:1px solid var(--border)}
+/* Calibration table */
+.ctable{width:100%;font-size:10px;margin-bottom:8px;border-collapse:collapse}
+.ctable th{text-align:left;color:var(--td);font-size:8px;text-transform:uppercase;letter-spacing:1px;padding:4px;border-bottom:1px solid var(--border)}
+.ctable td{padding:4px;border-bottom:1px solid var(--border);color:var(--tm)}
+.ctable td:last-child{text-align:right;font-weight:700;color:var(--tp)}
+/* Alert */
+.alert{display:none;border:1px solid;border-radius:2px;padding:10px;margin-bottom:8px;text-align:center}
+.alert .at{font-family:'Orbitron',sans-serif;font-size:10px;font-weight:700;letter-spacing:2px;margin-bottom:4px}
+.alert .av{font-size:24px;font-weight:700;margin:4px 0}
+.alert .ah{font-size:8px;color:var(--td)}
+/* Log */
+#log{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:6px 8px;font-size:8px;line-height:1.6;max-height:100px;overflow-y:auto;color:var(--td);margin-bottom:8px}
+/* Report */
+#rpt{display:none;position:fixed;inset:0;background:var(--bg);z-index:2000;overflow-y:auto;padding:14px}
+.rpt-h{font-family:'Orbitron',sans-serif;font-size:14px;font-weight:700;color:var(--cyan);letter-spacing:3px;margin-bottom:12px}
+.rc{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:10px;margin-bottom:7px}
+.rct{font-family:'Orbitron',sans-serif;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:6px}
+.rr{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px}
+.rr:last-child{border-bottom:none}
+.rv{font-weight:700}
+/* Status bar */
+.statusbar{background:#050A18;border-top:1px solid var(--border);padding:4px 12px;display:flex;justify-content:space-between;font-size:7px;color:var(--td);letter-spacing:1px;text-transform:uppercase;flex-shrink:0}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+@keyframes pulseGlow{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>UPIN v3</h1>
+  <span class="badge b-idle" id="badge">IDLE</span>
+</div>
+<div id="map-wrap">
+  <div id="map"></div>
+  <div class="map-ov">
+    <div><strong>MODE:</strong> <span id="ovMode">Idle</span></div>
+    <div><strong>SAMPLES:</strong> <span id="ovSamp">0</span></div>
+    <div><strong>ACCURACY:</strong> <span id="ovAcc">--</span></div>
+  </div>
+</div>
+<div id="panel">
+  <!-- Metrics -->
+  <div class="mrow">
+    <div class="mc"><div class="ml">Speed</div><div class="mv" id="mSpd">0</div><div class="mu">km/h</div></div>
+    <div class="mc"><div class="ml">Heading</div><div class="mv" id="mHdg">--</div><div class="mu">degrees</div></div>
+    <div class="mc"><div class="ml">Distance</div><div class="mv" id="mDst">0</div><div class="mu">metres</div></div>
+    <div class="mc"><div class="ml">Drift</div><div class="mv" id="mDrf">--</div><div class="mu">metres</div></div>
+    <div class="mc"><div class="ml">Samples</div><div class="mv" style="color:var(--cyan)" id="mSmp">0</div><div class="mu">recorded</div></div>
+    <div class="mc"><div class="ml">Elapsed</div><div class="mv" id="mTime">0:00</div><div class="mu">&nbsp;</div></div>
+  </div>
+  <!-- Sensors -->
+  <div class="sh"><div class="sh-bar" style="background:var(--cyan)"></div><div class="sh-text" style="color:var(--cyan)">Sensor Readings</div></div>
+  <div class="sbars">
+    <div class="sbar"><div class="sn">Accel X</div><div class="sv" id="sAx">0</div><div class="sb"><div class="sf" id="sAxB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Accel Y</div><div class="sv" id="sAy">0</div><div class="sb"><div class="sf" id="sAyB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Accel Z</div><div class="sv" id="sAz">9.8</div><div class="sb"><div class="sf" id="sAzB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro X</div><div class="sv" id="sGx">0</div><div class="sb"><div class="sf" id="sGxB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro Y</div><div class="sv" id="sGy">0</div><div class="sb"><div class="sf" id="sGyB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro Z</div><div class="sv" id="sGz">0</div><div class="sb"><div class="sf" id="sGzB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Compass</div><div class="sv" id="sCmp">--</div><div class="sb"><div class="sf" id="sCmpB" style="width:0;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag Beta</div><div class="sv" id="sMb">--</div><div class="sb"><div class="sf" id="sMbB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag Gamma</div><div class="sv" id="sMg">--</div><div class="sb"><div class="sf" id="sMgB" style="width:50%;background:var(--green)"></div></div></div>
+  </div>
+  <!-- Calibration mapping -->
+  <div class="sh"><div class="sh-bar" style="background:var(--green)"></div><div class="sh-text" style="color:var(--green)">Sensor-Position Mapping</div></div>
+  <table class="ctable" id="calTable">
+    <tr><th>Mapping</th><th>Learned Value</th></tr>
+    <tr><td>Accel→Distance (m/s²→m)</td><td id="cAD">--</td></tr>
+    <tr><td>Gyro→Turn (°/s→°)</td><td id="cGT">--</td></tr>
+    <tr><td>Compass Accuracy</td><td id="cCA">--</td></tr>
+    <tr><td>Speed Multiplier</td><td id="cSM">--</td></tr>
+    <tr><td>Heading Offset</td><td id="cHO">--</td></tr>
+    <tr><td>Prediction Accuracy</td><td id="cPA">--</td></tr>
+  </table>
+  <!-- Buttons: phase 1 -->
+  <div id="b1" class="btns">
+    <button class="btn btn-cyan" onclick="V.calibrate()">Calibrate</button>
+    <button class="btn btn-green" id="bStart" onclick="V.startRecording()" disabled style="opacity:.3">Start Recording</button>
+  </div>
+  <!-- Phase 2: recording -->
+  <div id="b2" class="btns" style="display:none">
+    <button class="btn btn-amber" onclick="V.jamGPS()">Jam GPS</button>
+    <button class="btn btn-red" onclick="V.spoofGPS()">Spoof GPS</button>
+  </div>
+  <!-- Phase 3: denied -->
+  <div id="b3" class="btns" style="display:none">
+    <button class="btn btn-green" onclick="V.resurface()">Resurface</button>
+    <button class="btn btn-dim" onclick="V.endTest()">End Test</button>
+  </div>
+  <!-- Alert box -->
+  <div class="alert" id="alertJam" style="border-color:var(--amber)">
+    <div class="at" style="color:var(--amber)">GPS JAMMED — PREDICTING FROM SENSOR MAP</div>
+    <div class="av" style="color:var(--amber)" id="jamT">0:00</div>
+    <div class="ah">Press RESURFACE to compare prediction vs reality</div>
+  </div>
+  <div class="alert" id="alertSpoof" style="border-color:var(--red)">
+    <div class="at" style="color:var(--red)">GPS SPOOFED — FAKE SIGNAL REJECTED</div>
+    <div class="av" style="color:var(--red)" id="spoofT">0:00</div>
+    <div class="ah">Press RESURFACE to compare prediction vs reality</div>
+  </div>
+  <!-- Log -->
+  <div class="sh"><div class="sh-bar" style="background:var(--td)"></div><div class="sh-text" style="color:var(--td)">Event Log</div></div>
+  <div id="log"></div>
+</div>
+<!-- Report -->
+<div id="rpt">
+  <div class="rpt-h">UPIN FIELD TEST REPORT</div>
+  <div class="btns" style="margin-bottom:12px">
+    <button class="btn btn-dim" onclick="V.exportCSV()">Export CSV</button>
+    <button class="btn btn-cyan" onclick="location.reload()">New Test</button>
+  </div>
+  <div id="rptBody"></div>
+</div>
+<!-- Status bar -->
+<div class="statusbar">
+  <span>UPIN v3 — DATA-DRIVEN POSITIONING</span>
+  <span><span class="sdot live" id="sysD"></span>OPERATIONAL</span>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const V=(()=>{
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let map,marker,circle,gpsLine,drLine;
+const MAX_TRAIL=200;
+let gpsTrail=[],drTrail=[];
+let gpsTrue=null,gpsSys=null,drPos=null;
+let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},compass=0,magB=0,magG=0;
+let phase='idle'; // idle|recording|jammed|spoofed
+let startTime=null,drillStart=null,totalDist=0,lastPos=null;
+let drills=[],stepCount=0,lastStepT=0;
+let tickIv=null,alertIv=null,simStep=0;
+let uiFrame=0;
+
+const $=id=>document.getElementById(id);
+const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
+const fmt=s=>{const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;};
+function ts(){const d=new Date();return d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');}
+function log(m,c){const b=$('log'),d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent='['+ts()+'] '+m;b.appendChild(d);if(b.childNodes.length>40)b.removeChild(b.firstChild);b.scrollTop=b.scrollHeight;}
+
+// ═══════════════════════════════════════
+// SENSOR DATA CAPTURE — records EVERYTHING
+// Every 1s: {accel, gyro, compass, gps_position, gps_speed, gps_heading}
+// This is the training dataset
+// ═══════════════════════════════════════
+const DATA={
+  samples:[],    // [{t, ax,ay,az, gx,gy,gz, compass,magB,magG, lat,lon, speed, heading, dt}]
+  MAX:2000,      // keep last 2000 samples
+
+  record(ac,gy,cmp,mb,mg,gps,dt){
+    if(!gps)return;
+    // Calculate GPS-derived speed and heading from last sample
+    let speed=0,heading=0;
+    if(this.samples.length>0){
+      const prev=this.samples[this.samples.length-1];
+      const dLat=(gps.lat-prev.lat)*111320;
+      const dLon=(gps.lon-prev.lon)*111320*Math.cos(gps.lat*Math.PI/180);
+      speed=Math.sqrt(dLat*dLat+dLon*dLon)/Math.max(dt,0.1);
+      heading=Math.atan2(dLon,dLat)*180/Math.PI;
+      if(heading<0)heading+=360;
+    }
+    this.samples.push({
+      t:performance.now(), ax:ac.x,ay:ac.y,az:ac.z,
+      gx:gy.x,gy:gy.y,gz:gy.z, compass:cmp,magB:mb,magG:mg,
+      lat:gps.lat,lon:gps.lon, speed, heading, dt
+    });
+    if(this.samples.length>this.MAX)this.samples.shift();
+  },
+  count(){return this.samples.length;}
+};
+
+// ═══════════════════════════════════════
+// SENSOR CALIBRATION — learns from captured data
+// Maps: sensor readings → actual GPS movement
+// ═══════════════════════════════════════
+const CAL={
+  // Learned multipliers
+  accelScale:0.5,   // accel magnitude → actual speed (m/s per m/s²)
+  gyroScale:1.0,    // gyro reading → actual turn rate
+  compassOff:0,     // compass offset from GPS heading
+  speedMult:1.0,    // predicted speed → actual speed
+  // Calibration accuracy
+  predictionErr:999, // average prediction error in metres
+  calibCount:0,
+  // Static bias (phone resting)
+  accelBias:{x:0,y:0,z:0},
+  gyroBias:{x:0,y:0,z:0},
+
+  // Learn from the last N samples of captured data
+  learn(){
+    const N=DATA.samples.length;
+    if(N<20)return;
+    const samples=DATA.samples.slice(-Math.min(100,N));
+
+    // 1. Compass offset: average difference between compass and GPS heading
+    let compOffSum=0,compOffN=0;
+    samples.forEach(s=>{
+      if(s.speed>0.5){ // only when moving
+        let diff=s.heading-s.compass;
+        if(diff>180)diff-=360;if(diff<-180)diff+=360;
+        compOffSum+=diff;compOffN++;
+      }
+    });
+    if(compOffN>5)this.compassOff=compOffSum/compOffN;
+
+    // 2. Accel scale: what accel magnitude corresponds to what speed
+    let accelSpeedPairs=[];
+    samples.forEach(s=>{
+      const aMag=Math.sqrt((s.ax-this.accelBias.x)**2+(s.ay-this.accelBias.y)**2);
+      if(s.speed>0.3)accelSpeedPairs.push({accel:aMag,speed:s.speed});
+    });
+    if(accelSpeedPairs.length>10){
+      const avgAccel=accelSpeedPairs.reduce((s,p)=>s+p.accel,0)/accelSpeedPairs.length;
+      const avgSpeed=accelSpeedPairs.reduce((s,p)=>s+p.speed,0)/accelSpeedPairs.length;
+      if(avgAccel>0.1)this.accelScale=avgSpeed/avgAccel;
+    }
+
+    // 3. Speed multiplier: predict speed from sensors, compare to GPS speed
+    let speedPredErr=0,speedN=0;
+    samples.forEach(s=>{
+      const aMag=Math.sqrt((s.ax-this.accelBias.x)**2+(s.ay-this.accelBias.y)**2);
+      const predSpeed=aMag*this.accelScale;
+      speedPredErr+=Math.abs(predSpeed-s.speed);speedN++;
+    });
+    if(speedN>5){
+      const avgErr=speedPredErr/speedN;
+      // Adjust speedMult to reduce error
+      const avgPred=samples.reduce((s,p)=>s+Math.sqrt((p.ax-this.accelBias.x)**2+(p.ay-this.accelBias.y)**2)*this.accelScale,0)/speedN;
+      const avgActual=samples.reduce((s,p)=>s+p.speed,0)/speedN;
+      if(avgPred>0.1)this.speedMult=avgActual/avgPred;
+    }
+
+    // 4. Gyro scale: how gyro.z relates to actual heading change
+    let gyroTurnPairs=[];
+    for(let i=1;i<samples.length;i++){
+      const s=samples[i],prev=samples[i-1];
+      if(s.speed>0.5&&prev.speed>0.5){
+        let hdgChange=s.heading-prev.heading;
+        if(hdgChange>180)hdgChange-=360;if(hdgChange<-180)hdgChange+=360;
+        if(Math.abs(prev.gz-this.gyroBias.z)>0.3){
+          gyroTurnPairs.push({gyro:prev.gz-this.gyroBias.z,turn:hdgChange/Math.max(s.dt,0.1)});
+        }
+      }
+    }
+    if(gyroTurnPairs.length>5){
+      const avgGyro=gyroTurnPairs.reduce((s,p)=>s+Math.abs(p.gyro),0)/gyroTurnPairs.length;
+      const avgTurn=gyroTurnPairs.reduce((s,p)=>s+Math.abs(p.turn),0)/gyroTurnPairs.length;
+      if(avgGyro>0.1)this.gyroScale=avgTurn/avgGyro;
+    }
+
+    // 5. Calculate overall prediction accuracy
+    let totalPredErr=0,predN=0;
+    for(let i=1;i<samples.length;i++){
+      const prev=samples[i-1],curr=samples[i];
+      // Predict where curr should be from prev's sensors
+      const pred=this.predictStep(prev,curr.dt);
+      if(pred){
+        const err=hav(pred,{lat:curr.lat,lon:curr.lon});
+        totalPredErr+=err;predN++;
+      }
+    }
+    if(predN>0)this.predictionErr=totalPredErr/predN;
+    this.calibCount++;
+  },
+
+  // Predict one step forward using calibrated sensor data
+  predictStep(sample,dt){
+    if(!sample)return null;
+    const aMag=Math.sqrt((sample.ax-this.accelBias.x)**2+(sample.ay-this.accelBias.y)**2);
+    const speed=aMag*this.accelScale*this.speedMult;
+    const hdg=(sample.compass+this.compassOff)*Math.PI/180;
+    const dLat=(speed*Math.cos(hdg)*dt)/111320;
+    const dLon=(speed*Math.sin(hdg)*dt)/(111320*Math.cos(sample.lat*Math.PI/180));
+    return{lat:sample.lat+dLat,lon:sample.lon+dLon};
+  },
+
+  // Predict position from current sensors (during GPS denial)
+  predict(pos,ac,gy,cmp,dt){
+    if(!pos)return pos;
+    // Use velocity continuation as primary (most reliable)
+    const N=DATA.samples.length;
+    if(N<5)return pos;
+    // Average velocity from last 10 GPS samples
+    const recent=DATA.samples.slice(-10);
+    let avgVLat=0,avgVLon=0;
+    for(let i=1;i<recent.length;i++){
+      const dt2=recent[i].dt||1;
+      avgVLat+=(recent[i].lat-recent[i-1].lat)/dt2;
+      avgVLon+=(recent[i].lon-recent[i-1].lon)/dt2;
+    }
+    avgVLat/=Math.max(1,recent.length-1);
+    avgVLon/=Math.max(1,recent.length-1);
+
+    // Secondary: sensor-based heading correction
+    const sensorHdg=(cmp+this.compassOff)*Math.PI/180;
+    const aMag=Math.sqrt((ac.x-this.accelBias.x)**2+(ac.y-this.accelBias.y)**2);
+    const sensorSpeed=aMag*this.accelScale*this.speedMult;
+    const sLat=(sensorSpeed*Math.cos(sensorHdg)*dt)/111320;
+    const sLon=(sensorSpeed*Math.sin(sensorHdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+
+    // Blend: 80% velocity continuation + 20% sensor prediction
+    // As calibration improves, sensor weight could increase
+    const sWeight=Math.min(0.4,Math.max(0.1,1-this.predictionErr/50));
+    const vWeight=1-sWeight;
+    return{
+      lat:pos.lat+avgVLat*dt*vWeight+sLat*sWeight,
+      lon:pos.lon+avgVLon*dt*vWeight+sLon*sWeight
+    };
+  },
+
+  // Calibrate static bias (phone still)
+  addStillSample(ac,gy){
+    const lr=0.1;
+    this.accelBias.x=this.accelBias.x*(1-lr)+ac.x*lr;
+    this.accelBias.y=this.accelBias.y*(1-lr)+ac.y*lr;
+    this.accelBias.z=this.accelBias.z*(1-lr)+(ac.z-9.8)*lr;
+    this.gyroBias.x=this.gyroBias.x*(1-lr)+gy.x*lr;
+    this.gyroBias.y=this.gyroBias.y*(1-lr)+gy.y*lr;
+    this.gyroBias.z=this.gyroBias.z*(1-lr)+gy.z*lr;
+  }
+};
+
+// ═══════════════════════════════════════
+// SENSORS + GPS
+// ═══════════════════════════════════════
+function initMap(){
+  map=L.map('map',{zoomControl:false}).setView([13.0827,80.2707],16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:19}).addTo(map);
+  setTimeout(()=>map.invalidateSize(),300);
+}
+function initGPS(){
+  log('Requesting GPS...','var(--amber)');
+  if(!('geolocation' in navigator)){useFallback();return;}
+  navigator.geolocation.watchPosition(p=>{
+    gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
+    if(phase==='idle'||phase==='recording'){
+      gpsSys=gpsTrue;
+      if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);log('GPS fix ±'+Math.round(gpsTrue.acc)+'m','var(--green)');$('bStart').disabled=false;$('bStart').style.opacity='1';}
+    }
+  },()=>useFallback(),{enableHighAccuracy:true,maximumAge:500,timeout:8000});
+}
+function useFallback(){
+  log('Simulated GPS walk','var(--amber)');
+  const base={lat:13.0827,lon:80.2707};
+  setInterval(()=>{
+    simStep++;
+    gpsTrue={lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.00001,lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.00001,acc:8+Math.random()*10};
+    if(phase==='idle'||phase==='recording'){gpsSys=gpsTrue;if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}}
+  },1000);
+}
+function initSensors(){
+  const sM=()=>window.addEventListener('devicemotion',e=>{
+    const a=e.acceleration||{},r=e.rotationRate||{};
+    accel={x:a.x||0,y:a.y||0,z:a.z||9.8};gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+  });
+  const sO=()=>window.addEventListener('deviceorientation',e=>{compass=e.alpha||0;magB=e.beta||0;magG=e.gamma||0;});
+  if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')sM();}).catch(()=>{});
+  else if('DeviceMotionEvent' in window)sM();
+  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')sO();}).catch(()=>{});
+  else if('DeviceOrientationEvent' in window)sO();
+  // Fallback sim
+  setInterval(()=>{
+    if(!accel.x&&!accel.y){
+      accel={x:(Math.random()-.5)*1.5,y:(Math.random()-.5)*1.5,z:9.8+(Math.random()-.5)*.3};
+      gyro={x:(Math.random()-.5)*5,y:(Math.random()-.5)*5,z:(Math.random()-.5)*5};
+      compass=compass+(Math.random()-.5)*2;magB=(Math.random()-.5)*30;magG=(Math.random()-.5)*20;
+    }
+  },500);
+}
+
+// ═══════════════════════════════════════
+// MAIN TICK — 1s interval, clean and simple
+// ═══════════════════════════════════════
+let lastTick=null;
+function tick(){
+  const now=performance.now();
+  const dt=lastTick?(now-lastTick)/1000:1;
+  lastTick=now;uiFrame++;
+  const doUI=(uiFrame%3===0);
+
+  if(phase==='recording'&&gpsSys){
+    // Record sensor data mapped to GPS position
+    DATA.record(accel,gyro,compass,magB,magG,gpsSys,dt);
+    // Every 10 samples, re-learn calibration
+    if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
+    // Update map
+    const ll=[gpsSys.lat,gpsSys.lon];
+    gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+    drawPos(ll,gpsSys.acc||5,'#00FF88');
+    if(lastPos)totalDist+=hav(lastPos,gpsSys);
+    lastPos={lat:gpsSys.lat,lon:gpsSys.lon};
+    drPos={lat:gpsSys.lat,lon:gpsSys.lon};
+  }
+
+  if(phase==='jammed'||phase==='spoofed'){
+    // PREDICT using calibrated sensor mapping
+    if(drPos){
+      drPos=CAL.predict(drPos,accel,gyro,compass,dt);
+      const ll=[drPos.lat,drPos.lon];
+      drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
+      if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
+      drawPos(ll,20,'#FFB800');
+    }
+    // Ground truth keeps recording
+    if(gpsTrue){gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();}
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+  }
+
+  // UI updates (every 3s)
+  if(doUI){
+    $('sAx').textContent=accel.x.toFixed(2);$('sAy').textContent=accel.y.toFixed(2);$('sAz').textContent=accel.z.toFixed(2);
+    $('sGx').textContent=gyro.x.toFixed(1);$('sGy').textContent=gyro.y.toFixed(1);$('sGz').textContent=gyro.z.toFixed(1);
+    $('sCmp').textContent=Math.round(compass)+'°';$('sMb').textContent=magB.toFixed(0);$('sMg').textContent=magG.toFixed(0);
+    // Sensor bars (normalize to 0-100%)
+    $('sAxB').style.width=Math.min(100,Math.abs(accel.x)*20+50)+'%';
+    $('sAyB').style.width=Math.min(100,Math.abs(accel.y)*20+50)+'%';
+    $('sAzB').style.width=Math.min(100,Math.abs(accel.z-9.8)*20+50)+'%';
+    $('sGxB').style.width=Math.min(100,Math.abs(gyro.x)*5+50)+'%';
+    $('sGyB').style.width=Math.min(100,Math.abs(gyro.y)*5+50)+'%';
+    $('sGzB').style.width=Math.min(100,Math.abs(gyro.z)*5+50)+'%';
+    $('sCmpB').style.width=(compass/360*100)+'%';
+    $('sMbB').style.width=Math.min(100,Math.abs(magB)+50)+'%';
+    $('sMgB').style.width=Math.min(100,Math.abs(magG)+50)+'%';
+    // Metrics
+    $('mSmp').textContent=DATA.count();
+    $('mDst').textContent=Math.round(totalDist);
+    $('ovSamp').textContent=DATA.count();
+    if(startTime)$('mTime').textContent=fmt((now-startTime)/1000);
+    // Speed from last GPS samples
+    if(DATA.samples.length>1){
+      const last=DATA.samples[DATA.samples.length-1];
+      $('mSpd').textContent=Math.round(last.speed*3.6);
+      $('mHdg').textContent=Math.round(last.heading)+'°';
+    }
+    // Calibration values
+    $('cAD').textContent=CAL.accelScale.toFixed(3);
+    $('cGT').textContent=CAL.gyroScale.toFixed(3);
+    $('cCA').textContent=Math.round(compass+CAL.compassOff)+'° (off:'+CAL.compassOff.toFixed(1)+')';
+    $('cSM').textContent=CAL.speedMult.toFixed(3);
+    $('cHO').textContent=CAL.compassOff.toFixed(1)+'°';
+    $('cPA').textContent=CAL.predictionErr<999?CAL.predictionErr.toFixed(1)+'m':'Learning...';
+    // Drift during denial
+    if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue){
+      const drift=hav(drPos,gpsTrue);
+      $('mDrf').textContent=drift.toFixed(1);
+      $('mDrf').style.color=drift<10?'var(--green)':drift<30?'var(--amber)':'var(--red)';
+      $('ovAcc').textContent=drift.toFixed(1)+'m';
+    }else{
+      $('ovAcc').textContent=gpsSys?'±'+Math.round(gpsSys.acc)+'m':'--';
+    }
+    $('ovMode').textContent=phase.toUpperCase();
+    if(uiFrame%8===0&&(drPos||gpsSys)){
+      const p=drPos||gpsSys;
+      map.panTo([p.lat,p.lon]);
+    }
+  }
+}
+
+// ═══════════════════════════════════════
+// MAP DRAWING
+// ═══════════════════════════════════════
+function drawPos(ll,r,c){
+  if(marker){marker.setLatLng(ll);marker.setStyle({color:c,fillColor:c});}
+  else marker=L.circleMarker(ll,{radius:7,color:c,fillColor:c,fillOpacity:1}).addTo(map);
+  if(circle){circle.setLatLng(ll);circle.setRadius(r);circle.setStyle({color:c});}
+  else circle=L.circle(ll,{radius:r,color:c,fillOpacity:.08,weight:1}).addTo(map);
+}
+
+// ═══════════════════════════════════════
+// CONTROLS
+// ═══════════════════════════════════════
+function calibrate(){
+  log('Calibrating sensors — hold phone still 5s...','var(--amber)');
+  initSensors();
+  const calIv=setInterval(()=>CAL.addStillSample(accel,gyro),100);
+  $('badge').textContent='CALIBRATING';$('badge').className='badge b-cal';
+  setTimeout(()=>{
+    clearInterval(calIv);
+    log('Bias: accel('+CAL.accelBias.x.toFixed(3)+','+CAL.accelBias.y.toFixed(3)+') gyro('+CAL.gyroBias.x.toFixed(2)+','+CAL.gyroBias.y.toFixed(2)+')','var(--green)');
+    log('Sensors calibrated','var(--green)');
+    $('badge').textContent='READY';$('badge').className='badge b-idle';
+  },5000);
+}
+function startRecording(){
+  if(!gpsTrue){log('No GPS fix','var(--red)');return;}
+  phase='recording';startTime=performance.now();lastTick=null;
+  $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
+  $('b1').style.display='none';$('b2').style.display='grid';
+  tickIv=setInterval(tick,1000);
+  log('Recording started — drive to build sensor map','var(--green)');
+}
+function jamGPS(){
+  if(phase!=='recording')return;
+  phase='jammed';drillStart=performance.now();gpsSys=null;
+  $('badge').textContent='GPS JAMMED';$('badge').className='badge b-jam';
+  $('b2').style.display='none';$('b3').style.display='grid';
+  $('alertJam').style.display='block';$('alertSpoof').style.display='none';
+  if(alertIv)clearInterval(alertIv);
+  alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jamT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
+  log('GPS JAMMED — predicting from '+DATA.count()+' sensor samples','var(--amber)');
+}
+function spoofGPS(){
+  if(phase!=='recording')return;
+  phase='spoofed';drillStart=performance.now();gpsSys=null;
+  $('badge').textContent='GPS SPOOFED';$('badge').className='badge b-spoof';
+  $('b2').style.display='none';$('b3').style.display='grid';
+  $('alertSpoof').style.display='block';$('alertJam').style.display='none';
+  if(alertIv)clearInterval(alertIv);
+  alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('spoofT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
+  log('GPS SPOOFED — fake signal rejected, using sensor map','var(--red)');
+}
+function resurface(){
+  if(phase!=='jammed'&&phase!=='spoofed')return;
+  const bs=(performance.now()-drillStart)/1000;
+  gpsSys=gpsTrue?{...gpsTrue}:null;
+  const drift=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
+  const distBlind=drills.length>0||lastPos?hav(lastPos||drPos,gpsTrue||drPos):0;
+  const dps=bs>0?drift/bs:0;
+  let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
+  drills.push({blindSec:bs,driftM:drift,distBlind,type:phase,grade,samples:DATA.count(),predAcc:CAL.predictionErr});
+  // Purple marker
+  if(gpsTrue){
+    L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1})
+      .bindPopup('Resurface #'+drills.length+'<br>Drift: '+drift.toFixed(1)+'m<br>Grade: '+grade).addTo(map);
+    if(drPos)L.polyline([[drPos.lat,drPos.lon],[gpsTrue.lat,gpsTrue.lon]],{color:'#A855F7',weight:2,dashArray:'3,4'}).addTo(map);
+  }
+  phase='recording';
+  $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
+  $('b3').style.display='none';$('b2').style.display='grid';
+  $('alertJam').style.display='none';$('alertSpoof').style.display='none';
+  log('RESURFACE #'+drills.length+': drift='+drift.toFixed(1)+'m ['+grade+'] blind='+fmt(bs)+' ('+DATA.count()+' samples, predAcc='+CAL.predictionErr.toFixed(1)+'m)','var(--purple)');
+  // Re-learn from new data
+  CAL.learn();
+}
+function endTest(){
+  if(alertIv)clearInterval(alertIv);clearInterval(tickIv);
+  if(phase==='jammed'||phase==='spoofed')resurface();
+  const dur=startTime?(performance.now()-startTime)/1000:0;
+  phase='idle';showReport(dur);
+}
+
+// ═══════════════════════════════════════
+// REPORT
+// ═══════════════════════════════════════
+function showReport(dur){
+  const avgD=drills.length?drills.reduce((s,d)=>s+d.driftM,0)/drills.length:0;
+  const maxD=drills.length?Math.max(...drills.map(d=>d.driftM)):0;
+  let dH=drills.map((d,i)=>`<div class="rr"><span>Drill ${i+1} (${fmt(d.blindSec)} ${d.type})</span><span class="rv" style="color:${d.driftM<20?'var(--green)':d.driftM<50?'var(--amber)':'var(--red)'}">${d.driftM.toFixed(1)}m [${d.grade}]</span></div>`).join('');
+  $('rptBody').innerHTML=`
+    <div class="rc"><div class="rct" style="color:var(--cyan)">TEST SUMMARY</div>
+      <div class="rr"><span>Duration</span><span class="rv">${fmt(dur)}</span></div>
+      <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
+      <div class="rr"><span>Sensor samples</span><span class="rv">${DATA.count()}</span></div>
+      <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--green)">CALIBRATION LEARNED</div>
+      <div class="rr"><span>Accel→Speed scale</span><span class="rv">${CAL.accelScale.toFixed(4)}</span></div>
+      <div class="rr"><span>Gyro→Turn scale</span><span class="rv">${CAL.gyroScale.toFixed(4)}</span></div>
+      <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOff.toFixed(1)}°</span></div>
+      <div class="rr"><span>Speed multiplier</span><span class="rv">${CAL.speedMult.toFixed(4)}</span></div>
+      <div class="rr"><span>Prediction accuracy</span><span class="rv" style="color:${CAL.predictionErr<5?'var(--green)':CAL.predictionErr<20?'var(--amber)':'var(--red)'}">${CAL.predictionErr.toFixed(1)}m</span></div>
+      <div class="rr"><span>Calibration rounds</span><span class="rv">${CAL.calibCount}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED RESULTS</div>
+      <div class="rr"><span>Avg drift</span><span class="rv" style="color:${avgD<20?'var(--green)':avgD<50?'var(--amber)':'var(--red)'}">${avgD.toFixed(1)}m</span></div>
+      <div class="rr"><span>Max drift</span><span class="rv" style="color:var(--red)">${maxD.toFixed(1)}m</span></div>
+      ${dH||'<div class="rr"><span>No drills</span></div>'}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--cyan)">SENSOR BIAS</div>
+      <div class="rr"><span>Accel bias</span><span class="rv">x:${CAL.accelBias.x.toFixed(3)} y:${CAL.accelBias.y.toFixed(3)} z:${CAL.accelBias.z.toFixed(3)}</span></div>
+      <div class="rr"><span>Gyro bias</span><span class="rv">x:${CAL.gyroBias.x.toFixed(2)} y:${CAL.gyroBias.y.toFixed(2)} z:${CAL.gyroBias.z.toFixed(2)}</span></div>
+    </div>`;
+  $('rpt').style.display='block';
+}
+function exportCSV(){
+  let c='Time,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,Lat,Lon,Speed,Heading\n';
+  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)}\n`;});
+  c+='\nCalibration\nAccelScale,'+CAL.accelScale+'\nGyroScale,'+CAL.gyroScale+'\nCompassOff,'+CAL.compassOff+'\nSpeedMult,'+CAL.speedMult+'\nPredictionErr,'+CAL.predictionErr+'\n';
+  c+='\nDrills\nDrill,Type,Blind(s),Drift(m),Grade,Samples\n';
+  drills.forEach((d,i)=>{c+=`${i+1},${d.type},${d.blindSec.toFixed(1)},${d.driftM.toFixed(1)},${d.grade},${d.samples}\n`;});
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v3-data.csv';a.click();
+}
+
+// ═══════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════
+window.addEventListener('load',()=>{
+  initMap();initGPS();
+  log('UPIN v3 ready — calibrate sensors, then start recording','var(--tm)');
+});
+return{calibrate,startRecording,jamGPS,spoofGPS,resurface,endTest,exportCSV};
+})();
+</script>
+</body>
+</html>
