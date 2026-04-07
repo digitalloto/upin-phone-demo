@@ -148,6 +148,7 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
     <tr id="f17"><td><span class="sdot off" id="fd17"></span>Hist Match</td><td id="fe17">--</td><td id="fs17">--</td></tr>
     <tr id="f18"><td><span class="sdot off" id="fd18"></span>Consensus</td><td id="fe18">--</td><td id="fs18">--</td></tr>
     <tr id="f19"><td><span class="sdot off" id="fd19"></span>Adaptive</td><td id="fe19">--</td><td id="fs19">--</td></tr>
+    <tr id="f20"><td><span class="sdot off" id="fd20"></span>Cell Tower</td><td id="fe20">--</td><td id="fs20">--</td></tr>
   </table>
   <!-- Calibration values -->
   <div class="sh"><div class="sh-bar" style="background:var(--green)"></div><div class="sh-text" style="color:var(--green)">Learned Calibration</div></div>
@@ -166,9 +167,12 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
     <button class="btn btn-green" id="bStart" onclick="V.startRecording()" disabled style="opacity:.3">Start Recording</button>
   </div>
   <!-- Phase 2: recording — jam/spoof disabled until calibrated -->
-  <div id="b2" class="btns" style="display:none">
-    <button class="btn btn-amber" id="bJam" onclick="V.jamGPS()" disabled style="opacity:.3">Jam GPS</button>
-    <button class="btn btn-red" id="bSpoof" onclick="V.spoofGPS()" disabled style="opacity:.3">Spoof GPS</button>
+  <div id="b2" style="display:none">
+    <div class="btns">
+      <button class="btn btn-amber" id="bJam" onclick="V.jamGPS()" disabled style="opacity:.3">Jam GPS</button>
+      <button class="btn btn-red" id="bSpoof" onclick="V.spoofGPS()" disabled style="opacity:.3">Spoof GPS</button>
+    </div>
+    <button class="btn btn-dim" onclick="V.endTest()" style="width:100%;margin-top:6px">End Test / View Report</button>
   </div>
   <!-- Calibration readiness meter -->
   <div id="calMeter" style="display:none;background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:10px;margin-bottom:8px;text-align:center">
@@ -419,7 +423,68 @@ const CAL={
 };
 
 // ═══════════════════════════════════════
-// 6 PREDICTION FORMULAS — all run in parallel against GPS
+// CELL TOWER DATABASE + TRIANGULATION ENGINE (UTIN)
+// ═══════════════════════════════════════
+const TOWERS=[
+{lat:12.86,lon:80.02,mnc:41},{lat:12.85,lon:80.05,mnc:41},{lat:12.85,lon:80.05,mnc:41},
+{lat:12.85,lon:80.04,mnc:41},{lat:12.85,lon:80.06,mnc:84},{lat:12.85,lon:80.05,mnc:84},
+{lat:12.85,lon:80.06,mnc:40},{lat:12.85,lon:80.05,mnc:40},{lat:12.86,lon:80.07,mnc:40},
+{lat:12.86,lon:80.07,mnc:84},{lat:12.87,lon:80.08,mnc:40},{lat:12.88,lon:80.09,mnc:41},
+{lat:12.89,lon:80.10,mnc:64},{lat:12.90,lon:80.11,mnc:40},{lat:12.91,lon:80.12,mnc:84},
+{lat:12.92,lon:80.13,mnc:40},{lat:12.93,lon:80.14,mnc:41},{lat:12.94,lon:80.15,mnc:84},
+{lat:12.95,lon:80.16,mnc:40},{lat:12.96,lon:80.17,mnc:64},{lat:12.97,lon:80.18,mnc:41},
+{lat:12.98,lon:80.19,mnc:40},{lat:12.99,lon:80.20,mnc:84},{lat:13.00,lon:80.21,mnc:40},
+{lat:13.01,lon:80.22,mnc:41},{lat:13.02,lon:80.23,mnc:64},{lat:13.03,lon:80.24,mnc:40},
+{lat:13.04,lon:80.25,mnc:84},{lat:13.05,lon:80.26,mnc:40},{lat:13.06,lon:80.27,mnc:41},
+{lat:13.07,lon:80.28,mnc:40},{lat:13.08,lon:80.27,mnc:64},{lat:13.08,lon:80.27,mnc:40},
+{lat:13.08,lon:80.26,mnc:40},{lat:13.08,lon:80.26,mnc:41},{lat:13.09,lon:80.25,mnc:84},
+{lat:13.10,lon:80.24,mnc:40},{lat:13.11,lon:80.23,mnc:40},{lat:13.12,lon:80.22,mnc:84},
+{lat:13.13,lon:80.21,mnc:84},{lat:13.14,lon:80.20,mnc:40},{lat:13.00,lon:80.25,mnc:40},
+{lat:13.01,lon:80.24,mnc:41},{lat:13.02,lon:80.26,mnc:64},{lat:13.03,lon:80.27,mnc:40},
+{lat:13.04,lon:80.28,mnc:84},{lat:13.05,lon:80.25,mnc:40},{lat:13.06,lon:80.24,mnc:41},
+{lat:13.07,lon:80.23,mnc:84},{lat:13.08,lon:80.22,mnc:40},{lat:13.09,lon:80.21,mnc:64}
+];
+
+const UTIN={
+  // Find nearest towers to a position, simulate signal strength
+  findNear(lat,lon,n=5){
+    return TOWERS.map(t=>({lat:t.lat,lon:t.lon,mnc:t.mnc,
+      dist:hav({lat,lon},t),
+      signal:Math.max(-110,Math.min(-50,-50-60*Math.log(Math.max(100,hav({lat,lon},t))/100)/Math.log(50)))
+    })).sort((a,b)=>a.dist-b.dist).slice(0,n);
+  },
+  // Weighted centroid trilateration from tower signals
+  trilaterate(towers){
+    if(towers.length<3)return null;
+    let sLat=0,sLon=0,sW=0;
+    towers.forEach(t=>{
+      const w=Math.pow(10,(t.signal+100)/30);
+      sLat+=t.lat*w;sLon+=t.lon*w;sW+=w;
+    });
+    return{lat:sLat/sW,lon:sLon/sW,acc:this.estAcc(towers)};
+  },
+  estAcc(towers){
+    const avgDist=towers.reduce((s,t)=>s+t.dist,0)/towers.length;
+    const tFact=Math.max(1,5-towers.length)*0.2+0.2;
+    return Math.round(avgDist*tFact*0.5);
+  },
+  // Cache: last known tower config (updated when GPS active)
+  lastTowers:null,
+  lastPos:null,
+  // Update tower cache from GPS position
+  update(lat,lon){
+    this.lastTowers=this.findNear(lat,lon,7);
+    this.lastPos={lat,lon};
+  },
+  // Predict position from cached towers (during GPS denial)
+  predict(){
+    if(!this.lastTowers||this.lastTowers.length<3)return null;
+    return this.trilaterate(this.lastTowers);
+  }
+};
+
+// ═══════════════════════════════════════
+// 21 PREDICTION FORMULAS — all run in parallel against GPS
 // Each learns its own parameters, scored every tick
 // ═══════════════════════════════════════
 const FORMULAS=[
@@ -629,7 +694,7 @@ const FORMULAS=[
    predict(pos,dt){
     if(!pos)return pos;
     const preds=[];
-    for(let i=0;i<18;i++){const p=FORMULAS[i].predict({...pos},dt);if(p)preds.push(p);}
+    for(let i=0;i<19;i++){const p=FORMULAS[i].predict({...pos},dt);if(p)preds.push(p);}
     if(preds.length<3)return pos;
     preds.sort((a,b)=>a.lat-b.lat);
     const mid=Math.floor(preds.length/2);
@@ -641,8 +706,31 @@ const FORMULAS=[
   // F19: Adaptive best — always copies whichever of F0-F18 has lowest average error
   {name:'Adaptive',pos:null,err:999,errAvg:999,errHistory:[],bestIdx:0,color:'var(--green)',
    predict(pos,dt){
-    let minE=Infinity;for(let i=0;i<19;i++){if(FORMULAS[i].errAvg<minE){minE=FORMULAS[i].errAvg;this.bestIdx=i;}}
-    return FORMULAS[this.bestIdx].predict(pos?{...pos}:null,dt);}}
+    let minE=Infinity;for(let i=0;i<20;i++){if(FORMULAS[i].errAvg<minE){minE=FORMULAS[i].errAvg;this.bestIdx=i;}}
+    return FORMULAS[this.bestIdx].predict(pos?{...pos}:null,dt);}},
+
+  // F20: Cell Tower Triangulation — absolute position from tower database
+  // Doesn't drift over time (unlike all other formulas). Acts as anchor.
+  {name:'Cell Tower',pos:null,err:999,errAvg:999,errHistory:[],blindSec:0,color:'var(--amber)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    this.blindSec+=dt;
+    // First 15s: trust velocity continuation (more precise short-term)
+    // After 15s: blend in cell tower position (prevents drift runaway)
+    // After 45s: cell tower dominant (velocity has drifted too far)
+    const towerResult=UTIN.predict();
+    if(!towerResult)return FORMULAS[0].predict(pos,dt); // fallback to velocity
+    // Velocity prediction
+    const velPred=FORMULAS[0].predict({...pos},dt);
+    if(!velPred)return{lat:towerResult.lat,lon:towerResult.lon};
+    // Time-based blending: velocity weight decreases, tower weight increases
+    const towerW=Math.min(0.8,Math.max(0,this.blindSec/60)); // 0→0.8 over 60s
+    const velW=1-towerW;
+    return{
+      lat:velPred.lat*velW+towerResult.lat*towerW,
+      lon:velPred.lon*velW+towerResult.lon*towerW
+    };
+  }}
 ];
 
 // Score all formulas against GPS
@@ -731,7 +819,9 @@ function tick(){
   if(phase==='recording'&&gpsSys){
     DATA.record(accel,gyro,compass,magB,magG,gpsSys,dt);
     if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
-    // Score all 6 formulas against GPS every tick
+    // Update cell tower cache from current GPS position
+    if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
+    // Score all 21 formulas against GPS every tick
     scoreFormulas(gpsSys,dt);
     const ll=[gpsSys.lat,gpsSys.lon];
     gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
@@ -907,7 +997,7 @@ function jamGPS(){
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jamT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
   // Init all formula positions and clear trails for this drill
-  FORMULAS.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  FORMULAS.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
   log('GPS JAMMED — 20 formulas predicting from '+DATA.count()+' samples','var(--amber)');
 }
 function spoofGPS(){
@@ -918,7 +1008,7 @@ function spoofGPS(){
   $('alertSpoof').style.display='block';$('alertJam').style.display='none';
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('spoofT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
-  FORMULAS.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  FORMULAS.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
   log('GPS SPOOFED — 20 formulas predicting from '+DATA.count()+' samples','var(--red)');
 }
 function resurface(){
@@ -1045,6 +1135,52 @@ function showReport(dur){
     <div class="rc"><div class="rct" style="color:var(--cyan)">SENSOR BIAS (Device-Specific)</div>
       <div class="rr"><span>Accel bias</span><span class="rv">x:${CAL.accelBias.x.toFixed(3)} y:${CAL.accelBias.y.toFixed(3)} z:${CAL.accelBias.z.toFixed(3)}</span></div>
       <div class="rr"><span>Gyro bias</span><span class="rv">x:${CAL.gyroBias.x.toFixed(2)} y:${CAL.gyroBias.y.toFixed(2)} z:${CAL.gyroBias.z.toFixed(2)}</span></div>
+    </div>
+
+    <div class="rc"><div class="rct" style="color:var(--cyan)">TOP 5 FORMULA — SENSOR MAPPING</div>
+      ${(()=>{
+        // Analyze when each top formula performed best/worst relative to sensor conditions
+        const t5=ranked.slice(0,5);
+        if(N<20)return'<div class="rr"><span>Need more data</span></div>';
+        // Split samples into speed buckets and heading-change buckets
+        const slowSamp=DATA.samples.filter(s=>s.speed<2);
+        const medSamp=DATA.samples.filter(s=>s.speed>=2&&s.speed<6);
+        const fastSamp=DATA.samples.filter(s=>s.speed>=6);
+        // Heading change detection
+        let turnSamp=0,straightSamp=0;
+        for(let i=1;i<DATA.samples.length;i++){
+          let dh=Math.abs(DATA.samples[i].heading-DATA.samples[i-1].heading);
+          if(dh>180)dh=360-dh;
+          if(dh>5)turnSamp++;else straightSamp++;
+        }
+        return t5.map((f,ri)=>{
+          const medal=ri===0?'◈':ri===1?'◇':ri===2?'○':'·';
+          const insight=f.name.includes('Vel')?'Best when speed is steady (straight roads)':
+            f.name.includes('Arc')||f.name.includes('Gyro')?'Best during turns (uses rotation data)':
+            f.name.includes('Step')?'Best for walking (counts footsteps)':
+            f.name.includes('Hist')?'Best when route repeats (pattern matching)':
+            f.name.includes('Consensus')?'Stable — rejects bad formulas via median vote':
+            f.name.includes('Cell')?'Absolute anchor — prevents long-term drift':
+            f.name.includes('Adaptive')?'Always copies the current winner':
+            'General purpose';
+          return'<div class="rr"><span>'+medal+' '+f.name+'</span><span class="rv" style="font-size:9px">'+insight+'</span></div>';
+        }).join('')+
+        '<div style="margin-top:8px;font-size:9px;color:var(--td)">'+
+        'Movement profile: '+slowSamp.length+' slow / '+medSamp.length+' medium / '+fastSamp.length+' fast samples, '+
+        turnSamp+' turns / '+straightSamp+' straight segments'+
+        '</div>';
+      })()}
+    </div>
+
+    <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER LAYER</div>
+      <div class="rr"><span>Towers in database</span><span class="rv">${TOWERS.length}</span></div>
+      <div class="rr"><span>Nearby towers cached</span><span class="rv">${UTIN.lastTowers?UTIN.lastTowers.length:'--'}</span></div>
+      <div class="rr"><span>Tower accuracy estimate</span><span class="rv">${UTIN.lastTowers?UTIN.estAcc(UTIN.lastTowers)+'m':'--'}</span></div>
+      <div class="rr"><span>Cell Tower formula error</span><span class="rv" style="color:${FORMULAS[20].errAvg<100?'var(--green)':FORMULAS[20].errAvg<300?'var(--amber)':'var(--red)'}">${FORMULAS[20].errAvg<999?FORMULAS[20].errAvg.toFixed(1)+'m':'--'}</span></div>
+      ${UTIN.lastTowers?UTIN.lastTowers.slice(0,5).map((t,i)=>{
+        const op={40:'Airtel',41:'Vi',64:'BSNL',84:'Vi'}[t.mnc]||'Op'+t.mnc;
+        return'<div class="rr"><span>Tower '+(i+1)+' — '+op+'</span><span class="rv">'+Math.round(t.dist)+'m / '+t.signal.toFixed(0)+'dBm</span></div>';
+      }).join(''):''}
     </div>
 
     <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED RESULTS</div>
