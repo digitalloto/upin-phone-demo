@@ -149,6 +149,7 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
     <tr id="f18"><td><span class="sdot off" id="fd18"></span>Consensus</td><td id="fe18">--</td><td id="fs18">--</td></tr>
     <tr id="f19"><td><span class="sdot off" id="fd19"></span>Adaptive</td><td id="fe19">--</td><td id="fs19">--</td></tr>
     <tr id="f20"><td><span class="sdot off" id="fd20"></span>Cell Tower</td><td id="fe20">--</td><td id="fs20">--</td></tr>
+    <tr id="f21"><td><span class="sdot off" id="fd21"></span>Strapdown INS</td><td id="fe21">--</td><td id="fs21">--</td></tr>
   </table>
   <!-- Calibration values -->
   <div class="sh"><div class="sh-bar" style="background:var(--green)"></div><div class="sh-text" style="color:var(--green)">Learned Calibration</div></div>
@@ -484,7 +485,164 @@ const UTIN={
 };
 
 // ═══════════════════════════════════════
-// 21 PREDICTION FORMULAS — all run in parallel against GPS
+// STRAPDOWN INS ENGINE — Soviet-era physics on a phone
+// Quaternion rotation, gravity removal, double integration, ZUPT
+// Same math as 1961 submarine navigation, just digital
+// ═══════════════════════════════════════
+const INS={
+  // Quaternion [w,x,y,z] — tracks phone orientation in world frame
+  q:[1,0,0,0],
+  // World-frame velocity (m/s) and position offset (metres from start)
+  vel:{n:0,e:0,d:0}, // North, East, Down
+  pos:{n:0,e:0,d:0},
+  // Reference position (lat/lon at INS start)
+  refLat:0,refLon:0,
+  // ZUPT state
+  zuptCount:0,
+  zuptThreshold:0.4, // m/s² — if accel magnitude is close to g, we're still
+  zuptActive:false,
+  // Calibration
+  gravMag:9.81,
+  initialized:false,
+  sampleCount:0,
+
+  init(lat,lon){
+    this.refLat=lat;this.refLon=lon;
+    this.q=[1,0,0,0];
+    this.vel={n:0,e:0,d:0};
+    this.pos={n:0,e:0,d:0};
+    this.initialized=true;
+    this.sampleCount=0;
+  },
+
+  // ── Quaternion math ────────────────
+  // Multiply two quaternions
+  qMul(a,b){
+    return[
+      a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+      a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+      a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+      a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]
+    ];
+  },
+  // Normalize quaternion to unit length
+  qNorm(q){
+    const m=Math.sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3])||1;
+    return[q[0]/m,q[1]/m,q[2]/m,q[3]/m];
+  },
+  // Rotate vector [x,y,z] by quaternion
+  qRotate(q,v){
+    const qv=[0,v[0],v[1],v[2]];
+    const qConj=[q[0],-q[1],-q[2],-q[3]];
+    const r=this.qMul(this.qMul(q,qv),qConj);
+    return[r[1],r[2],r[3]];
+  },
+  // Update quaternion from gyro rates (rad/s) over dt
+  qUpdate(gx,gy,gz,dt){
+    // Small angle quaternion delta
+    const hdt=dt*0.5;
+    const dq=[1,gx*hdt,gy*hdt,gz*hdt];
+    this.q=this.qNorm(this.qMul(this.q,dq));
+  },
+
+  // ── Main INS update ───────────────
+  // Takes raw sensor data, integrates to position
+  update(accelRaw,gyroRaw,accelGrav,dt){
+    if(!this.initialized||dt<=0||dt>2)return;
+    this.sampleCount++;
+
+    // 1. Update orientation from gyroscope
+    // Convert gyro from deg/s to rad/s, subtract bias
+    const gx=(gyroRaw.x-CAL.gyroBias.x)*Math.PI/180;
+    const gy=(gyroRaw.y-CAL.gyroBias.y)*Math.PI/180;
+    const gz=(gyroRaw.z-CAL.gyroBias.z)*Math.PI/180;
+    this.qUpdate(gx,gy,gz,dt);
+
+    // 2. Remove bias from accelerometer
+    const ax=accelRaw.x-CAL.accelBias.x;
+    const ay=accelRaw.y-CAL.accelBias.y;
+    const az=accelRaw.z-CAL.accelBias.z;
+
+    // 3. Rotate accel from phone body frame → world frame (NED)
+    const aWorld=this.qRotate(this.q,[ax,ay,az]);
+
+    // 4. Remove gravity (world frame: gravity is [0, 0, -9.81] in NED)
+    // After rotation, gravity should appear as ~9.81 in the down axis
+    const aFree={
+      n:aWorld[0],         // North acceleration (gravity-free)
+      e:aWorld[1],         // East acceleration (gravity-free)
+      d:aWorld[2]+this.gravMag  // Down: remove gravity (accel reads negative g)
+    };
+
+    // 5. ZUPT — Zero Velocity Update
+    // If acceleration magnitude ≈ gravity (phone is still), reset velocity
+    const aMag=Math.sqrt(ax*ax+ay*ay+az*az);
+    const gDiff=Math.abs(aMag-this.gravMag);
+    if(gDiff<this.zuptThreshold){
+      this.zuptCount++;
+      if(this.zuptCount>3){ // 3 consecutive still samples
+        this.zuptActive=true;
+        // Decay velocity toward zero (don't snap — smooth it)
+        this.vel.n*=0.5;
+        this.vel.e*=0.5;
+        this.vel.d*=0.5;
+      }
+    }else{
+      this.zuptCount=0;
+      this.zuptActive=false;
+    }
+
+    // 6. Integrate: acceleration → velocity
+    this.vel.n+=aFree.n*dt;
+    this.vel.e+=aFree.e*dt;
+    this.vel.d+=aFree.d*dt;
+
+    // 7. Integrate: velocity → position (metres offset from reference)
+    this.pos.n+=this.vel.n*dt;
+    this.pos.e+=this.vel.e*dt;
+    this.pos.d+=this.vel.d*dt;
+  },
+
+  // Convert NED position offset back to lat/lon
+  getLatLon(){
+    if(!this.initialized)return null;
+    // 1 degree lat ≈ 111320m, 1 degree lon ≈ 111320 * cos(lat)
+    const lat=this.refLat+this.pos.n/111320;
+    const lon=this.refLon+this.pos.e/(111320*Math.cos(this.refLat*Math.PI/180));
+    return{lat,lon};
+  },
+
+  // Get current speed (m/s)
+  getSpeed(){
+    return Math.sqrt(this.vel.n*this.vel.n+this.vel.e*this.vel.e);
+  },
+
+  // Reset velocity and position (for re-anchoring to GPS)
+  resetToGPS(lat,lon){
+    this.refLat=lat;this.refLon=lon;
+    this.pos={n:0,e:0,d:0};
+    // Keep velocity estimate but dampen it
+    this.vel.n*=0.3;this.vel.e*=0.3;this.vel.d*=0.3;
+  },
+
+  // Stats for report
+  stats(){
+    return{
+      initialized:this.initialized,
+      samples:this.sampleCount,
+      zupt:this.zuptActive,
+      speed:this.getSpeed().toFixed(2),
+      velN:this.vel.n.toFixed(3),
+      velE:this.vel.e.toFixed(3),
+      posN:this.pos.n.toFixed(1),
+      posE:this.pos.e.toFixed(1),
+      quat:this.q.map(v=>v.toFixed(3)).join(',')
+    };
+  }
+};
+
+// ═══════════════════════════════════════
+// 22 PREDICTION FORMULAS — all run in parallel against GPS
 // Each learns its own parameters, scored every tick
 // ═══════════════════════════════════════
 const FORMULAS=[
@@ -694,7 +852,7 @@ const FORMULAS=[
    predict(pos,dt){
     if(!pos)return pos;
     const preds=[];
-    for(let i=0;i<19;i++){const p=FORMULAS[i].predict({...pos},dt);if(p)preds.push(p);}
+    for(let i=0;i<20;i++){const p=FORMULAS[i].predict({...pos},dt);if(p)preds.push(p);}
     if(preds.length<3)return pos;
     preds.sort((a,b)=>a.lat-b.lat);
     const mid=Math.floor(preds.length/2);
@@ -706,7 +864,7 @@ const FORMULAS=[
   // F19: Adaptive best — always copies whichever of F0-F18 has lowest average error
   {name:'Adaptive',pos:null,err:999,errAvg:999,errHistory:[],bestIdx:0,color:'var(--green)',
    predict(pos,dt){
-    let minE=Infinity;for(let i=0;i<20;i++){if(FORMULAS[i].errAvg<minE){minE=FORMULAS[i].errAvg;this.bestIdx=i;}}
+    let minE=Infinity;for(let i=0;i<21;i++){if(FORMULAS[i].errAvg<minE){minE=FORMULAS[i].errAvg;this.bestIdx=i;}}
     return FORMULAS[this.bestIdx].predict(pos?{...pos}:null,dt);}},
 
   // F20: Cell Tower Triangulation — absolute position from tower database
@@ -730,6 +888,20 @@ const FORMULAS=[
       lat:velPred.lat*velW+towerResult.lat*towerW,
       lon:velPred.lon*velW+towerResult.lon*towerW
     };
+  }},
+
+  // F21: Strapdown INS — Soviet-era physics: quaternion rotation + gravity removal + double integration + ZUPT
+  // Pure Newton's laws: F=ma → a=F/m → v=∫a dt → x=∫v dt
+  // No GPS, no radio, no infrastructure. Just physics.
+  {name:'Strapdown INS',pos:null,err:999,errAvg:999,errHistory:[],color:'var(--red)',
+   predict(pos,dt){
+    if(!pos)return pos;
+    // Feed raw sensor data to INS engine
+    INS.update(accel,gyro,gravity,dt);
+    // Get INS position estimate
+    const insPos=INS.getLatLon();
+    if(!insPos)return pos;
+    return{lat:insPos.lat,lon:insPos.lon};
   }}
 ];
 
@@ -821,6 +993,11 @@ function tick(){
     if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
     // Update cell tower cache from current GPS position
     if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
+    // Reset INS to GPS position (prevents drift accumulation while GPS active)
+    if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);
+    else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
+    // Always feed INS with sensor data so it tracks orientation
+    INS.update(accel,gyro,gravity,dt);
     // Score all 21 formulas against GPS every tick
     scoreFormulas(gpsSys,dt);
     const ll=[gpsSys.lat,gpsSys.lon];
@@ -1097,7 +1274,7 @@ function showReport(dur){
       <div class="rr"><span>Total distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
       <div class="rr"><span>Sensor samples</span><span class="rv">${DATA.count()}</span></div>
       <div class="rr"><span>GPS denial drills</span><span class="rv">${drills.length}</span></div>
-      <div class="rr"><span>Active formulas</span><span class="rv">20</span></div>
+      <div class="rr"><span>Active formulas</span><span class="rv">22</span></div>
     </div>
 
     <div class="rc"><div class="rct" style="color:var(--green)">TOP 5 FORMULAS (Calibration Accuracy)</div>
@@ -1161,6 +1338,7 @@ function showReport(dur){
             f.name.includes('Hist')?'Best when route repeats (pattern matching)':
             f.name.includes('Consensus')?'Stable — rejects bad formulas via median vote':
             f.name.includes('Cell')?'Absolute anchor — prevents long-term drift':
+            f.name.includes('Strapdown')||f.name.includes('INS')?'Pure physics — best short-term (<30s), drifts long-term':
             f.name.includes('Adaptive')?'Always copies the current winner':
             'General purpose';
           return'<div class="rr"><span>'+medal+' '+f.name+'</span><span class="rv" style="font-size:9px">'+insight+'</span></div>';
@@ -1181,6 +1359,19 @@ function showReport(dur){
         const op={40:'Airtel',41:'Vi',64:'BSNL',84:'Vi'}[t.mnc]||'Op'+t.mnc;
         return'<div class="rr"><span>Tower '+(i+1)+' — '+op+'</span><span class="rv">'+Math.round(t.dist)+'m / '+t.signal.toFixed(0)+'dBm</span></div>';
       }).join(''):''}
+    </div>
+
+    <div class="rc"><div class="rct" style="color:var(--red)">STRAPDOWN INS (Soviet Physics)</div>
+      ${(()=>{const s=INS.stats();return`
+      <div class="rr"><span>INS initialized</span><span class="rv">${s.initialized?'Yes':'No'}</span></div>
+      <div class="rr"><span>Samples processed</span><span class="rv">${s.samples}</span></div>
+      <div class="rr"><span>ZUPT active</span><span class="rv" style="color:${s.zupt?'var(--green)':'var(--td)'}">${s.zupt?'Yes — velocity zeroed':'No — moving'}</span></div>
+      <div class="rr"><span>INS speed</span><span class="rv">${s.speed} m/s</span></div>
+      <div class="rr"><span>Velocity (N/E)</span><span class="rv">${s.velN} / ${s.velE} m/s</span></div>
+      <div class="rr"><span>Position offset (N/E)</span><span class="rv">${s.posN} / ${s.posE} m</span></div>
+      <div class="rr"><span>Quaternion</span><span class="rv" style="font-size:8px">${s.quat}</span></div>
+      <div class="rr"><span>INS formula error</span><span class="rv" style="color:${FORMULAS[21].errAvg<20?'var(--green)':FORMULAS[21].errAvg<100?'var(--amber)':'var(--red)'}">${FORMULAS[21].errAvg<999?FORMULAS[21].errAvg.toFixed(1)+'m':'--'}</span></div>
+      `;})()}
     </div>
 
     <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED RESULTS</div>
