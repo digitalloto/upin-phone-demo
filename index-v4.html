@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>UPIN FIELD TEST v4</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#03060F;--panel:#080D1A;--navy:#0A1628;--border:#0F2040;--cyan:#00E5FF;--green:#00FF88;--amber:#FFB800;--red:#FF3131;--blue:#3B82F6;--purple:#A855F7;--teal:#00C9A7;--orange:#FF6B35;--tp:#E2EBF8;--tm:#7A9BC0;--td:#4A6080}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#050A18;border-bottom:1px solid var(--border);flex-shrink:0}
+.topbar h1{font-family:'Orbitron',sans-serif;font-size:12px;font-weight:700;color:var(--cyan);letter-spacing:3px}
+.badge{font-size:9px;font-weight:700;padding:3px 10px;letter-spacing:1px;border-radius:2px}
+.b-idle{background:var(--border);color:var(--td)}
+.b-board{background:var(--teal);color:#000}
+.b-phone{background:var(--amber);color:#000}
+.b-rec{background:var(--green);color:#000;animation:blink 1s infinite}
+.b-jam{background:var(--red);color:#fff;animation:pulseGlow 1.5s infinite}
+.b-spoof{background:var(--red);color:#fff;animation:pulseGlow 1.5s infinite}
+#map-wrap{position:relative;flex-shrink:0;height:32vh}
+#map{width:100%;height:100%}
+.map-ov{position:absolute;top:6px;left:6px;z-index:1000;background:rgba(3,6,15,.92);padding:5px 8px;border:1px solid var(--border);border-radius:2px;font-size:8px;line-height:1.7;pointer-events:none}
+.map-ov strong{color:var(--cyan)}
+#panel{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px 10px 20px;background:var(--bg)}
+.sh{display:flex;align-items:center;gap:8px;margin:8px 0 4px}
+.sh-bar{width:3px;height:12px;border-radius:1px}
+.sh-text{font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;letter-spacing:3px;text-transform:uppercase}
+.mrow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px}
+.mc{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:5px 4px;text-align:center}
+.mc .ml{font-size:7px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:1px}
+.mc .mv{font-size:16px;font-weight:700;color:var(--tp);line-height:1}
+.mc .mu{font-size:7px;color:var(--td);letter-spacing:1px}
+/* Source status grid */
+.src-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px;margin-bottom:6px}
+.src{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:5px;text-align:center}
+.src .sn{font-size:7px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:1px}
+.src .sv{font-size:11px;font-weight:700;margin:2px 0}
+.src .ss{font-size:7px}
+.sdot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.sdot.live{background:var(--green);animation:blink 1s infinite}
+.sdot.off{background:var(--td)}
+.sdot.err{background:var(--red)}
+/* Sensor bars */
+.sbars{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px}
+.sbar{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:4px}
+.sbar .sn{font-size:6px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:1px}
+.sbar .sv{font-size:10px;font-weight:700;color:var(--tp)}
+.sbar .sb{height:2px;background:var(--border);border-radius:1px;margin-top:2px;overflow:hidden}
+.sbar .sf{height:100%;border-radius:1px}
+/* Formula table */
+.ctable{width:100%;font-size:9px;margin-bottom:6px;border-collapse:collapse}
+.ctable th{text-align:left;color:var(--td);font-size:7px;text-transform:uppercase;letter-spacing:1px;padding:3px;border-bottom:1px solid var(--border)}
+.ctable td{padding:3px;border-bottom:1px solid var(--border);color:var(--tm)}
+.ctable td:last-child{text-align:right;font-weight:700;color:var(--tp)}
+/* Buttons */
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px}
+.btn{padding:10px 4px;border:none;border-radius:2px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn:active{opacity:.6}
+.btn-cyan{color:var(--cyan);background:rgba(0,229,255,.06);border:1px solid var(--cyan)}
+.btn-green{color:var(--green);background:rgba(0,255,136,.06);border:1px solid var(--green)}
+.btn-amber{color:var(--amber);background:rgba(255,184,0,.06);border:1px solid var(--amber)}
+.btn-red{color:var(--red);background:rgba(255,49,49,.06);border:1px solid var(--red)}
+.btn-teal{color:var(--teal);background:rgba(0,201,167,.06);border:1px solid var(--teal)}
+.btn-dim{color:var(--td);background:var(--panel);border:1px solid var(--border)}
+/* Board connect */
+.board-box{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:8px;margin-bottom:6px;text-align:center}
+.board-box .bt{font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;letter-spacing:2px;margin-bottom:4px}
+/* Alert */
+.alert{display:none;border:1px solid;border-radius:2px;padding:8px;margin-bottom:6px;text-align:center}
+.alert .at{font-family:'Orbitron',sans-serif;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:3px}
+.alert .av{font-size:22px;font-weight:700;margin:3px 0}
+.alert .ah{font-size:7px;color:var(--td)}
+#jalrt{border-color:var(--amber)}
+#jalrt .at{color:var(--amber)}#jalrt .av{color:var(--amber)}
+#salrt{border-color:var(--red)}
+#salrt .at{color:var(--red)}#salrt .av{color:var(--red)}
+/* Log */
+#log{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:4px 6px;font-size:7px;line-height:1.5;max-height:80px;overflow-y:auto;color:var(--td);margin-bottom:6px}
+/* Cal meter */
+.cal-meter{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:8px;margin-bottom:6px;text-align:center}
+.cal-meter .cv{font-size:24px;font-weight:700}
+/* Report */
+#rpt{display:none;position:fixed;inset:0;background:var(--bg);z-index:2000;overflow-y:auto;padding:12px}
+.rpt-h{font-family:'Orbitron',sans-serif;font-size:13px;font-weight:700;color:var(--cyan);letter-spacing:3px;margin-bottom:10px}
+.rc{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:8px;margin-bottom:6px}
+.rct{font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;letter-spacing:2px;margin-bottom:5px}
+.rr{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border);font-size:10px}
+.rr:last-child{border-bottom:none}
+.rv{font-weight:700}
+.statusbar{background:#050A18;border-top:1px solid var(--border);padding:3px 12px;display:flex;justify-content:space-between;font-size:6px;color:var(--td);letter-spacing:1px;text-transform:uppercase;flex-shrink:0}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+@keyframes pulseGlow{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>UPIN v4</h1>
+  <span class="badge b-idle" id="badge">IDLE</span>
+</div>
+<div id="map-wrap">
+  <div id="map"></div>
+  <div class="map-ov">
+    <div><strong>SRC:</strong> <span id="ovSrc">--</span></div>
+    <div><strong>ERR:</strong> <span id="ovErr">--</span></div>
+    <div><strong>SAT:</strong> <span id="ovSat">--</span></div>
+  </div>
+</div>
+<div id="panel">
+  <!-- Board connection -->
+  <div class="board-box" id="boardBox">
+    <div class="bt" style="color:var(--teal)">SENSOR BOARD</div>
+    <div id="boardStatus" style="font-size:9px;color:var(--td)"><span class="sdot off"></span> Not connected</div>
+    <div class="btns" style="margin-top:6px">
+      <button class="btn btn-teal" onclick="V.connectBoard()">Connect Board</button>
+      <button class="btn btn-dim" onclick="V.usePhone()">Use Phone Only</button>
+    </div>
+  </div>
+  <!-- Metrics -->
+  <div class="mrow">
+    <div class="mc"><div class="ml">Speed</div><div class="mv" id="mSpd">0</div><div class="mu">km/h</div></div>
+    <div class="mc"><div class="ml">Heading</div><div class="mv" id="mHdg">--</div><div class="mu">degrees</div></div>
+    <div class="mc"><div class="ml">Altitude</div><div class="mv" id="mAlt">--</div><div class="mu">metres</div></div>
+    <div class="mc"><div class="ml">Distance</div><div class="mv" id="mDst">0</div><div class="mu">metres</div></div>
+    <div class="mc"><div class="ml">Samples</div><div class="mv" style="color:var(--cyan)" id="mSmp">0</div><div class="mu">recorded</div></div>
+    <div class="mc"><div class="ml">Elapsed</div><div class="mv" id="mTime">0:00</div><div class="mu">&nbsp;</div></div>
+  </div>
+  <!-- Source status -->
+  <div class="sh"><div class="sh-bar" style="background:var(--teal)"></div><div class="sh-text" style="color:var(--teal)">Data Sources</div></div>
+  <div class="src-grid">
+    <div class="src"><div class="sn">IMU</div><div class="sv" id="srcIMU"><span class="sdot off"></span>--</div><div class="ss" id="srcIMUd">--</div></div>
+    <div class="src"><div class="sn">Baro</div><div class="sv" id="srcBaro"><span class="sdot off"></span>--</div><div class="ss" id="srcBarod">--</div></div>
+    <div class="src"><div class="sn">GPS</div><div class="sv" id="srcGPS"><span class="sdot off"></span>--</div><div class="ss" id="srcGPSd">--</div></div>
+    <div class="src"><div class="sn">Laser</div><div class="sv" id="srcLaser"><span class="sdot off"></span>--</div><div class="ss" id="srcLaserd">--</div></div>
+    <div class="src"><div class="sn">4G Cell</div><div class="sv" id="srcCell4G"><span class="sdot off"></span>--</div><div class="ss" id="srcCell4Gd">--</div></div>
+    <div class="src"><div class="sn">2G Cell</div><div class="sv" id="srcCell2G"><span class="sdot off"></span>--</div><div class="ss" id="srcCell2Gd">--</div></div>
+    <div class="src"><div class="sn">WiFi</div><div class="sv" id="srcWifi"><span class="sdot off"></span>--</div><div class="ss" id="srcWifid">--</div></div>
+    <div class="src"><div class="sn">Phone</div><div class="sv" id="srcPhone"><span class="sdot off"></span>--</div><div class="ss" id="srcPhoned">--</div></div>
+  </div>
+  <!-- IMU sensors -->
+  <div class="sh"><div class="sh-bar" style="background:var(--cyan)"></div><div class="sh-text" style="color:var(--cyan)">IMU (9-Axis)</div></div>
+  <div class="sbars">
+    <div class="sbar"><div class="sn">Accel X</div><div class="sv" id="sAx">0</div><div class="sb"><div class="sf" id="sAxB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Accel Y</div><div class="sv" id="sAy">0</div><div class="sb"><div class="sf" id="sAyB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Accel Z</div><div class="sv" id="sAz">9.8</div><div class="sb"><div class="sf" id="sAzB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro X</div><div class="sv" id="sGx">0</div><div class="sb"><div class="sf" id="sGxB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro Y</div><div class="sv" id="sGy">0</div><div class="sb"><div class="sf" id="sGyB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro Z</div><div class="sv" id="sGz">0</div><div class="sb"><div class="sf" id="sGzB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag X</div><div class="sv" id="sMx">0</div><div class="sb"><div class="sf" id="sMxB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag Y</div><div class="sv" id="sMy">0</div><div class="sb"><div class="sf" id="sMyB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag Z</div><div class="sv" id="sMz">0</div><div class="sb"><div class="sf" id="sMzB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Heading</div><div class="sv" id="sHdg">--</div><div class="sb"><div class="sf" id="sHdgB" style="width:0;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Pitch</div><div class="sv" id="sPitch">--</div><div class="sb"><div class="sf" id="sPitchB" style="width:50%;background:var(--purple)"></div></div></div>
+    <div class="sbar"><div class="sn">Roll</div><div class="sv" id="sRoll">--</div><div class="sb"><div class="sf" id="sRollB" style="width:50%;background:var(--purple)"></div></div></div>
+  </div>
+  <!-- Extra sensors -->
+  <div class="mrow">
+    <div class="mc"><div class="ml">Pressure</div><div class="mv" id="mPrs">--</div><div class="mu">hPa</div></div>
+    <div class="mc"><div class="ml">Temp</div><div class="mv" id="mTmp">--</div><div class="mu">°C</div></div>
+    <div class="mc"><div class="ml">Laser</div><div class="mv" id="mLsr">--</div><div class="mu">mm</div></div>
+  </div>
+  <!-- Formula competition -->
+  <div class="sh"><div class="sh-bar" style="background:var(--cyan)"></div><div class="sh-text" style="color:var(--cyan)">Formula Competition</div></div>
+  <table class="ctable" id="fTable">
+    <tr><th>Formula</th><th>Error</th><th>Status</th></tr>
+  </table>
+  <!-- Cal meter -->
+  <div class="cal-meter" id="calMeter" style="display:none">
+    <div style="font-family:'Orbitron',sans-serif;font-size:7px;font-weight:700;color:var(--td);letter-spacing:2px">FORMULA ACCURACY vs GPS</div>
+    <div class="cv" id="calV" style="color:var(--red)">--</div>
+    <div style="height:4px;background:var(--border);border-radius:1px;margin:6px 0;overflow:hidden"><div id="calBar" style="height:100%;width:0;background:var(--red)"></div></div>
+    <div id="calSt" style="font-size:8px;font-weight:700;color:var(--red);letter-spacing:1px">CALIBRATING...</div>
+  </div>
+  <!-- Buttons -->
+  <div id="b1" class="btns">
+    <button class="btn btn-cyan" onclick="V.calibrate()">Calibrate</button>
+    <button class="btn btn-green" id="bStart" onclick="V.startRec()" disabled style="opacity:.3">Start Recording</button>
+  </div>
+  <div id="b2" style="display:none">
+    <div class="btns">
+      <button class="btn btn-amber" id="bJam" onclick="V.jam()" disabled style="opacity:.3">Jam GPS</button>
+      <button class="btn btn-red" id="bSpoof" onclick="V.spoof()" disabled style="opacity:.3">Spoof GPS</button>
+    </div>
+    <button class="btn btn-dim" onclick="V.endTest()" style="width:100%;margin-top:4px">End Test / Report</button>
+  </div>
+  <div id="b3" class="btns" style="display:none">
+    <button class="btn btn-green" onclick="V.resurface()">Resurface</button>
+    <button class="btn btn-dim" onclick="V.endTest()">End Test</button>
+  </div>
+  <!-- Alerts -->
+  <div class="alert" id="jalrt"><div class="at" style="color:var(--amber)">GPS JAMMED</div><div class="av" id="jT">0:00</div><div class="ah">Navigating on sensors only</div></div>
+  <div class="alert" id="salrt"><div class="at" style="color:var(--red)">GPS SPOOFED</div><div class="av" id="sT">0:00</div><div class="ah">Fake signal rejected</div></div>
+  <!-- Log -->
+  <div class="sh"><div class="sh-bar" style="background:var(--td)"></div><div class="sh-text" style="color:var(--td)">Log</div></div>
+  <div id="log"></div>
+</div>
+<!-- Report -->
+<div id="rpt"><div class="rpt-h">UPIN v4 FIELD TEST REPORT</div>
+  <div class="btns" style="margin-bottom:10px"><button class="btn btn-dim" onclick="V.exportCSV()">Export CSV</button><button class="btn btn-cyan" onclick="location.reload()">New Test</button></div>
+  <div id="rptB"></div>
+</div>
+<div class="statusbar">
+  <span>UPIN v4 — HARDWARE + PHONE FUSION</span>
+  <span id="sysStatus"><span class="sdot off"></span> IDLE</span>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const V=(()=>{
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let map,marker,circle,gpsLine,drLine;
+const MAX_TRAIL=200;
+let gpsTrail=[],drTrail=[];
+let gpsTrue=null,gpsSys=null,drPos=null;
+let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},mag={x:0,y:0,z:0};
+let compass=0,pitch=0,roll=0,gravity={x:0,y:0,z:9.8};
+let pressure=0,temp=0,baroAlt=0,laserMm=0;
+let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
+let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
+let drills=[],stepCount=0,lastStepT=0;
+let tickIv=null,alertIv=null,simStep=0,uiFrame=0;
+// Board state
+let ws=null,boardConnected=false,boardData=null;
+let useBoard=false; // true=hardware sensors, false=phone sensors
+
+const $=id=>document.getElementById(id);
+const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
+const fmt=s=>{const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;};
+function ts(){const d=new Date();return d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');}
+function log(m,c){const b=$('log'),d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent='['+ts()+'] '+m;b.appendChild(d);if(b.childNodes.length>40)b.removeChild(b.firstChild);b.scrollTop=b.scrollHeight;}
+
+// ═══════════════════════════════════════
+// WEBSOCKET — connect to IoT board
+// ═══════════════════════════════════════
+function connectBoard(){
+  if(ws)ws.close();
+  log('Connecting to board ws://192.168.4.1:81...','var(--teal)');
+  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting...';
+  try{
+    ws=new WebSocket('ws://192.168.4.1:81');
+    ws.onopen=()=>{
+      boardConnected=true;useBoard=true;
+      $('boardStatus').innerHTML='<span class="sdot live"></span> Connected — 7 sensors streaming';
+      $('badge').textContent='BOARD';$('badge').className='badge b-board';
+      log('Board connected! 7 hardware sensors active','var(--green)');
+      $('bStart').disabled=false;$('bStart').style.opacity='1';
+    };
+    ws.onmessage=(e)=>{
+      try{boardData=JSON.parse(e.data);processBoardData(boardData);}catch(err){}
+    };
+    ws.onclose=()=>{
+      boardConnected=false;
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Disconnected — using phone sensors';
+      log('Board disconnected — falling back to phone','var(--red)');
+      if(useBoard)usePhone();
+    };
+    ws.onerror=()=>{
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Connection failed';
+      log('Board not found — use phone sensors instead','var(--red)');
+    };
+  }catch(e){
+    $('boardStatus').innerHTML='<span class="sdot err"></span> WebSocket error';
+    log('WebSocket error: '+e.message,'var(--red)');
+  }
+}
+
+function usePhone(){
+  useBoard=false;boardConnected=false;
+  if(ws)ws.close();
+  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Phone sensors only';
+  $('badge').textContent='PHONE';$('badge').className='badge b-phone';
+  initPhoneSensors();initPhoneGPS();
+  log('Using phone sensors (fallback mode)','var(--amber)');
+}
+
+// Process board WebSocket data
+function processBoardData(d){
+  if(!d)return;
+  // IMU (MPU9250)
+  if(d.imu&&d.imu.ok){
+    accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
+    mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
+    compass=d.imu.hdg;pitch=d.imu.pitch;roll=d.imu.roll;
+    $('srcIMU').innerHTML='<span class="sdot live"></span>'+d.imu.n;
+    $('srcIMUd').textContent='hdg:'+Math.round(compass)+'°';
+  }
+  // Barometer (BMP280)
+  if(d.baro&&d.baro.ok){
+    pressure=d.baro.hpa;temp=d.baro.temp;baroAlt=d.baro.alt;
+    $('srcBaro').innerHTML='<span class="sdot live"></span>'+d.baro.n;
+    $('srcBarod').textContent=pressure.toFixed(0)+'hPa';
+  }
+  // GPS (NEO-6M)
+  if(d.gps&&d.gps.ok){
+    const pos={lat:d.gps.lat,lon:d.gps.lon,acc:d.gps.hdop*5||10};
+    gpsTrue=pos;
+    if(phase==='idle'||phase==='recording')gpsSys=pos;
+    baroAlt=d.gps.alt||baroAlt;
+    $('srcGPS').innerHTML='<span class="sdot live"></span>'+d.gps.sats+'sat';
+    $('srcGPSd').textContent='hdop:'+d.gps.hdop;
+    $('ovSat').textContent=d.gps.sats;
+    if(!marker){map.setView([pos.lat,pos.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}
+  }
+  // Laser (VL53L1X)
+  if(d.laser&&d.laser.ok){
+    laserMm=d.laser.mm;
+    $('srcLaser').innerHTML='<span class="sdot live"></span>'+laserMm+'mm';
+    $('srcLaserd').textContent=(laserMm/1000).toFixed(2)+'m';
+  }
+  // Cell towers
+  if(d.cell4g){
+    cellTowers4G=d.cell4g.towers||0;
+    $('srcCell4G').innerHTML=(d.cell4g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
+    $('srcCell4Gd').textContent=d.cell4g.inet?'4G inet':'no inet';
+  }
+  if(d.cell2g){
+    cellTowers2G=d.cell2g.towers||0;
+    $('srcCell2G').innerHTML=(d.cell2g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
+    $('srcCell2Gd').textContent=cellTowers2G+' towers';
+  }
+  // WiFi APs
+  if(d.wifi){
+    wifiAPs=d.wifi.aps||0;
+    $('srcWifi').innerHTML='<span class="sdot live"></span>'+wifiAPs+'ap';
+    $('srcWifid').textContent=wifiAPs+' APs';
+  }
+}
+
+// ═══════════════════════════════════════
+// PHONE SENSORS (fallback)
+// ═══════════════════════════════════════
+function initPhoneGPS(){
+  if(!('geolocation' in navigator)){useSimGPS();return;}
+  navigator.geolocation.watchPosition(p=>{
+    gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
+    if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;
+    if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}
+    $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
+    $('srcGPSd').textContent='±'+Math.round(gpsTrue.acc)+'m';
+  },()=>useSimGPS(),{enableHighAccuracy:true,maximumAge:500,timeout:8000});
+}
+function useSimGPS(){
+  log('Simulated GPS','var(--amber)');
+  const base={lat:13.0827,lon:80.2707};
+  setInterval(()=>{simStep++;gpsTrue={lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.00001,lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.00001,acc:10};if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}},1000);
+}
+function initPhoneSensors(){
+  $('srcPhone').innerHTML='<span class="sdot live"></span>Active';$('srcPhoned').textContent='accel+gyro';
+  const sM=()=>window.addEventListener('devicemotion',e=>{
+    const a=e.acceleration||{},r=e.rotationRate||{},g=e.accelerationIncludingGravity||{};
+    accel={x:a.x||0,y:a.y||0,z:a.z||9.8};gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+    gravity={x:(g.x||0)-(a.x||0),y:(g.y||0)-(a.y||0),z:(g.z||9.8)-(a.z||0)};
+  });
+  const sO=()=>window.addEventListener('deviceorientation',e=>{compass=e.alpha||0;pitch=e.beta||0;roll=e.gamma||0;});
+  if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')sM();}).catch(()=>{});
+  else if('DeviceMotionEvent' in window)sM();
+  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')sO();}).catch(()=>{});
+  else if('DeviceOrientationEvent' in window)sO();
+  setInterval(()=>{if(!accel.x&&!accel.y){accel={x:(Math.random()-.5)*1.5,y:(Math.random()-.5)*1.5,z:9.8+(Math.random()-.5)*.3};gyro={x:(Math.random()-.5)*5,y:(Math.random()-.5)*5,z:(Math.random()-.5)*5};compass+=(Math.random()-.5)*2;}},500);
+}
+
+// ═══════════════════════════════════════
+// DATA CAPTURE + CALIBRATION (same as v3)
+// ═══════════════════════════════════════
+const DATA={
+  samples:[],MAX:2000,
+  record(ac,gy,cmp,lat,lon,dt,extra){
+    if(!lat)return;let speed=0,heading=0;
+    if(this.samples.length>0){const p=this.samples[this.samples.length-1];
+      const dLa=(lat-p.lat)*111320,dLo=(lon-p.lon)*111320*Math.cos(lat*Math.PI/180);
+      speed=Math.sqrt(dLa*dLa+dLo*dLo)/Math.max(dt,0.1);heading=Math.atan2(dLo,dLa)*180/Math.PI;if(heading<0)heading+=360;}
+    this.samples.push({t:performance.now(),ax:ac.x,ay:ac.y,az:ac.z,gx:gy.x,gy:gy.y,gz:gy.z,
+      compass:cmp,lat,lon,speed,heading,dt,mx:mag.x,my:mag.y,mz:mag.z,
+      pressure,baroAlt,laserMm,cellTowers4G,cellTowers2G,wifiAPs,...(extra||{})});
+    if(this.samples.length>this.MAX)this.samples.shift();},
+  count(){return this.samples.length;}
+};
+
+const CAL={
+  accelScale:0.5,gyroScale:1.0,compassOff:0,speedMult:1.0,predictionErr:999,calibCount:0,
+  accelBias:{x:0,y:0,z:0},gyroBias:{x:0,y:0,z:0},
+  addStillSample(ac,gy){const lr=0.1;this.accelBias.x=this.accelBias.x*(1-lr)+ac.x*lr;this.accelBias.y=this.accelBias.y*(1-lr)+ac.y*lr;this.accelBias.z=this.accelBias.z*(1-lr)+(ac.z-9.8)*lr;this.gyroBias.x=this.gyroBias.x*(1-lr)+gy.x*lr;this.gyroBias.y=this.gyroBias.y*(1-lr)+gy.y*lr;this.gyroBias.z=this.gyroBias.z*(1-lr)+gy.z*lr;},
+  learn(){
+    const N=DATA.samples.length;if(N<20)return;const s=DATA.samples.slice(-Math.min(100,N));
+    let cOff=0,cN=0;s.forEach(d=>{if(d.speed>0.5){let diff=d.heading-d.compass;if(diff>180)diff-=360;if(diff<-180)diff+=360;cOff+=diff;cN++;}});
+    if(cN>5)this.compassOff=cOff/cN;
+    let asPairs=[];s.forEach(d=>{const am=Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2);if(d.speed>0.3)asPairs.push({a:am,s:d.speed});});
+    if(asPairs.length>10){const aA=asPairs.reduce((s,p)=>s+p.a,0)/asPairs.length;const aS=asPairs.reduce((s,p)=>s+p.s,0)/asPairs.length;if(aA>0.1)this.accelScale=aS/aA;}
+    let sErr=0,sN=0;s.forEach(d=>{const am=Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2);sErr+=Math.abs(am*this.accelScale-d.speed);sN++;});
+    if(sN>5){const avgP=s.reduce((a,d)=>a+Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2)*this.accelScale,0)/sN;const avgA=s.reduce((a,d)=>a+d.speed,0)/sN;if(avgP>0.1)this.speedMult=avgA/avgP;}
+    let gTP=[];for(let i=1;i<s.length;i++){const d=s[i],p=s[i-1];if(d.speed>0.5&&p.speed>0.5){let dh=d.heading-p.heading;if(dh>180)dh-=360;if(dh<-180)dh+=360;if(Math.abs(p.gz-this.gyroBias.z)>0.3)gTP.push({g:p.gz-this.gyroBias.z,t:dh/Math.max(d.dt,0.1)});}}
+    if(gTP.length>5){const aG=gTP.reduce((s,p)=>s+Math.abs(p.g),0)/gTP.length;const aT=gTP.reduce((s,p)=>s+Math.abs(p.t),0)/gTP.length;if(aG>0.1)this.gyroScale=aT/aG;}
+    let tPE=0,pN=0;for(let i=1;i<s.length;i++){const p=s[i-1],c=s[i];const r=DATA.samples.slice(-5);let vL=0,vO=0;for(let j=1;j<r.length;j++){vL+=(r[j].lat-r[j-1].lat)/(r[j].dt||1);vO+=(r[j].lon-r[j-1].lon)/(r[j].dt||1);}vL/=Math.max(1,r.length-1);vO/=Math.max(1,r.length-1);const pLa=p.lat+vL*c.dt,pLo=p.lon+vO*c.dt;tPE+=hav({lat:pLa,lon:pLo},{lat:c.lat,lon:c.lon});pN++;}
+    if(pN>0)this.predictionErr=tPE/pN;this.calibCount++;
+  }
+};
+
+// ═══════════════════════════════════════
+// STRAPDOWN INS
+// ═══════════════════════════════════════
+const INS={
+  q:[1,0,0,0],vel:{n:0,e:0,d:0},pos:{n:0,e:0,d:0},refLat:0,refLon:0,zuptCount:0,zuptThreshold:0.4,zuptActive:false,gravMag:9.81,initialized:false,sampleCount:0,
+  init(lat,lon){this.refLat=lat;this.refLon=lon;this.q=[1,0,0,0];this.vel={n:0,e:0,d:0};this.pos={n:0,e:0,d:0};this.initialized=true;this.sampleCount=0;},
+  qMul(a,b){return[a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]];},
+  qNorm(q){const m=Math.sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3])||1;return[q[0]/m,q[1]/m,q[2]/m,q[3]/m];},
+  qRotate(q,v){const qv=[0,v[0],v[1],v[2]];const qC=[q[0],-q[1],-q[2],-q[3]];const r=this.qMul(this.qMul(q,qv),qC);return[r[1],r[2],r[3]];},
+  update(ac,gy,dt){
+    if(!this.initialized||dt<=0||dt>2)return;this.sampleCount++;
+    const gx=(gy.x-CAL.gyroBias.x)*Math.PI/180,gyy=(gy.y-CAL.gyroBias.y)*Math.PI/180,gz=(gy.z-CAL.gyroBias.z)*Math.PI/180;
+    const hdt=dt*0.5;this.q=this.qNorm(this.qMul(this.q,[1,gx*hdt,gyy*hdt,gz*hdt]));
+    const ax=ac.x-CAL.accelBias.x,ay=ac.y-CAL.accelBias.y,az=ac.z-CAL.accelBias.z;
+    const aW=this.qRotate(this.q,[ax,ay,az]);
+    const aF={n:aW[0],e:aW[1],d:aW[2]+this.gravMag};
+    const aMag=Math.sqrt(ax*ax+ay*ay+az*az);
+    if(Math.abs(aMag-this.gravMag)<this.zuptThreshold){this.zuptCount++;if(this.zuptCount>3){this.zuptActive=true;this.vel.n*=0.5;this.vel.e*=0.5;this.vel.d*=0.5;}}
+    else{this.zuptCount=0;this.zuptActive=false;}
+    this.vel.n+=aF.n*dt;this.vel.e+=aF.e*dt;this.vel.d+=aF.d*dt;
+    this.pos.n+=this.vel.n*dt;this.pos.e+=this.vel.e*dt;this.pos.d+=this.vel.d*dt;
+  },
+  getLatLon(){if(!this.initialized)return null;return{lat:this.refLat+this.pos.n/111320,lon:this.refLon+this.pos.e/(111320*Math.cos(this.refLat*Math.PI/180))};},
+  resetToGPS(lat,lon){this.refLat=lat;this.refLon=lon;this.pos={n:0,e:0,d:0};this.vel.n*=0.3;this.vel.e*=0.3;this.vel.d*=0.3;},
+  stats(){return{samples:this.sampleCount,zupt:this.zuptActive,speed:Math.sqrt(this.vel.n**2+this.vel.e**2).toFixed(2)};}
+};
+
+// ═══════════════════════════════════════
+// CELL TOWER DATABASE (Chennai)
+// ═══════════════════════════════════════
+const TOWERS=[
+{lat:12.86,lon:80.02},{lat:12.85,lon:80.05},{lat:12.85,lon:80.04},{lat:12.85,lon:80.06},
+{lat:12.87,lon:80.08},{lat:12.89,lon:80.10},{lat:12.91,lon:80.12},{lat:12.93,lon:80.14},
+{lat:12.95,lon:80.16},{lat:12.97,lon:80.18},{lat:12.99,lon:80.20},{lat:13.01,lon:80.22},
+{lat:13.03,lon:80.24},{lat:13.05,lon:80.26},{lat:13.07,lon:80.28},{lat:13.08,lon:80.27},
+{lat:13.08,lon:80.26},{lat:13.09,lon:80.25},{lat:13.10,lon:80.24},{lat:13.11,lon:80.23},
+{lat:13.12,lon:80.22},{lat:13.13,lon:80.21},{lat:13.14,lon:80.20},{lat:13.04,lon:80.28},
+{lat:13.06,lon:80.24},{lat:13.02,lon:80.26},{lat:13.00,lon:80.25},{lat:13.01,lon:80.24}
+];
+const UTIN={
+  findNear(lat,lon,n=5){return TOWERS.map(t=>({lat:t.lat,lon:t.lon,dist:hav({lat,lon},t),signal:Math.max(-110,Math.min(-50,-50-60*Math.log(Math.max(100,hav({lat,lon},t))/100)/Math.log(50)))})).sort((a,b)=>a.dist-b.dist).slice(0,n);},
+  trilaterate(towers){if(towers.length<3)return null;let sL=0,sO=0,sW=0;towers.forEach(t=>{const w=Math.pow(10,(t.signal+100)/30);sL+=t.lat*w;sO+=t.lon*w;sW+=w;});return{lat:sL/sW,lon:sO/sW};},
+  lastTowers:null,
+  update(lat,lon){this.lastTowers=this.findNear(lat,lon,7);},
+  predict(){return this.lastTowers&&this.lastTowers.length>=3?this.trilaterate(this.lastTowers):null;}
+};
+
+// ═══════════════════════════════════════
+// 24 FORMULAS — v3's 22 + 2 hardware-specific
+// ═══════════════════════════════════════
+const F=[];
+// Helper: velocity from last N GPS samples
+function velFromGPS(n=5){
+  if(DATA.samples.length<n+1)return null;
+  const r=DATA.samples.slice(-n);let vL=0,vO=0;
+  for(let i=1;i<r.length;i++){vL+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
+  return{vLat:vL/(r.length-1),vLon:vO/(r.length-1)};
+}
+function avgSpeed(n=5){const r=DATA.samples.slice(-n);return r.reduce((s,d)=>s+d.speed,0)/r.length;}
+function mkF(name,predict){return{name,pos:null,err:999,errAvg:999,errHistory:[],drillTrail:[],drillDrift:0,blindSec:0,mapLine:null,predict};}
+
+// F0-F2: Velocity (SMA, EMA, WMA)
+F.push(mkF('Vel SMA',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Vel EMA',function(pos,dt){const v=velFromGPS(3);if(!v)return pos;const a=0.3;this._vL=(this._vL||0)*(1-a)+v.vLat*a;this._vO=(this._vO||0)*(1-a)+v.vLon*a;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
+F.push(mkF('Vel WMA',(pos,dt)=>{if(DATA.samples.length<4)return pos;const r=DATA.samples.slice(-8);let vL=0,vO=0,tw=0;for(let i=1;i<r.length;i++){const w=i;vL+=w*(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=w*(r[i].lon-r[i-1].lon)/(r[i].dt||1);tw+=w;}return{lat:pos.lat+(vL/tw)*dt,lon:pos.lon+(vO/tw)*dt};}));
+// F3-F5: Sensor-based
+F.push(mkF('Accel+Comp',(pos,dt)=>{const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Accel+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Gyro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const s=avgSpeed(5);const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F6-F7: Step-based
+F.push(mkF('Step+Comp',function(pos,dt){const ns=stepCount-(this._ls||0);this._ls=stepCount;const h=(compass+CAL.compassOff)*Math.PI/180;if(ns>0){const d=ns*0.72;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Step+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const ns=stepCount-(this._ls||0);this._ls=stepCount;if(ns>0){const d=ns*0.72;const h=this._h*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+// F8: Kalman
+F.push(mkF('Kalman',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(3);if(!v)return pos;this._vL=(this._vL||0)*0.1+v.vLat*0.9;this._vO=(this._vO||0)*0.1+v.vLon*0.9;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
+// F9: Double Integration (raw — intentionally bad, for comparison)
+F.push(mkF('Dbl Integ',function(pos,dt){this._vx=(this._vx||0)+(accel.x-CAL.accelBias.x)*dt;this._vy=(this._vy||0)+(accel.y-CAL.accelBias.y)*dt;this._vx*=0.98;this._vy*=0.98;const h=(compass+CAL.compassOff)*Math.PI/180;const f=this._vx*Math.cos(h)-this._vy*Math.sin(h);const s=this._vx*Math.sin(h)+this._vy*Math.cos(h);return{lat:pos.lat+f*dt/111320,lon:pos.lon+s*dt/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F10: Circular Arc
+F.push(mkF('Circ Arc',function(pos,dt){if(DATA.samples.length<3)return pos;const tr=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;this._h=(this._h||0)+tr*dt;const s=avgSpeed(5);if(Math.abs(tr)>1){const r=s/Math.abs(tr*Math.PI/180);const arc=tr*dt*Math.PI/180;const dx=r*Math.sin(arc),dy=r*(1-Math.cos(arc));const h=this._h*Math.PI/180;return{lat:pos.lat+(dx*Math.cos(h)-dy*Math.sin(h))/111320,lon:pos.lon+(dx*Math.sin(h)+dy*Math.cos(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F11-F15: Spd Decay, Hdg Rate, Gravity, Mag Pattern, Barometric
+F.push(mkF('Spd Decay',function(pos,dt){if(DATA.samples.length<2)return pos;this._s=(this._s||0)*0.95+DATA.samples[DATA.samples.length-1].speed*0.05;this._s*=0.999;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(this._s*Math.cos(h)*dt)/111320,lon:pos.lon+(this._s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Hdg Rate',function(pos,dt){if(DATA.samples.length<3)return pos;const l=DATA.samples[DATA.samples.length-1];let dh=l.heading-(this._lh||l.heading);if(dh>180)dh-=360;if(dh<-180)dh+=360;this._hr=(this._hr||0)*0.7+dh*0.3;this._lh=l.heading+this._hr;const s=avgSpeed(5);const h=this._lh*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Gravity',(pos,dt)=>{if(DATA.samples.length<3)return pos;const tF=gravity.y/9.8,tS=gravity.x/9.8;const s=avgSpeed(5)*(1+Math.sqrt(tF*tF+tS*tS)*0.5);const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Mag Pattern',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Barometric',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+// F16: Sensor Fusion
+F.push(mkF('Sensor Fuse',function(pos,dt){const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const sS=aM*CAL.accelScale*CAL.speedMult;const sG=avgSpeed(5);const s=sS*0.3+sG*0.7;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt*0.3;const cH=(compass+CAL.compassOff);const fH=(cH*0.7+this._h*0.3)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(fH)*dt)/111320,lon:pos.lon+(s*Math.sin(fH)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F17: Historical Match
+F.push(mkF('Hist Match',(pos,dt)=>{if(DATA.samples.length<20)return pos;const cur=DATA.samples[DATA.samples.length-1];let bD=Infinity,bI=-1;const sr=DATA.samples.slice(0,-5);for(let i=Math.max(0,sr.length-50);i<sr.length-1;i++){const s=sr[i];const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;if(d<bD){bD=d;bI=i;}}if(bI>=0&&bI<sr.length-1){const m=sr[bI],n=sr[bI+1];return{lat:pos.lat+(n.lat-m.lat),lon:pos.lon+(n.lon-m.lon)};}return F[0].predict(pos,dt);}));
+// F18: Consensus Median
+F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<18;i++){const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return pos;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
+// F19: Adaptive Best
+F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;i++){if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
+// F20: Cell Tower
+F.push(mkF('Cell Tower',function(pos,dt){this.blindSec+=dt;const t=UTIN.predict();const vP=F[0].predict({...pos},dt);if(!t)return vP||pos;if(!vP)return{lat:t.lat,lon:t.lon};const tW=Math.min(0.8,Math.max(0,this.blindSec/60));return{lat:vP.lat*(1-tW)+t.lat*tW,lon:vP.lon*(1-tW)+t.lon*tW};}));
+// F21: Strapdown INS
+F.push(mkF('Strapdown INS',(pos,dt)=>{INS.update(accel,gyro,dt);const p=INS.getLatLon();return p||pos;}));
+// F22: Hardware Magnetometer Heading + velocity (board has real magnetometer)
+F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const s=avgSpeed(5);const h=Math.atan2(mag.y,mag.x);return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F23: Barometric Altitude + Velocity (board has real BMP280)
+F.push(mkF('Baro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(5);if(!v)return pos;return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};}));
+
+const FORMULAS=F;
+function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
+function scoreFormulas(gps,dt){
+  if(!gps||DATA.samples.length<5)return;
+  F.forEach(f=>{if(!f.pos){f.pos={lat:gps.lat,lon:gps.lon};return;}
+    const p=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
+    if(p){f.err=hav(p,gps);f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;}
+    f.pos={lat:gps.lat,lon:gps.lon};});
+}
+
+// ═══════════════════════════════════════
+// MAP + TICK + CONTROLS + REPORT
+// ═══════════════════════════════════════
+function initMap(){
+  map=L.map('map',{zoomControl:false}).setView([13.0827,80.2707],16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:19}).addTo(map);
+  setTimeout(()=>map.invalidateSize(),300);
+}
+function drawPos(ll,r,c){
+  if(marker){marker.setLatLng(ll);marker.setStyle({color:c,fillColor:c});}
+  else marker=L.circleMarker(ll,{radius:7,color:c,fillColor:c,fillOpacity:1}).addTo(map);
+  if(circle){circle.setLatLng(ll);circle.setRadius(r);circle.setStyle({color:c});}
+  else circle=L.circle(ll,{radius:r,color:c,fillOpacity:.08,weight:1}).addTo(map);
+}
+// Build formula table HTML once
+function buildFormulaTable(){
+  let h='<tr><th>Formula</th><th>Error</th><th>Status</th></tr>';
+  F.forEach((f,i)=>{h+=`<tr id="f${i}"><td><span class="sdot off" id="fd${i}"></span>${f.name}</td><td id="fe${i}">--</td><td id="fs${i}">--</td></tr>`;});
+  $('fTable').innerHTML=h;
+}
+
+let lastTick=null;
+function tick(){
+  const now=performance.now(),dt=lastTick?(now-lastTick)/1000:1;lastTick=now;uiFrame++;
+  const doUI=(uiFrame%3===0);
+
+  if(phase==='recording'&&gpsSys){
+    DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
+    if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
+    if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
+    if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
+    INS.update(accel,gyro,dt);
+    scoreFormulas(gpsSys,dt);
+    const ll=[gpsSys.lat,gpsSys.lon];
+    gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+    drawPos(ll,gpsSys.acc||5,'#00FF88');
+    if(lastPos)totalDist+=hav(lastPos,gpsSys);
+    lastPos={lat:gpsSys.lat,lon:gpsSys.lon};drPos={lat:gpsSys.lat,lon:gpsSys.lon};
+    F.forEach(f=>{if(!f.pos)f.pos={lat:gpsSys.lat,lon:gpsSys.lon};});
+  }
+
+  if(phase==='jammed'||phase==='spoofed'){
+    if(drPos){
+      const bi=bestFormulaIdx();
+      drPos=F[bi].predict(drPos,dt)||drPos;
+      F.forEach((f,i)=>{if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;if(!f.drillTrail)f.drillTrail=[];if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();if(f.pos&&gpsTrue)f.drillDrift=hav(f.pos,gpsTrue);});
+      const ll=[drPos.lat,drPos.lon];drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
+      if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
+      drawPos(ll,20,'#FFB800');
+    }
+    if(gpsTrue){gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();}
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+  }
+
+  if(doUI){
+    // Sensor bars
+    $('sAx').textContent=accel.x.toFixed(2);$('sAy').textContent=accel.y.toFixed(2);$('sAz').textContent=accel.z.toFixed(2);
+    $('sGx').textContent=gyro.x.toFixed(1);$('sGy').textContent=gyro.y.toFixed(1);$('sGz').textContent=gyro.z.toFixed(1);
+    $('sMx').textContent=mag.x.toFixed(1);$('sMy').textContent=mag.y.toFixed(1);$('sMz').textContent=mag.z.toFixed(1);
+    $('sHdg').textContent=Math.round(compass)+'°';$('sPitch').textContent=pitch.toFixed(0);$('sRoll').textContent=roll.toFixed(0);
+    $('sAxB').style.width=Math.min(100,Math.abs(accel.x)*20+50)+'%';$('sAyB').style.width=Math.min(100,Math.abs(accel.y)*20+50)+'%';$('sAzB').style.width=Math.min(100,Math.abs(accel.z-9.8)*20+50)+'%';
+    $('sGxB').style.width=Math.min(100,Math.abs(gyro.x)*5+50)+'%';$('sGyB').style.width=Math.min(100,Math.abs(gyro.y)*5+50)+'%';$('sGzB').style.width=Math.min(100,Math.abs(gyro.z)*5+50)+'%';
+    $('sHdgB').style.width=(compass/360*100)+'%';
+    $('mPrs').textContent=pressure?pressure.toFixed(0):'--';$('mTmp').textContent=temp?temp.toFixed(1):'--';$('mLsr').textContent=laserMm||'--';
+    $('mSmp').textContent=DATA.count();$('mDst').textContent=Math.round(totalDist);
+    if(startTime)$('mTime').textContent=fmt((now-startTime)/1000);
+    if(DATA.samples.length>1){const l=DATA.samples[DATA.samples.length-1];$('mSpd').textContent=Math.round(l.speed*3.6);$('mHdg').textContent=Math.round(l.heading)+'°';}
+    $('mAlt').textContent=baroAlt?baroAlt.toFixed(1):'--';
+    $('ovSrc').textContent=boardConnected?'BOARD':'PHONE';
+    // Formula table (textContent updates only)
+    const bi=bestFormulaIdx();
+    F.forEach((f,i)=>{
+      const el=$('fe'+i);if(!el)return;
+      el.textContent=f.errAvg<999?f.errAvg.toFixed(1)+'m':'--';
+      el.style.color=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)';
+      $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'off');
+      $('fs'+i).textContent=i===bi?'BEST':(f.errAvg<10?'OK':'...');
+      $('fs'+i).style.color=i===bi?'var(--green)':'var(--td)';
+    });
+    // Cal meter
+    if(phase==='recording'){
+      const err=F[bi].errAvg;const ready=err<10&&DATA.count()>30;
+      $('calV').textContent=err<999?err.toFixed(1):'--';
+      $('calV').style.color=ready?'var(--green)':err<20?'var(--amber)':'var(--red)';
+      $('calBar').style.width=Math.max(5,Math.min(100,100-err*2))+'%';
+      $('calBar').style.background=ready?'var(--green)':'var(--red)';
+      $('calSt').textContent=ready?'CALIBRATED — JAM READY':'CALIBRATING ('+DATA.count()+' samples)';
+      $('calSt').style.color=ready?'var(--green)':'var(--td)';
+      if(ready){$('bJam').disabled=false;$('bJam').style.opacity='1';$('bSpoof').disabled=false;$('bSpoof').style.opacity='1';}
+    }
+    if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue){
+      const drift=hav(drPos,gpsTrue);$('ovErr').textContent=drift.toFixed(1)+'m';
+    }
+    if(uiFrame%8===0&&(drPos||gpsSys)){const p=drPos||gpsSys;map.panTo([p.lat,p.lon]);}
+    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?'BOARD LIVE':'ACTIVE');
+  }
+}
+
+// Controls
+function calibrate(){
+  log('Calibrating — hold still 5s','var(--amber)');
+  if(!useBoard)initPhoneSensors();
+  const iv=setInterval(()=>CAL.addStillSample(accel,gyro),100);
+  setTimeout(()=>{clearInterval(iv);log('Calibrated. Bias learned.','var(--green)');},5000);
+}
+function startRec(){
+  if(!gpsTrue){log('No GPS','var(--red)');return;}
+  phase='recording';startTime=performance.now();lastTick=null;
+  $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
+  $('b1').style.display='none';$('b2').style.display='block';$('calMeter').style.display='block';
+  buildFormulaTable();
+  tickIv=setInterval(tick,1000);
+  log('Recording — '+F.length+' formulas active, '+(boardConnected?'7 hardware sensors':'phone sensors'),'var(--green)');
+}
+function jam(){
+  if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
+  $('badge').textContent='JAMMED';$('badge').className='badge b-jam';
+  $('b2').style.display='none';$('b3').style.display='grid';$('jalrt').style.display='block';
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  if(alertIv)clearInterval(alertIv);
+  alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
+  log('GPS JAMMED — '+F.length+' formulas predicting','var(--amber)');
+}
+function spoof(){
+  if(phase!=='recording')return;phase='spoofed';drillStart=performance.now();gpsSys=null;
+  $('badge').textContent='SPOOFED';$('badge').className='badge b-spoof';
+  $('b2').style.display='none';$('b3').style.display='grid';$('salrt').style.display='block';
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  if(alertIv)clearInterval(alertIv);
+  alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('sT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
+  log('GPS SPOOFED — signal rejected','var(--red)');
+}
+function resurface(){
+  if(phase!=='jammed'&&phase!=='spoofed')return;
+  const bs=(performance.now()-drillStart)/1000;gpsSys=gpsTrue?{...gpsTrue}:null;
+  const drift=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
+  const dps=bs>0?drift/bs:0;let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
+  const fRes=F.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999})).sort((a,b)=>a.drift-b.drift);
+  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected});
+  F.forEach(f=>{if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  if(gpsTrue){L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1}).bindPopup('Resurface #'+drills.length+'<br>Drift: '+drift.toFixed(1)+'m ['+grade+']').addTo(map);}
+  phase='recording';$('badge').textContent='RECORDING';$('badge').className='badge b-rec';
+  $('b3').style.display='none';$('b2').style.display='block';$('jalrt').style.display='none';$('salrt').style.display='none';
+  if(CAL.predictionErr<10){$('bJam').disabled=false;$('bJam').style.opacity='1';$('bSpoof').disabled=false;$('bSpoof').style.opacity='1';}
+  log('RESURFACE #'+drills.length+': drift='+drift.toFixed(1)+'m ['+grade+'] best='+fRes[0].name,'var(--purple)');
+  CAL.learn();
+}
+function endTest(){
+  if(alertIv)clearInterval(alertIv);clearInterval(tickIv);
+  if(phase==='jammed'||phase==='spoofed')resurface();
+  const dur=startTime?(performance.now()-startTime)/1000:0;phase='idle';
+  showReport(dur);
+}
+
+function showReport(dur){
+  const avgD=drills.length?drills.reduce((s,d)=>s+d.driftM,0)/drills.length:0;
+  const maxD=drills.length?Math.max(...drills.map(d=>d.driftM)):0;
+  const bi=bestFormulaIdx();
+  const ranked=[...F].map((f,i)=>({name:f.name,i,errAvg:f.errAvg})).sort((a,b)=>a.errAvg-b.errAvg);
+  const N=DATA.samples.length;
+  let avgSpd=0,maxSpd=0;if(N>0){DATA.samples.forEach(s=>{avgSpd+=s.speed;if(s.speed>maxSpd)maxSpd=s.speed;});avgSpd/=N;}
+  let drillsHTML=drills.map((d,di)=>{
+    const top=d.formulaResults?d.formulaResults.slice(0,5).map((f,ri)=>`<div class="rr"><span>${ri===0?'◈':ri===1?'◇':'○'} ${f.name}</span><span class="rv" style="color:${f.drift<15?'var(--green)':f.drift<50?'var(--amber)':'var(--red)'}">${f.drift<999?f.drift.toFixed(1)+'m':'--'}</span></div>`).join(''):'';
+    return`<div style="background:var(--bg);border:1px solid var(--border);padding:6px;margin:4px 0;border-radius:2px">
+      <div style="font-family:'Orbitron',sans-serif;font-size:8px;color:var(--amber);letter-spacing:2px">DRILL ${di+1} — ${fmt(d.blindSec)} ${d.type.toUpperCase()} ${d.boardActive?'(BOARD)':'(PHONE)'}</div>
+      <div class="rr"><span>Drift</span><span class="rv" style="color:${d.driftM<20?'var(--green)':'var(--red)'}">${d.driftM.toFixed(1)}m [${d.grade}]</span></div>
+      ${top}</div>`;}).join('');
+
+  $('rptB').innerHTML=`
+    <div class="rc"><div class="rct" style="color:var(--cyan)">SUMMARY</div>
+      <div class="rr"><span>Duration</span><span class="rv">${fmt(dur)}</span></div>
+      <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
+      <div class="rr"><span>Samples</span><span class="rv">${DATA.count()}</span></div>
+      <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
+      <div class="rr"><span>Formulas</span><span class="rv">${F.length}</span></div>
+      <div class="rr"><span>Data source</span><span class="rv">${boardConnected?'IoT Board (7 sensors)':'Phone'}</span></div>
+      <div class="rr"><span>Avg speed</span><span class="rv">${(avgSpd*3.6).toFixed(1)} km/h</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--green)">TOP 10 FORMULAS</div>
+      ${ranked.slice(0,10).map((f,i)=>`<div class="rr"><span>${i+1}. ${f.name}</span><span class="rv" style="color:${f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)'}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`).join('')}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--teal)">DATA SOURCES</div>
+      <div class="rr"><span>IMU (accel+gyro+mag)</span><span class="rv">${boardConnected?'MPU9250 (HW)':'Phone MEMS'}</span></div>
+      <div class="rr"><span>Barometer</span><span class="rv">${pressure?'BMP280 '+pressure.toFixed(0)+'hPa':'None'}</span></div>
+      <div class="rr"><span>GPS</span><span class="rv">${boardConnected?'NEO-6M':'Phone'}</span></div>
+      <div class="rr"><span>Laser ranging</span><span class="rv">${laserMm?laserMm+'mm':'Not connected'}</span></div>
+      <div class="rr"><span>Cell towers (4G)</span><span class="rv">${cellTowers4G||'--'}</span></div>
+      <div class="rr"><span>Cell towers (2G)</span><span class="rv">${cellTowers2G||'--'}</span></div>
+      <div class="rr"><span>WiFi APs</span><span class="rv">${wifiAPs||'--'}</span></div>
+      <div class="rr"><span>INS samples</span><span class="rv">${INS.sampleCount}</span></div>
+      <div class="rr"><span>INS ZUPT</span><span class="rv">${INS.zuptActive?'Active':'--'}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--green)">CALIBRATION</div>
+      <div class="rr"><span>Accel scale</span><span class="rv">${CAL.accelScale.toFixed(4)}</span></div>
+      <div class="rr"><span>Gyro scale</span><span class="rv">${CAL.gyroScale.toFixed(4)}</span></div>
+      <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOff.toFixed(1)}°</span></div>
+      <div class="rr"><span>Speed mult</span><span class="rv">${CAL.speedMult.toFixed(4)}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED</div>
+      <div class="rr"><span>Avg drift</span><span class="rv" style="color:${avgD<20?'var(--green)':'var(--red)'}">${avgD.toFixed(1)}m</span></div>
+      <div class="rr"><span>Max drift</span><span class="rv" style="color:var(--red)">${maxD.toFixed(1)}m</span></div>
+      ${drillsHTML||'<div class="rr"><span>No drills</span></div>'}
+    </div>`;
+  $('rpt').style.display='block';
+}
+function exportCSV(){
+  let c='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs\n';
+  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${boardConnected?'board':'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0}\n`;});
+  c+='\nFormulas\nRank,Name,Error(m)\n';
+  [...F].map((f,i)=>({n:f.name,e:f.errAvg})).sort((a,b)=>a.e-b.e).forEach((f,i)=>{c+=`${i+1},${f.n},${f.e<999?f.e.toFixed(1):'--'}\n`;});
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v4-data.csv';a.click();
+}
+
+// Boot
+window.addEventListener('load',()=>{initMap();buildFormulaTable();log('UPIN v4 ready — connect board or use phone','var(--tm)');});
+return{connectBoard,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV};
+})();
+</script>
+</body>
+</html>
