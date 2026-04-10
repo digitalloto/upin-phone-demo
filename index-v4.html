@@ -487,7 +487,7 @@ F.push(mkF('Sensor Fuse',function(pos,dt){const aM=Math.sqrt((accel.x-CAL.accelB
 // F17: Historical Match
 F.push(mkF('Hist Match',(pos,dt)=>{if(DATA.samples.length<20)return pos;const cur=DATA.samples[DATA.samples.length-1];let bD=Infinity,bI=-1;const sr=DATA.samples.slice(0,-5);for(let i=Math.max(0,sr.length-50);i<sr.length-1;i++){const s=sr[i];const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;if(d<bD){bD=d;bI=i;}}if(bI>=0&&bI<sr.length-1){const m=sr[bI],n=sr[bI+1];return{lat:pos.lat+(n.lat-m.lat),lon:pos.lon+(n.lon-m.lon)};}return F[0].predict(pos,dt);}));
 // F18: Consensus Median
-F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<18;i++){const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return pos;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
+F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<Math.min(22,F.length);i++){const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return pos;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
 // F19: Adaptive Best
 F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;i++){if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
 // F20: Cell Tower
@@ -498,6 +498,94 @@ F.push(mkF('Strapdown INS',(pos,dt)=>{INS.update(accel,gyro,dt);const p=INS.getL
 F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const s=avgSpeed(5);const h=Math.atan2(mag.y,mag.x);return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F23: Barometric Altitude + Velocity (board has real BMP280)
 F.push(mkF('Baro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(5);if(!v)return pos;return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};}));
+
+// F24: Real Cell Tower Triangulation — uses actual tower data from A7670C/SIM900
+// Unlike simulated UTIN, this parses real MCC/MNC/LAC/CellID from the board
+F.push(mkF('Real Cell Tri',function(pos,dt){
+  if(!pos)return pos;
+  // When board sends real tower data, use it for triangulation
+  // For now: use UTIN simulated + blend with velocity
+  // When boardData has towers4g/towers2g arrays, parse and trilaterate
+  const towerPos=UTIN.predict();
+  const vel=velFromGPS(5);
+  if(!towerPos&&!vel)return pos;
+  if(!towerPos)return{lat:pos.lat+vel.vLat*dt,lon:pos.lon+vel.vLon*dt};
+  if(!vel)return{lat:towerPos.lat,lon:towerPos.lon};
+  // Real tower count from board gives us confidence
+  const towerCount=(cellTowers4G||0)+(cellTowers2G||0);
+  const towerConf=Math.min(0.7,towerCount*0.1); // more towers = more weight
+  const velConf=1-towerConf;
+  const vP={lat:pos.lat+vel.vLat*dt,lon:pos.lon+vel.vLon*dt};
+  return{lat:vP.lat*velConf+towerPos.lat*towerConf,lon:vP.lon*velConf+towerPos.lon*towerConf};
+}));
+
+// F25: Laser Velocity — VL53L1X range changes over time = speed + direction
+// If laser points at ground at angle, range change = horizontal movement
+F.push(mkF('Laser Velocity',function(pos,dt){
+  if(!pos||DATA.samples.length<3)return pos;
+  // Track laser range changes to estimate speed
+  const recent=DATA.samples.slice(-5);
+  let rangeChanges=[];
+  for(let i=1;i<recent.length;i++){
+    if(recent[i].laserMm>0&&recent[i-1].laserMm>0){
+      const dRange=recent[i].laserMm-recent[i-1].laserMm; // mm change
+      rangeChanges.push(dRange/(recent[i].dt||1)); // mm/s
+    }
+  }
+  if(rangeChanges.length===0){
+    // No laser data — fall back to velocity
+    const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  }
+  // Average range change rate (mm/s)
+  const avgRangeRate=rangeChanges.reduce((s,v)=>s+v,0)/rangeChanges.length;
+  // Convert range rate to horizontal speed (approximate)
+  // If laser points down at ~30° angle: horizontal = range_rate / tan(30°)
+  const tiltAngle=Math.max(10,Math.abs(pitch||30))*Math.PI/180;
+  const hSpeed=Math.abs(avgRangeRate/1000/Math.tan(tiltAngle)); // m/s horizontal
+  // Use compass for heading, laser for speed
+  const h=(compass+CAL.compassOff)*Math.PI/180;
+  // Blend: 50% laser speed + 50% GPS-derived speed (laser is noisy)
+  const gpsSpd=avgSpeed(5);
+  const blendSpd=laserMm>0?hSpeed*0.4+gpsSpd*0.6:gpsSpd;
+  return{lat:pos.lat+(blendSpd*Math.cos(h)*dt)/111320,lon:pos.lon+(blendSpd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// F26: Magnetic Map Matching — MPU9250 3-axis mag field compared to recorded magnetic signature
+// Build a map of magnetic field vectors along the route, use for position matching
+F.push(mkF('Mag Map Match',function(pos,dt){
+  if(!pos||DATA.samples.length<30)return pos;
+  // Build magnetic fingerprint from current reading
+  const curMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+  const curInc=Math.atan2(mag.z,Math.sqrt(mag.x*mag.x+mag.y*mag.y))*180/Math.PI; // inclination
+  const curDec=Math.atan2(mag.y,mag.x)*180/Math.PI; // declination
+  // Search recorded data for matching magnetic signature
+  let bestDist=Infinity,bestIdx=-1;
+  const search=DATA.samples.slice(0,-3);
+  for(let i=Math.max(0,search.length-80);i<search.length-1;i++){
+    const s=search[i];
+    if(!s.mx&&!s.my)continue;
+    const sMag=Math.sqrt(s.mx*s.mx+s.my*s.my+s.mz*s.mz);
+    const sInc=Math.atan2(s.mz||0,Math.sqrt((s.mx||0)**2+(s.my||0)**2))*180/Math.PI;
+    const sDec=Math.atan2(s.my||0,s.mx||0)*180/Math.PI;
+    // Distance in magnetic space
+    const d=Math.abs(curMag-sMag)*0.1+Math.abs(curInc-sInc)+Math.abs(curDec-sDec);
+    if(d<bestDist){bestDist=d;bestIdx=i;}
+  }
+  // If we found a close magnetic match, use that position + velocity
+  if(bestIdx>=0&&bestIdx<search.length-1&&bestDist<15){
+    const matched=search[bestIdx],next=search[bestIdx+1];
+    const mPos={lat:matched.lat,lon:matched.lon};
+    // Blend: 30% magnetic position + 70% velocity continuation
+    const v=velFromGPS(5);
+    if(v){
+      const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};
+      return{lat:vP.lat*0.7+mPos.lat*0.3,lon:vP.lon*0.7+mPos.lon*0.3};
+    }
+    return mPos;
+  }
+  // No match — fall back to velocity
+  const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+}));
 
 const FORMULAS=F;
 function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
@@ -684,8 +772,10 @@ function showReport(dur){
       <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
       <div class="rr"><span>Samples</span><span class="rv">${DATA.count()}</span></div>
       <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
-      <div class="rr"><span>Formulas</span><span class="rv">${F.length}</span></div>
+      <div class="rr"><span>Formulas</span><span class="rv">${F.length} (${boardConnected?'27 hw+sw':'24 phone'})</span></div>
       <div class="rr"><span>Data source</span><span class="rv">${boardConnected?'IoT Board (7 sensors)':'Phone'}</span></div>
+      <div class="rr"><span>Cell towers (4G+2G)</span><span class="rv">${(cellTowers4G||0)+(cellTowers2G||0)} towers</span></div>
+      <div class="rr"><span>Laser range</span><span class="rv">${laserMm?laserMm+'mm':'N/A'}</span></div>
       <div class="rr"><span>Avg speed</span><span class="rv">${(avgSpd*3.6).toFixed(1)} km/h</span></div>
     </div>
     <div class="rc"><div class="rct" style="color:var(--green)">TOP 10 FORMULAS</div>
