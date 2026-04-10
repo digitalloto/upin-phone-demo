@@ -1273,6 +1273,248 @@ F.push(mkF('Bat (laser cor)',(pos,dt)=>{const p=ANIMAL.bat.predict(pos,laserMm,c
 F.push(mkF('Animal Fusion',(pos,dt)=>{const p=ANIMAL.predictDenied(pos,dt);return p||pos;}));
 
 // ═══════════════════════════════════════
+// FINANCIAL INDICATOR FORMULAS
+// Same math as trading charts applied to positioning
+// ═══════════════════════════════════════
+
+// Helper: SMA of array with window
+function sma(arr,w){const s=arr.slice(-w);return s.length?s.reduce((a,b)=>a+b,0)/s.length:0;}
+// Helper: EMA of array with alpha
+function ema(arr,alpha){if(!arr.length)return 0;let e=arr[0];for(let i=1;i<arr.length;i++)e=alpha*arr[i]+(1-alpha)*e;return e;}
+// Helper: get speed/heading history arrays from DATA
+function getSpeedHist(){return DATA.samples.slice(-40).map(s=>s.speed);}
+function getHeadingHist(){return DATA.samples.slice(-40).map(s=>s.heading);}
+function getVelLatHist(){const s=DATA.samples.slice(-40);const v=[];for(let i=1;i<s.length;i++)v.push((s[i].lat-s[i-1].lat)/(s[i].dt||1));return v;}
+function getVelLonHist(){const s=DATA.samples.slice(-40);const v=[];for(let i=1;i<s.length;i++)v.push((s[i].lon-s[i-1].lon)/(s[i].dt||1));return v;}
+
+// F33: SMA Trend — fast SMA(5) speed + fast EMA(0.25) heading
+F.push(mkF('SMA Trend',(pos,dt)=>{
+  if(!pos||DATA.samples.length<5)return pos;
+  const spd=sma(getSpeedHist(),5);
+  const hdg=ema(getHeadingHist(),0.25)*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// F34: SMA Smooth — slow SMA(30) speed + slow EMA(0.05) heading
+F.push(mkF('SMA Smooth',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const spd=sma(getSpeedHist(),30);
+  const hdg=ema(getHeadingHist(),0.05)*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// F35: MACD — velocity momentum (fast EMA - slow EMA = signal)
+F.push(mkF('MACD',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const vLat=getVelLatHist(),vLon=getVelLonHist();
+  if(vLat.length<3)return pos;
+  const fastLat=ema(vLat,0.2),slowLat=ema(vLat,0.05);
+  const fastLon=ema(vLon,0.2),slowLon=ema(vLon,0.05);
+  const macdLat=fastLat-slowLat,macdLon=fastLon-slowLon;
+  return{lat:pos.lat+(fastLat+macdLat*0.5)*dt,lon:pos.lon+(fastLon+macdLon*0.5)*dt};
+}));
+
+// F36: Bollinger — SMA(20) position + mean reversion pull
+F.push(mkF('Bollinger',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const pts=DATA.samples.slice(-20);
+  const mLat=pts.reduce((s,p)=>s+p.lat,0)/pts.length;
+  const mLon=pts.reduce((s,p)=>s+p.lon,0)/pts.length;
+  const vLat=getVelLatHist(),vLon=getVelLonHist();
+  const vL=vLat.length?vLat[vLat.length-1]:0,vO=vLon.length?vLon[vLon.length-1]:0;
+  const pull=0.02;
+  return{lat:pos.lat+vL*dt+(mLat-pos.lat)*pull,lon:pos.lon+vO*dt+(mLon-pos.lon)*pull};
+}));
+
+// F37: VWMA — confidence-weighted position average
+F.push(mkF('VWMA',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const pts=DATA.samples.slice(-20);
+  // Weight by speed (higher speed = more confident GPS reading)
+  let sLat=0,sLon=0,sW=0;
+  pts.forEach(p=>{const w=Math.max(0.1,p.speed);sLat+=p.lat*w;sLon+=p.lon*w;sW+=w;});
+  if(sW<0.1)return pos;
+  const vL=getVelLatHist(),vO=getVelLonHist();
+  const vLat=vL.length?vL[vL.length-1]:0,vLon=vO.length?vO[vO.length-1]:0;
+  // Blend VWMA position trend with velocity
+  const vwLat=sLat/sW,vwLon=sLon/sW;
+  return{lat:pos.lat+vLat*dt*0.7+(vwLat-pos.lat)*0.02,lon:pos.lon+vLon*dt*0.7+(vwLon-pos.lon)*0.02};
+}));
+
+// F38: RSI Heading — heading consistency (straight vs turning)
+F.push(mkF('RSI Heading',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const hdgs=getHeadingHist().slice(-14);
+  if(hdgs.length<5)return pos;
+  // RSI: count up moves vs down moves in heading
+  let gains=0,losses=0;
+  for(let i=1;i<hdgs.length;i++){
+    let d=hdgs[i]-hdgs[i-1];if(d>180)d-=360;if(d<-180)d+=360;
+    if(d>0)gains+=d;else losses-=d;
+  }
+  const rsi=gains/(gains+losses+0.01)*100; // 0-100
+  // RSI > 70: strongly turning right → trust gyro heading more
+  // RSI < 30: strongly turning left → trust gyro heading more
+  // RSI ~50: going straight → trust velocity continuation
+  const spd=sma(getSpeedHist(),10);
+  const hdg=rsi>30&&rsi<70?ema(getHeadingHist(),0.05):ema(getHeadingHist(),0.3);
+  const h=hdg*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// ═══════════════════════════════════════
+// FORMULA COMBOS — fixed combinations of indicators
+// ═══════════════════════════════════════
+
+// F39: SMA+MACD — trend speed + momentum direction
+F.push(mkF('SMA+MACD',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='SMA Trend')._rawPredict.call({},pos,dt);
+  const p2=F.find(f=>f.name==='MACD')._rawPredict.call({},pos,dt);
+  if(!p1||!p2)return pos;
+  return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
+}));
+
+// F40: Bollinger+RSI — mean reversion + turn detection
+F.push(mkF('Boll+RSI',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='Bollinger')._rawPredict.call({},pos,dt);
+  const p2=F.find(f=>f.name==='RSI Heading')._rawPredict.call({},pos,dt);
+  if(!p1||!p2)return pos;
+  return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
+}));
+
+// F41: VWMA+Ant — confidence-weighted + step counting
+F.push(mkF('VWMA+Ant',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='VWMA')._rawPredict.call({},pos,dt);
+  const p2=ANIMAL.ant.predict(pos,dt);
+  if(!p1)return p2||pos;if(!p2)return p1;
+  return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
+}));
+
+// F42: MACD+CellTower — momentum + absolute anchor
+F.push(mkF('MACD+Cell',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='MACD')._rawPredict.call({},pos,dt);
+  const p2=UTIN.predict();
+  if(!p1&&!p2)return pos;if(!p2)return p1||pos;if(!p1)return{lat:p2.lat,lon:p2.lon};
+  return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
+}));
+
+// F43: INS+Bollinger — physics + mean reversion
+F.push(mkF('INS+Boll',(pos,dt)=>{
+  INS.update(accel,gyro,dt);const insP=INS.getLatLon();
+  const bollP=F.find(f=>f.name==='Bollinger')._rawPredict.call({},pos,dt);
+  if(!insP&&!bollP)return pos;if(!bollP)return insP||pos;if(!insP)return bollP;
+  return{lat:insP.lat*0.5+bollP.lat*0.5,lon:insP.lon*0.5+bollP.lon*0.5};
+}));
+
+// ═══════════════════════════════════════
+// AUTO-COMBO DISCOVERY — evolving formula combinations
+// Creates random combos of 2-3 formulas with random weights,
+// scores them against GPS, evolves the best combinations
+// ═══════════════════════════════════════
+const COMBOS={
+  pool:[], // [{indices:[i,j,k], weights:[w1,w2,w3], err:999, errAvg:999, pos:null}]
+  POOL_SIZE:20,
+  generation:0,
+
+  init(){
+    this.pool=[];
+    const n=F.length;
+    for(let c=0;c<this.POOL_SIZE;c++){
+      const numF=Math.random()<0.3?3:2; // 30% chance of 3-way combo
+      const indices=[];
+      while(indices.length<numF){
+        const idx=Math.floor(Math.random()*Math.min(n,33)); // only combine base formulas (not other combos)
+        if(!indices.includes(idx))indices.push(idx);
+      }
+      // Random weights that sum to 1
+      const rawW=indices.map(()=>Math.random());
+      const total=rawW.reduce((s,w)=>s+w,0);
+      const weights=rawW.map(w=>w/total);
+      this.pool.push({indices,weights,err:999,errAvg:999,errHistory:[],pos:null});
+    }
+  },
+
+  // Each combo predicts by blending its constituent formulas
+  predict(combo,pos,dt){
+    if(!pos)return pos;
+    let lat=0,lon=0;
+    combo.indices.forEach((fi,wi)=>{
+      if(fi>=F.length)return;
+      const p=F[fi]._rawPredict.call(F[fi],{...pos},dt);
+      if(p){lat+=p.lat*combo.weights[wi];lon+=p.lon*combo.weights[wi];}
+      else{lat+=pos.lat*combo.weights[wi];lon+=pos.lon*combo.weights[wi];}
+    });
+    return{lat,lon};
+  },
+
+  // Score all combos against GPS
+  score(gps,dt){
+    if(!gps)return;
+    this.pool.forEach(c=>{
+      if(!c.pos){c.pos={lat:gps.lat,lon:gps.lon};return;}
+      const p=this.predict(c,c.pos,dt);
+      if(p){
+        c.err=hav(p,gps);
+        c.errHistory.push(c.err);if(c.errHistory.length>30)c.errHistory.shift();
+        c.errAvg=c.errHistory.reduce((s,e)=>s+e,0)/c.errHistory.length;
+      }
+      c.pos={lat:gps.lat,lon:gps.lon};
+    });
+    this.generation++;
+    if(this.generation%20===0)this.evolve();
+  },
+
+  // Evolve: kill worst 5, breed from best 5
+  evolve(){
+    this.pool.sort((a,b)=>a.errAvg-b.errAvg);
+    const n=this.POOL_SIZE;
+    for(let i=0;i<5;i++){
+      const parent=this.pool[Math.floor(Math.random()*5)]; // from top 5
+      const child={
+        indices:[...parent.indices],
+        weights:parent.weights.map(w=>Math.max(0.05,Math.min(0.9,w+(Math.random()-0.5)*0.1))),
+        err:999,errAvg:999,errHistory:[],pos:null
+      };
+      // Normalize weights
+      const total=child.weights.reduce((s,w)=>s+w,0);
+      child.weights=child.weights.map(w=>w/total);
+      // 20% chance to swap one formula for a random one
+      if(Math.random()<0.2){
+        const swapIdx=Math.floor(Math.random()*child.indices.length);
+        child.indices[swapIdx]=Math.floor(Math.random()*Math.min(F.length,33));
+      }
+      this.pool[n-1-i]=child;
+    }
+  },
+
+  // Get the best combo's predicted position during GPS denial
+  bestPredict(pos,dt){
+    if(!this.pool.length)return null;
+    this.pool.sort((a,b)=>a.errAvg-b.errAvg);
+    const best=this.pool[0];
+    return this.predict(best,pos,dt);
+  },
+
+  // Best combo description for report
+  bestDesc(){
+    if(!this.pool.length)return'--';
+    this.pool.sort((a,b)=>a.errAvg-b.errAvg);
+    const b=this.pool[0];
+    return b.indices.map((fi,wi)=>(fi<F.length?F[fi].name:'?')+'('+Math.round(b.weights[wi]*100)+'%)').join(' + ')+' = '+b.errAvg.toFixed(1)+'m';
+  },
+
+  // Top 5 for report
+  top5(){
+    return[...this.pool].sort((a,b)=>a.errAvg-b.errAvg).slice(0,5).map(c=>
+      c.indices.map((fi,wi)=>(fi<F.length?F[fi].name:'?')+'('+Math.round(c.weights[wi]*100)+'%)').join('+')+': '+c.errAvg.toFixed(1)+'m'
+    );
+  }
+};
+
+// Add auto-combo as a formula too (so it competes)
+F.push(mkF('Auto Combo',(pos,dt)=>{const p=COMBOS.bestPredict(pos,dt);return p||pos;}));
+
+// ═══════════════════════════════════════
 // MAP + TICK + CONTROLS + REPORT
 // ═══════════════════════════════════════
 function initMap(){
@@ -1316,6 +1558,8 @@ function tick(){
     if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
     INS.update(accel,gyro,dt);
     scoreFormulas(gpsSys,dt);
+    // Score auto-combos against GPS
+    COMBOS.score(gpsSys,dt);
     // Animal methods: record all environmental data at this GPS position
     ANIMAL.recordAll(gpsSys.lat,gpsSys.lon,accel,dt);
     // Calibrate ant step length from GPS distance every 50 steps
@@ -1460,6 +1704,7 @@ function startRec(){
   $('b1').style.display='none';$('b2').style.display='block';$('calMeter').style.display='block';
   buildFormulaTable();
   FISH.init(gpsTrue.lat,gpsTrue.lon);
+  COMBOS.init();
   tickIv=setInterval(tick,1000);
   log('Recording — '+F.length+' formulas + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish agents','var(--green)');
 }
@@ -1545,6 +1790,13 @@ function showReport(dur){
         const corr=ff?'corr:'+ff.corrCount+' spd:'+ff.speedScale.toFixed(2):'';
         return`<div class="rr"><span>${i+1}. ${f.name}</span><span class="rv" style="color:${c}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'} <span style="font-size:7px;color:var(--td)">${corr}</span></span></div>`;
       }).join('')}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--orange)">AUTO-COMBO DISCOVERY</div>
+      <div class="rr"><span>Combo pool size</span><span class="rv">${COMBOS.pool.length}</span></div>
+      <div class="rr"><span>Generations evolved</span><span class="rv">${COMBOS.generation}</span></div>
+      <div class="rr"><span>Best combo</span><span class="rv" style="font-size:8px;color:var(--green)">${COMBOS.bestDesc()}</span></div>
+      <div style="font-size:8px;color:var(--td);margin-top:4px">Top 5 discovered combos:</div>
+      ${COMBOS.top5().map((c,i)=>`<div class="rr"><span>${i+1}.</span><span class="rv" style="font-size:7px">${c}</span></div>`).join('')}
     </div>
     <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER DATABASE</div>
       <div class="rr"><span>Towers in database</span><span class="rv">${TOWERS.length}</span></div>
