@@ -161,6 +161,16 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
     <div class="mc"><div class="ml">Laser</div><div class="mv" id="mLsr">--</div><div class="mu">mm</div></div>
   </div>
   <!-- Formula competition -->
+  <!-- Animal navigation readiness -->
+  <div class="sh"><div class="sh-bar" style="background:var(--green)"></div><div class="sh-text" style="color:var(--green)">Animal Navigation — Readiness</div></div>
+  <div class="src-grid" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="src"><div class="sn">Ant</div><div class="sv" id="arAnt"><span class="sdot off"></span>--</div><div class="ss" id="arAntD">step+compass</div></div>
+    <div class="src"><div class="sn">Pigeon</div><div class="sv" id="arPig"><span class="sdot off"></span>--</div><div class="ss" id="arPigD">mag map</div></div>
+    <div class="src"><div class="sn">Salmon</div><div class="sv" id="arSal"><span class="sdot off"></span>--</div><div class="ss" id="arSalD">cell gradient</div></div>
+    <div class="src"><div class="sn">Whale</div><div class="sv" id="arWhl"><span class="sdot off"></span>--</div><div class="ss" id="arWhlD">wifi print</div></div>
+    <div class="src"><div class="sn">Bat</div><div class="sv" id="arBat"><span class="sdot off"></span>--</div><div class="ss" id="arBatD">laser corr</div></div>
+    <div class="src"><div class="sn">Fusion</div><div class="sv" id="arFus"><span class="sdot off"></span>--</div><div class="ss" id="arFusD">combined</div></div>
+  </div>
   <div class="sh"><div class="sh-bar" style="background:var(--cyan)"></div><div class="sh-text" style="color:var(--cyan)">Formula Competition</div></div>
   <table class="ctable" id="fTable">
     <tr><th>Formula</th><th>Error</th><th>Status</th></tr>
@@ -915,6 +925,244 @@ const FISH={
 };
 
 // ═══════════════════════════════════════
+// ═══════════════════════════════════════
+// ANIMAL NAVIGATION — 5 bio-inspired methods
+// These don't integrate noisy accel. They use discrete events + absolute refs.
+// ═══════════════════════════════════════
+const ANIMAL={
+  // ── Desert Ant: step counting + magnetometer heading ──
+  ant:{
+    steps:0,prevSteps:0,stepLen:0.72,calibrated:false,
+    // Step detection: count accel magnitude crossings (not integration)
+    lastMag:0,rising:false,stepEvents:0,
+    detectStep(ax,ay,az){
+      const m=Math.sqrt(ax*ax+ay*ay+az*az)/9.81; // in g
+      if(this.rising&&m<0.85){this.rising=false;this.stepEvents++;this.steps++;}
+      if(!this.rising&&m>1.15){this.rising=true;}
+      this.lastMag=m;
+    },
+    // Calibrate step length from GPS distance
+    calibrateFromGPS(gpsDistM,stepsDuring){
+      if(stepsDuring>5&&gpsDistM>3){
+        this.stepLen=gpsDistM/stepsDuring;
+        this.stepLen=Math.max(0.3,Math.min(1.5,this.stepLen)); // clamp
+        this.calibrated=true;
+      }
+    },
+    // Predict: steps × stride along mag heading (NO accel integration)
+    predict(pos,dt){
+      if(!pos)return pos;
+      const ns=this.steps-this.prevSteps;this.prevSteps=this.steps;
+      if(ns<=0)return pos; // no steps = no movement
+      const d=ns*this.stepLen;
+      // Use magnetometer heading directly (absolute, like sun compass)
+      const h=Math.atan2(mag.y,mag.x); // radians from mag vector
+      return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};
+    },
+    ready(){return this.calibrated&&this.steps>10;},
+    conf(){return this.calibrated?0.8:0.2;}
+  },
+
+  // ── Pigeon: magnetic field map matching ──
+  pigeon:{
+    magMap:[], // [{lat,lon,mag,inc,dec}] — 20m grid cells
+    CELL_SIZE:0.0002, // ~20m in degrees
+    // Record magnetic signature at GPS position
+    record(lat,lon,mx,my,mz){
+      const mag2=Math.sqrt(mx*mx+my*my+mz*mz);
+      const inc=Math.atan2(mz,Math.sqrt(mx*mx+my*my))*180/Math.PI;
+      const dec=Math.atan2(my,mx)*180/Math.PI;
+      // Grid cell key
+      const gLat=Math.round(lat/this.CELL_SIZE)*this.CELL_SIZE;
+      const gLon=Math.round(lon/this.CELL_SIZE)*this.CELL_SIZE;
+      // Update or add cell
+      const existing=this.magMap.find(c=>Math.abs(c.lat-gLat)<0.00001&&Math.abs(c.lon-gLon)<0.00001);
+      if(existing){
+        const lr=0.2;existing.mag=existing.mag*(1-lr)+mag2*lr;existing.inc=existing.inc*(1-lr)+inc*lr;
+        existing.dec=existing.dec*(1-lr)+dec*lr;existing.n++;
+      }else{
+        this.magMap.push({lat:gLat,lon:gLon,mag:mag2,inc,dec,n:1});
+        if(this.magMap.length>500)this.magMap.shift(); // cap
+      }
+    },
+    // Match current mag reading to map
+    predict(pos,mx,my,mz){
+      if(!pos||this.magMap.length<10)return null;
+      const curMag=Math.sqrt(mx*mx+my*my+mz*mz);
+      const curInc=Math.atan2(mz,Math.sqrt(mx*mx+my*my))*180/Math.PI;
+      let bestD=Infinity,bestCell=null;
+      this.magMap.forEach(c=>{
+        const d=Math.abs(curMag-c.mag)*0.5+Math.abs(curInc-c.inc)*2;
+        if(d<bestD){bestD=d;bestCell=c;}
+      });
+      if(bestCell&&bestD<20)return{lat:bestCell.lat,lon:bestCell.lon,conf:Math.max(0.1,1-bestD/20)};
+      return null;
+    },
+    ready(){return this.magMap.length>=20;},
+    conf(){return Math.min(0.7,this.magMap.length/100);}
+  },
+
+  // ── Salmon: cell tower signal gradient ("getting warmer/colder") ──
+  salmon:{
+    towerHistory:[], // [{towers4G,towers2G,lat,lon}] — signal trend
+    // Record cell tower count + position
+    record(lat,lon,t4g,t2g){
+      this.towerHistory.push({lat,lon,t4g:t4g||0,t2g:t2g||0,t:Date.now()});
+      if(this.towerHistory.length>50)this.towerHistory.shift();
+    },
+    // Predict from signal gradient
+    predict(pos){
+      if(!pos||this.towerHistory.length<5)return null;
+      // Direction where towers were strongest = most recent movement direction
+      const recent=this.towerHistory.slice(-5);
+      const old=this.towerHistory.slice(-10,-5);
+      if(old.length<3)return null;
+      // Average position where signal was strongest
+      let bLat=0,bLon=0,bW=0;
+      recent.forEach(r=>{const w=r.t4g+r.t2g+1;bLat+=r.lat*w;bLon+=r.lon*w;bW+=w;});
+      if(bW>0)return{lat:bLat/bW,lon:bLon/bW,conf:Math.min(0.5,bW/50)};
+      return null;
+    },
+    // Use UTIN trilateration as primary, gradient as direction hint
+    predictFull(pos){
+      const tower=UTIN.predict();
+      const grad=this.predict(pos);
+      if(tower&&grad)return{lat:tower.lat*0.7+grad.lat*0.3,lon:tower.lon*0.7+grad.lon*0.3,conf:0.5};
+      return tower?{...tower,conf:0.4}:grad;
+    },
+    ready(){return this.towerHistory.length>=10&&(cellTowers4G+cellTowers2G)>=2;},
+    conf(){return Math.min(0.5,(cellTowers4G+cellTowers2G)*0.1);}
+  },
+
+  // ── Whale: WiFi fingerprint matching ──
+  whale:{
+    fpMap:[], // [{lat,lon,aps:[{bssid,rssi}]}]
+    // Record WiFi fingerprint from board data
+    record(lat,lon,wifiList){
+      if(!wifiList||!wifiList.length)return;
+      const fp=wifiList.map(w=>({b:w.s||w.bssid||'',r:w.r||w.rssi||-99})).filter(w=>w.b);
+      if(fp.length<1)return;
+      this.fpMap.push({lat,lon,aps:fp});
+      if(this.fpMap.length>200)this.fpMap.shift();
+    },
+    // Match current WiFi scan to stored fingerprints
+    predict(currentWifi){
+      if(!currentWifi||!currentWifi.length||this.fpMap.length<5)return null;
+      const cur=currentWifi.map(w=>({b:w.s||w.bssid||'',r:w.r||w.rssi||-99}));
+      let bestScore=0,bestPos=null;
+      this.fpMap.forEach(fp=>{
+        let score=0,matched=0;
+        cur.forEach(c=>{
+          const stored=fp.aps.find(a=>a.b===c.b);
+          if(stored){score+=1/(1+Math.abs(c.r-stored.r));matched++;}
+        });
+        if(matched>=2){
+          score*=matched/Math.max(cur.length,fp.aps.length);
+          if(score>bestScore){bestScore=score;bestPos={lat:fp.lat,lon:fp.lon};}
+        }
+      });
+      return bestPos?{...bestPos,conf:Math.min(0.8,bestScore)}:null;
+    },
+    ready(){return this.fpMap.length>=10&&wifiAPs>=3;},
+    conf(){return Math.min(0.6,this.fpMap.length/50);}
+  },
+
+  // ── Bat: laser corridor profiling ──
+  bat:{
+    corridor:[], // [{lat,lon,dist_mm,heading}]
+    record(lat,lon,distMm,heading){
+      if(!distMm||distMm<10)return;
+      this.corridor.push({lat,lon,d:distMm,h:heading});
+      if(this.corridor.length>300)this.corridor.shift();
+    },
+    predict(pos,currentDistMm,currentHeading,stepsSinceKnown,stepLen){
+      if(!pos||this.corridor.length<20||!currentDistMm)return null;
+      // Search for corridor entries matching current laser distance + heading
+      let bestD=Infinity,bestPos=null;
+      this.corridor.forEach(c=>{
+        const dDist=Math.abs(c.d-currentDistMm);
+        let dHdg=Math.abs(c.h-currentHeading);if(dHdg>180)dHdg=360-dHdg;
+        const score=dDist*0.5+dHdg*2;
+        if(score<bestD){bestD=score;bestPos={lat:c.lat,lon:c.lon};}
+      });
+      if(bestPos&&bestD<200)return{...bestPos,conf:Math.max(0.1,1-bestD/200)};
+      return null;
+    },
+    ready(){return this.corridor.length>=30&&laserMm>10;},
+    conf(){return laserMm>10?Math.min(0.6,this.corridor.length/100):0;}
+  },
+
+  // ── Fusion: combine all animal methods ──
+  pos:null,
+  fuse(){
+    const methods=[];
+    // Ant (always has something if walking)
+    if(this.ant.ready()&&this.ant._lastPred)
+      methods.push({lat:this.ant._lastPred.lat,lon:this.ant._lastPred.lon,w:this.ant.conf()});
+    // Pigeon
+    const pig=this.pigeon.predict(this.pos,mag.x,mag.y,mag.z);
+    if(pig)methods.push({lat:pig.lat,lon:pig.lon,w:pig.conf*this.pigeon.conf()});
+    // Salmon
+    const sal=this.salmon.predictFull(this.pos);
+    if(sal)methods.push({lat:sal.lat,lon:sal.lon,w:sal.conf*this.salmon.conf()});
+    // Whale
+    const whl=this.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);
+    if(whl)methods.push({lat:whl.lat,lon:whl.lon,w:whl.conf*this.whale.conf()});
+    // Bat
+    const bat=this.bat.predict(this.pos,laserMm,compass,ANIMAL.ant.steps-ANIMAL.ant.prevSteps,ANIMAL.ant.stepLen);
+    if(bat)methods.push({lat:bat.lat,lon:bat.lon,w:bat.conf*this.bat.conf()});
+
+    if(methods.length===0)return null;
+    let sLat=0,sLon=0,sW=0;
+    methods.forEach(m=>{sLat+=m.lat*m.w;sLon+=m.lon*m.w;sW+=m.w;});
+    if(sW>0)return{lat:sLat/sW,lon:sLon/sW,methods:methods.length};
+    return null;
+  },
+
+  // Record all data during GPS-available tick
+  recordAll(lat,lon,accel,dt){
+    this.ant.detectStep(accel.x,accel.y,accel.z);
+    this.pigeon.record(lat,lon,mag.x,mag.y,mag.z);
+    this.salmon.record(lat,lon,cellTowers4G,cellTowers2G);
+    if(boardData&&boardData.wifi)this.whale.record(lat,lon,boardData.wifi.list);
+    this.bat.record(lat,lon,laserMm,compass);
+  },
+
+  // Predict during GPS denial
+  predictDenied(pos,dt){
+    // Ant: always runs (step + mag heading)
+    const antP=this.ant.predict(pos,dt);
+    if(antP)this.ant._lastPred=antP;
+    this.pos=pos;
+    return this.fuse();
+  },
+
+  // Update readiness UI
+  updateUI(){
+    const rdy=(m,el,elD,label)=>{
+      $(el).innerHTML=m.ready()?'<span class="sdot live"></span>READY':'<span class="sdot off"></span>WAIT';
+      $(elD).textContent=label;
+    };
+    rdy(this.ant,'arAnt','arAntD',this.ant.steps+'st / '+this.ant.stepLen.toFixed(2)+'m');
+    rdy(this.pigeon,'arPig','arPigD',this.pigeon.magMap.length+' cells');
+    rdy(this.salmon,'arSal','arSalD',(cellTowers4G+cellTowers2G)+'t / '+this.salmon.towerHistory.length+'h');
+    rdy(this.whale,'arWhl','arWhlD',this.whale.fpMap.length+' fps');
+    rdy(this.bat,'arBat','arBatD',this.bat.corridor.length+' pts');
+    const fReady=[this.ant,this.pigeon,this.salmon,this.whale,this.bat].filter(m=>m.ready()).length;
+    $('arFus').innerHTML=fReady>=2?'<span class="sdot live"></span>'+fReady+'/5':'<span class="sdot off"></span>'+fReady+'/5';
+    $('arFusD').textContent=fReady>=2?'FUSION READY':'need 2+ methods';
+  }
+};
+
+// Add animal formulas to the formula array
+F.push(mkF('Ant (step+mag)',(pos,dt)=>ANIMAL.ant.predict(pos,dt)||pos));
+F.push(mkF('Pigeon (mag map)',function(pos,dt){const p=ANIMAL.pigeon.predict(pos,mag.x,mag.y,mag.z);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+p.lat*0.4,lon:vP.lon*0.6+p.lon*0.4};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Salmon (cell grad)',(pos,dt)=>{const p=ANIMAL.salmon.predictFull(pos);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Whale (wifi fp)',(pos,dt)=>{const p=ANIMAL.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Bat (laser cor)',(pos,dt)=>{const p=ANIMAL.bat.predict(pos,laserMm,compass,0,ANIMAL.ant.stepLen);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Animal Fusion',(pos,dt)=>{const p=ANIMAL.predictDenied(pos,dt);return p||pos;}));
+
+// ═══════════════════════════════════════
 // MAP + TICK + CONTROLS + REPORT
 // ═══════════════════════════════════════
 function initMap(){
@@ -958,6 +1206,13 @@ function tick(){
     if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
     INS.update(accel,gyro,dt);
     scoreFormulas(gpsSys,dt);
+    // Animal methods: record all environmental data at this GPS position
+    ANIMAL.recordAll(gpsSys.lat,gpsSys.lon,accel,dt);
+    // Calibrate ant step length from GPS distance every 50 steps
+    if(ANIMAL.ant.steps%50===0&&ANIMAL.ant.steps>0&&lastPos){
+      const gDist=hav(lastPos,gpsSys);
+      ANIMAL.ant.calibrateFromGPS(gDist,50);
+    }
     const ll=[gpsSys.lat,gpsSys.lon];
     gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
     if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
@@ -971,13 +1226,18 @@ function tick(){
     if(drPos){
       const bi=bestFormulaIdx();
       const formulaPos=F[bi].predict({...drPos},dt)||drPos;
-      // Fish agents also predict
       FISH.tick(dt);
       const fishPos=FISH.getBestPosition();
-      // Blend: 60% best formula + 40% best fish school
-      if(fishPos&&fishPos.lat){
-        drPos={lat:formulaPos.lat*0.6+fishPos.lat*0.4,lon:formulaPos.lon*0.6+fishPos.lon*0.4};
-      }else{drPos=formulaPos;}
+      // Animal methods predict independently
+      ANIMAL.ant.detectStep(accel.x,accel.y,accel.z);
+      const animalPos=ANIMAL.predictDenied(drPos,dt);
+      // Triple blend: 40% formula + 25% fish + 35% animal (if ready)
+      let lat=formulaPos.lat*0.4,lon=formulaPos.lon*0.4;
+      if(fishPos&&fishPos.lat){lat+=fishPos.lat*0.25;lon+=fishPos.lon*0.25;}
+      else{lat+=formulaPos.lat*0.25;lon+=formulaPos.lon*0.25;}
+      if(animalPos&&animalPos.methods>=2){lat+=animalPos.lat*0.35;lon+=animalPos.lon*0.35;}
+      else{lat+=formulaPos.lat*0.35;lon+=formulaPos.lon*0.35;}
+      drPos={lat,lon};
       F.forEach((f,i)=>{if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;if(!f.drillTrail)f.drillTrail=[];if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();if(f.pos&&gpsTrue)f.drillDrift=hav(f.pos,gpsTrue);});
       const ll=[drPos.lat,drPos.lon];drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
       if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
@@ -1020,6 +1280,7 @@ function tick(){
       $('calBar').style.width=Math.max(5,Math.min(100,100-err*2))+'%';
       $('calBar').style.background=ready?'var(--green)':'var(--red)';
       $('calSt').textContent=ready?'CALIBRATED — JAM READY':'CALIBRATING ('+DATA.count()+' samples)';
+      ANIMAL.updateUI();
       $('calSt').style.color=ready?'var(--green)':'var(--td)';
       if(ready){$('bJam').disabled=false;$('bJam').style.opacity='1';$('bSpoof').disabled=false;$('bSpoof').style.opacity='1';}
     }
@@ -1143,6 +1404,14 @@ function showReport(dur){
       <div class="rr"><span>Gyro scale</span><span class="rv">${CAL.gyroScale.toFixed(4)}</span></div>
       <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOff.toFixed(1)}°</span></div>
       <div class="rr"><span>Speed mult</span><span class="rv">${CAL.speedMult.toFixed(4)}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--green)">ANIMAL NAVIGATION</div>
+      <div class="rr"><span>Desert Ant (step+mag)</span><span class="rv">${ANIMAL.ant.ready()?ANIMAL.ant.steps+' steps, stride '+ANIMAL.ant.stepLen.toFixed(2)+'m':'Not ready'}</span></div>
+      <div class="rr"><span>Pigeon (mag map)</span><span class="rv">${ANIMAL.pigeon.ready()?ANIMAL.pigeon.magMap.length+' cells mapped':'Not ready ('+ANIMAL.pigeon.magMap.length+' cells)'}</span></div>
+      <div class="rr"><span>Salmon (cell gradient)</span><span class="rv">${ANIMAL.salmon.ready()?ANIMAL.salmon.towerHistory.length+' readings, '+(cellTowers4G+cellTowers2G)+' towers':'Not ready'}</span></div>
+      <div class="rr"><span>Whale (WiFi fp)</span><span class="rv">${ANIMAL.whale.ready()?ANIMAL.whale.fpMap.length+' fingerprints, '+wifiAPs+' APs':'Not ready ('+ANIMAL.whale.fpMap.length+' fps)'}</span></div>
+      <div class="rr"><span>Bat (laser corridor)</span><span class="rv">${ANIMAL.bat.ready()?ANIMAL.bat.corridor.length+' corridor points':'Not ready ('+ANIMAL.bat.corridor.length+' pts)'}</span></div>
+      <div class="rr"><span>Methods ready for fusion</span><span class="rv">${[ANIMAL.ant,ANIMAL.pigeon,ANIMAL.salmon,ANIMAL.whale,ANIMAL.bat].filter(m=>m.ready()).length}/5</span></div>
     </div>
     <div class="rc"><div class="rct" style="color:var(--teal)">EVOLVING FISH AGENTS</div>
       ${(()=>{const fs=FISH.stats();return`
