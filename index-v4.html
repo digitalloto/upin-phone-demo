@@ -1224,24 +1224,58 @@ function tick(){
 
   if(phase==='jammed'||phase==='spoofed'){
     if(drPos){
-      const bi=bestFormulaIdx();
-      const formulaPos=F[bi].predict({...drPos},dt)||drPos;
+      // ALL formulas predict independently — no forced blending
       FISH.tick(dt);
-      const fishPos=FISH.getBestPosition();
-      // Animal methods predict independently
       ANIMAL.ant.detectStep(accel.x,accel.y,accel.z);
-      const animalPos=ANIMAL.predictDenied(drPos,dt);
-      // Triple blend: 40% formula + 25% fish + 35% animal (if ready)
-      let lat=formulaPos.lat*0.4,lon=formulaPos.lon*0.4;
-      if(fishPos&&fishPos.lat){lat+=fishPos.lat*0.25;lon+=fishPos.lon*0.25;}
-      else{lat+=formulaPos.lat*0.25;lon+=formulaPos.lon*0.25;}
-      if(animalPos&&animalPos.methods>=2){lat+=animalPos.lat*0.35;lon+=animalPos.lon*0.35;}
-      else{lat+=formulaPos.lat*0.35;lon+=formulaPos.lon*0.35;}
-      drPos={lat,lon};
-      F.forEach((f,i)=>{if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;if(!f.drillTrail)f.drillTrail=[];if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();if(f.pos&&gpsTrue)f.drillDrift=hav(f.pos,gpsTrue);});
-      const ll=[drPos.lat,drPos.lon];drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
+      ANIMAL.predictDenied(drPos,dt);
+      F.forEach((f,i)=>{
+        if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;
+        if(!f.drillTrail)f.drillTrail=[];
+        if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);
+        if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();
+        if(f.pos&&gpsTrue)f.drillDrift=hav(f.pos,gpsTrue);
+      });
+
+      // WINNER TAKES ALL — best formula's position IS the output
+      // No averaging that drags good formulas down
+      const bi=bestFormulaIdx();
+      drPos=F[bi].pos?{lat:F[bi].pos.lat,lon:F[bi].pos.lon}:drPos;
+
+      // Also add weighted avg as a separate tracked position (for comparison)
+      // It competes like everything else — if averaging is better, it'll win
+      let waLat=0,waLon=0,waW=0;
+      F.forEach(f=>{
+        if(!f.pos||f.errAvg>=999)return;
+        const w=1/(f.errAvg+0.1);
+        waLat+=f.pos.lat*w;waLon+=f.pos.lon*w;waW+=w;
+      });
+      if(waW>0){
+        if(!F._waTrail)F._waTrail=[];
+        F._waTrail.push([waLat/waW,waLon/waW]);
+        if(F._waTrail.length>MAX_TRAIL)F._waTrail.shift();
+      }
+
+      const ll=[drPos.lat,drPos.lon];
+      drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
       if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
-      drawPos(ll,20,'#FFB800');
+      drawPos(ll,15,'#FFB800');
+
+      // Draw top 5 formula trails on map (every 5th tick)
+      if(uiFrame%5===0){
+        const ranked=[...F].map((f,i)=>({i,err:f.drillDrift||f.errAvg||999})).sort((a,b)=>a.err-b.err);
+        const colors=['#00E5FF','#00FF88','#FFB800','#3B82F6','#A855F7'];
+        for(let r=0;r<5&&r<ranked.length;r++){
+          const f=F[ranked[r].i];
+          if(!f.drillTrail||f.drillTrail.length<2)continue;
+          if(!f.mapLine)f.mapLine=L.polyline(f.drillTrail,{color:colors[r],weight:2,opacity:.6,dashArray:'4,4'}).addTo(map);
+          else f.mapLine.setLatLngs(f.drillTrail);
+        }
+        // Draw weighted avg trail in white for comparison
+        if(F._waTrail&&F._waTrail.length>1){
+          if(!F._waLine)F._waLine=L.polyline(F._waTrail,{color:'#ffffff',weight:1,opacity:.4,dashArray:'2,4'}).addTo(map);
+          else F._waLine.setLatLngs(F._waTrail);
+        }
+      }
     }
     if(gpsTrue){gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();}
     if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
@@ -1345,6 +1379,7 @@ function resurface(){
   const fRes=F.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999})).sort((a,b)=>a.drift-b.drift);
   drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected});
   F.forEach(f=>{if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  if(F._waLine){map.removeLayer(F._waLine);F._waLine=null;}F._waTrail=[];
   if(gpsTrue){L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1}).bindPopup('Resurface #'+drills.length+'<br>Drift: '+drift.toFixed(1)+'m ['+grade+']').addTo(map);}
   phase='recording';$('badge').textContent='RECORDING';$('badge').className='badge b-rec';
   $('b3').style.display='none';$('b2').style.display='block';$('jalrt').style.display='none';$('salrt').style.display='none';
@@ -1385,8 +1420,19 @@ function showReport(dur){
       <div class="rr"><span>Laser range</span><span class="rv">${laserMm?laserMm+'mm':'N/A'}</span></div>
       <div class="rr"><span>Avg speed</span><span class="rv">${(avgSpd*3.6).toFixed(1)} km/h</span></div>
     </div>
-    <div class="rc"><div class="rct" style="color:var(--green)">TOP 10 FORMULAS</div>
-      ${ranked.slice(0,10).map((f,i)=>`<div class="rr"><span>${i+1}. ${f.name}</span><span class="rv" style="color:${f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)'}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`).join('')}
+    <div class="rc"><div class="rct" style="color:var(--green)">TOP 10 FORMULAS (independent — winner takes all)</div>
+      ${ranked.slice(0,10).map((f,i)=>{
+        const medal=i===0?'◈ WINNER → ':i===1?'◇ 2nd → ':i===2?'○ 3rd → ':(i+1)+'. ';
+        const c=f.errAvg<5?'var(--green)':f.errAvg<10?'var(--cyan)':f.errAvg<20?'var(--amber)':'var(--red)';
+        return`<div class="rr" style="${i===0?'background:rgba(0,255,136,.08);':''}"><span>${medal}${f.name}</span><span class="rv" style="color:${c}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`;
+      }).join('')}
+      <div style="font-size:8px;color:var(--td);margin-top:4px;padding:4px">Output = winner's position only. No averaging. Each formula runs independently and marks its own path on the map.</div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--tp)">ALL ${F.length} FORMULAS RANKED</div>
+      ${ranked.map((f,i)=>{
+        const c=f.errAvg<5?'var(--green)':f.errAvg<10?'var(--cyan)':f.errAvg<20?'var(--amber)':f.errAvg<999?'var(--red)':'var(--td)';
+        return`<div class="rr"><span>${i+1}. ${f.name}</span><span class="rv" style="color:${c}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`;
+      }).join('')}
     </div>
     <div class="rc"><div class="rct" style="color:var(--teal)">DATA SOURCES</div>
       <div class="rr"><span>IMU (accel+gyro+mag)</span><span class="rv">${boardConnected?'MPU9250 (HW)':'Phone MEMS'}</span></div>
