@@ -231,6 +231,113 @@ const fmt=s=>{const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'
 function ts(){const d=new Date();return d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');}
 function log(m,c){const b=$('log'),d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent='['+ts()+'] '+m;b.appendChild(d);if(b.childNodes.length>40)b.removeChild(b.firstChild);b.scrollTop=b.scrollHeight;}
 
+
+// ═══════════════════════════════════════
+// SENSOR PREPROCESSING — 5 data quality fixes
+// Applied to ALL sensor data before any formula touches it
+// ═══════════════════════════════════════
+const PREPROCESS={
+  // Fix 1: Accel unit detection — auto-detect g-units vs m/s²
+  accelInG:null, // null=unknown, true=g-units, false=m/s²
+  detectAccelUnits(ax,ay,az){
+    const mag=Math.sqrt(ax*ax+ay*ay+az*az);
+    if(this.accelInG===null){
+      if(mag>0.5&&mag<2.0)this.accelInG=true;   // g-units (magnitude ~1g)
+      else if(mag>5&&mag<15)this.accelInG=false;  // already m/s² (magnitude ~9.8)
+    }
+    if(this.accelInG){return{x:ax*9.81,y:ay*9.81,z:az*9.81};}
+    return{x:ax,y:ay,z:az};
+  },
+
+  // Fix 2: Stale reading rejection
+  lastReadingTime:0,
+  isStale(dt){
+    if(dt>2.0)return'skip';    // skip entirely
+    if(dt>0.5)return'degraded'; // reduce confidence
+    return'ok';
+  },
+
+  // Fix 3: Speed sanity — rolling median + jump rejection
+  speedHistory:[],
+  lastValidSpeed:0,
+  cleanSpeed(rawSpeed){
+    // Reject impossible speeds (>180 km/h = 50 m/s)
+    if(rawSpeed>50)return this.lastValidSpeed;
+    // Reject sudden jumps (>20 m/s change in one reading)
+    if(Math.abs(rawSpeed-this.lastValidSpeed)>20&&this.lastValidSpeed>0)return this.lastValidSpeed;
+    // Rolling median of last 5
+    this.speedHistory.push(rawSpeed);
+    if(this.speedHistory.length>5)this.speedHistory.shift();
+    const sorted=[...this.speedHistory].sort((a,b)=>a-b);
+    const median=sorted[Math.floor(sorted.length/2)];
+    this.lastValidSpeed=median;
+    return median;
+  },
+
+  // Fix 4: Frozen GPS detection
+  prevLat:0,prevLon:0,frozenCount:0,gpsFrozen:false,
+  lastValidGpsSpeed:0,
+  checkFrozenGPS(lat,lon,speed,accel){
+    if(lat===this.prevLat&&lon===this.prevLon){
+      this.frozenCount++;
+      if(this.frozenCount>=3){
+        this.gpsFrozen=true;
+        // Estimate if moving from accel energy
+        const accelEnergy=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z)-9.81;
+        if(accelEnergy>0.3){
+          // Device is moving but GPS is frozen — use decayed speed
+          this.lastValidGpsSpeed*=0.95;
+          return{frozen:true,speed:this.lastValidGpsSpeed};
+        }
+        return{frozen:true,speed:0}; // actually stationary
+      }
+    }else{
+      this.frozenCount=0;this.gpsFrozen=false;
+      this.prevLat=lat;this.prevLon=lon;
+      if(speed>0.1)this.lastValidGpsSpeed=speed;
+    }
+    return{frozen:false,speed};
+  },
+
+  // Fix 5: Gyro bias — collect at startup, subtract from every reading
+  gyroBiasCollecting:false,
+  gyroBiasReady:false,
+  gyroBiasSamples:[],
+  gyroBias:{x:0,y:0,z:0},
+  collectGyroBias(gx,gy,gz){
+    this.gyroBiasSamples.push({x:gx,y:gy,z:gz});
+    if(this.gyroBiasSamples.length>=50){
+      const n=this.gyroBiasSamples.length;
+      this.gyroBias.x=this.gyroBiasSamples.reduce((s,g)=>s+g.x,0)/n;
+      this.gyroBias.y=this.gyroBiasSamples.reduce((s,g)=>s+g.y,0)/n;
+      this.gyroBias.z=this.gyroBiasSamples.reduce((s,g)=>s+g.z,0)/n;
+      this.gyroBiasReady=true;
+      this.gyroBiasCollecting=false;
+      return true; // done
+    }
+    return false;
+  },
+  correctGyro(gx,gy,gz){
+    if(!this.gyroBiasReady)return{x:gx,y:gy,z:gz};
+    return{x:gx-this.gyroBias.x,y:gy-this.gyroBias.y,z:gz-this.gyroBias.z};
+  },
+
+  // Master function: preprocess all sensor data
+  process(rawAccel,rawGyro,rawSpeed,lat,lon,dt){
+    const stale=this.isStale(dt);
+    if(stale==='skip')return null; // skip this reading
+    const acc=useBoard?rawAccel:this.detectAccelUnits(rawAccel.x,rawAccel.y,rawAccel.z);
+    const gyr=this.correctGyro(rawGyro.x,rawGyro.y,rawGyro.z);
+    const spd=this.cleanSpeed(rawSpeed);
+    const gpsCheck=this.checkFrozenGPS(lat,lon,spd,acc);
+    return{
+      accel:acc,gyro:gyr,speed:gpsCheck.speed,
+      gpsFrozen:gpsCheck.frozen,
+      confidence:stale==='degraded'?0.5:1.0
+    };
+  }
+};
+
 // ═══════════════════════════════════════
 // WEBSOCKET — connect to IoT board
 // ═══════════════════════════════════════
@@ -595,7 +702,217 @@ function scoreFormulas(gps,dt){
     const p=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
     if(p){f.err=hav(p,gps);f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;}
     f.pos={lat:gps.lat,lon:gps.lon};});
+  // Also evolve fish agents
+  FISH.scoreAll(gps);
 }
+
+// ═══════════════════════════════════════
+// EVOLVING FISH AGENTS — 6 schools × 100 agents = 600
+// Each agent has DNA weights. Natural selection kills the worst,
+// reproduces the best with mutations. Over time, agents evolve
+// to match the specific device, movement style, and environment.
+// ═══════════════════════════════════════
+const FISH={
+  SCHOOLS:6,AGENTS_PER:100,
+  schools:[],
+  generation:0,
+  bestSchoolIdx:0,
+
+  // Initialize all schools with random DNA agents
+  init(lat,lon){
+    this.schools=[];
+    for(let s=0;s<this.SCHOOLS;s++){
+      const school={agents:[],fitness:0,pos:{lat,lon},avgErr:999};
+      for(let a=0;a<this.AGENTS_PER;a++){
+        school.agents.push(this.randomDNA(lat,lon));
+      }
+      this.schools.push(school);
+    }
+    this.generation=0;
+    // Load saved DNA if available
+    this.loadBest();
+    log('Fish: '+this.SCHOOLS+'×'+this.AGENTS_PER+'='+(this.SCHOOLS*this.AGENTS_PER)+' agents init','var(--teal)');
+  },
+
+  // Random DNA for one agent
+  randomDNA(lat,lon){
+    return{
+      pos:{lat,lon},fitness:0,err:999,
+      dna:{
+        velW:Math.random(),          // velocity continuation weight
+        accelW:Math.random()*0.3,    // accelerometer weight (low — we know it's noisy)
+        gyroW:Math.random(),         // gyro heading weight
+        magW:Math.random(),          // magnetometer weight
+        cellW:Math.random()*0.5,     // cell tower weight
+        baroW:Math.random()*0.3,     // barometric weight
+        laserW:Math.random()*0.3,    // laser weight
+        zuptTh:0.1+Math.random()*0.4,// ZUPT threshold (0.1-0.5 m/s²)
+        drDecay:0.9+Math.random()*0.09,// speed decay during denial (0.9-0.99)
+        turnSens:0.5+Math.random()*1.5,// gyro turn multiplier
+        hdgSrc:Math.floor(Math.random()*3),// 0=mag, 1=gps, 2=gyro
+        spdBlend:Math.random()       // blend ratio for speed sources
+      }
+    };
+  },
+
+  // Each agent predicts position using its DNA weights
+  agentPredict(agent,dt){
+    const d=agent.dna;const pos=agent.pos;if(!pos)return pos;
+    // Speed: blend velocity-derived and accel-derived
+    const gpsSpd=avgSpeed(5);
+    const accelMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
+    const accelSpd=accelMag*CAL.accelScale*CAL.speedMult;
+    const spd=gpsSpd*d.spdBlend+accelSpd*(1-d.spdBlend);
+    // Heading: choose source based on DNA
+    let hdg=compass+CAL.compassOff;
+    if(d.hdgSrc===2){// gyro integrated
+      agent._gHdg=(agent._gHdg||compass)+(gyro.z-CAL.gyroBias.z)*d.turnSens*dt;
+      hdg=agent._gHdg;
+    }
+    const h=hdg*Math.PI/180;
+    // Velocity continuation component
+    const v=velFromGPS(5);
+    const vLat=v?v.vLat:0,vLon=v?v.vLon:0;
+    // Sensor-based component
+    const sLat=(spd*Math.cos(h)*dt)/111320;
+    const sLon=(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    // Weighted blend using DNA
+    const tw=d.velW+d.accelW+d.gyroW+d.magW+0.01;
+    const nLat=pos.lat+(vLat*dt*d.velW+sLat*(d.accelW+d.gyroW+d.magW))/tw;
+    const nLon=pos.lon+(vLon*dt*d.velW+sLon*(d.accelW+d.gyroW+d.magW))/tw;
+    // ZUPT: if accel near gravity, decay speed
+    const aMag=Math.sqrt(accel.x**2+accel.y**2+accel.z**2);
+    if(Math.abs(aMag-9.81)<d.zuptTh){
+      return{lat:pos.lat+(nLat-pos.lat)*d.drDecay,lon:pos.lon+(nLon-pos.lon)*d.drDecay};
+    }
+    return{lat:nLat,lon:nLon};
+  },
+
+  // Tick: all agents predict, schools compute weighted average
+  tick(dt){
+    this.schools.forEach(school=>{
+      let sLat=0,sLon=0,sW=0;
+      school.agents.forEach(a=>{
+        a.pos=this.agentPredict(a,dt);
+        if(a.pos){const w=Math.max(0.01,a.fitness);sLat+=a.pos.lat*w;sLon+=a.pos.lon*w;sW+=w;}
+      });
+      if(sW>0)school.pos={lat:sLat/sW,lon:sLon/sW};
+    });
+  },
+
+  // Score all agents against GPS truth — called from scoreFormulas
+  scoreAll(gps){
+    if(!gps)return;
+    let bestSI=0,bestSF=0;
+    this.schools.forEach((school,si)=>{
+      let totalErr=0,n=0;
+      school.agents.forEach(a=>{
+        if(!a.pos)return;
+        a.err=hav(a.pos,gps);
+        a.fitness=1/(a.err+0.1);
+        totalErr+=a.err;n++;
+        // Reset agent position to GPS (so next tick predicts from truth)
+        a.pos={lat:gps.lat,lon:gps.lon};
+      });
+      school.avgErr=n>0?totalErr/n:999;
+      school.fitness=n>0?1/(school.avgErr+0.1):0;
+      if(school.fitness>bestSF){bestSF=school.fitness;bestSI=si;}
+    });
+    this.bestSchoolIdx=bestSI;
+    // Evolve every 10th scoring (not every tick — too heavy)
+    this.generation++;
+    if(this.generation%10===0)this.evolve();
+  },
+
+  // Natural selection: kill bottom 10%, reproduce top 10%
+  evolve(){
+    this.schools.forEach(school=>{
+      // Sort by fitness (best first)
+      school.agents.sort((a,b)=>b.fitness-a.fitness);
+      const n=school.agents.length;
+      const killN=Math.floor(n*0.1);  // bottom 10% die
+      const breedN=killN;              // top 10% reproduce
+      for(let i=0;i<killN;i++){
+        // Pick a parent from top 10%
+        const parent=school.agents[Math.floor(Math.random()*breedN)];
+        // Create child with mutated DNA
+        const child=this.mutateDNA(parent);
+        // Replace dead agent
+        school.agents[n-1-i]=child;
+      }
+    });
+    // Auto-save best DNA every 50 generations
+    if(this.generation%50===0)this.saveBest();
+  },
+
+  // Mutate parent DNA to create child
+  mutateDNA(parent){
+    const child={pos:{...parent.pos},fitness:0,err:999,dna:{}};
+    const mut=0.05; // mutation range
+    Object.keys(parent.dna).forEach(k=>{
+      if(k==='hdgSrc'){
+        child.dna[k]=Math.random()<0.1?Math.floor(Math.random()*3):parent.dna[k];
+      }else{
+        child.dna[k]=parent.dna[k]+(Math.random()-0.5)*2*mut;
+        // Clamp weights to valid ranges
+        if(k==='zuptTh')child.dna[k]=Math.max(0.05,Math.min(0.8,child.dna[k]));
+        else if(k==='drDecay')child.dna[k]=Math.max(0.85,Math.min(0.999,child.dna[k]));
+        else if(k==='turnSens')child.dna[k]=Math.max(0.1,Math.min(3,child.dna[k]));
+        else child.dna[k]=Math.max(0,Math.min(1,child.dna[k]));
+      }
+    });
+    return child;
+  },
+
+  // Get best school's position (for use as formula output)
+  getBestPosition(){
+    const s=this.schools[this.bestSchoolIdx];
+    return s?s.pos:null;
+  },
+
+  // Save top DNA to localStorage
+  saveBest(){
+    const topDNAs=[];
+    this.schools.forEach(s=>{
+      s.agents.sort((a,b)=>b.fitness-a.fitness);
+      topDNAs.push(...s.agents.slice(0,5).map(a=>({...a.dna})));
+    });
+    try{localStorage.setItem('upin_fish_dna',JSON.stringify({gen:this.generation,dna:topDNAs,ts:Date.now()}));}catch(e){}
+  },
+
+  // Load saved DNA on startup
+  loadBest(){
+    try{
+      const raw=localStorage.getItem('upin_fish_dna');
+      if(!raw)return;
+      const saved=JSON.parse(raw);
+      if(!saved.dna||!saved.dna.length)return;
+      // Seed top agents in each school with saved DNA
+      this.schools.forEach((school,si)=>{
+        const dnaPool=saved.dna;
+        for(let i=0;i<Math.min(10,dnaPool.length);i++){
+          if(i<school.agents.length){
+            school.agents[i].dna={...dnaPool[(si*5+i)%dnaPool.length]};
+          }
+        }
+      });
+      log('Fish: loaded '+saved.dna.length+' evolved DNAs (gen '+saved.gen+')','var(--teal)');
+    }catch(e){}
+  },
+
+  // Stats for report
+  stats(){
+    return{
+      schools:this.SCHOOLS,
+      agents:this.SCHOOLS*this.AGENTS_PER,
+      generation:this.generation,
+      bestSchool:this.bestSchoolIdx,
+      schoolErrors:this.schools.map(s=>s.avgErr.toFixed(1)+'m'),
+      topDNA:this.schools[this.bestSchoolIdx]?
+        this.schools[this.bestSchoolIdx].agents[0]?.dna:null
+    };
+  }
+};
 
 // ═══════════════════════════════════════
 // MAP + TICK + CONTROLS + REPORT
@@ -623,6 +940,17 @@ function tick(){
   const now=performance.now(),dt=lastTick?(now-lastTick)/1000:1;lastTick=now;uiFrame++;
   const doUI=(uiFrame%3===0);
 
+  // ── PREPROCESS all sensor data (5 fixes) ──
+  if(!useBoard&&gpsSys){
+    const processed=PREPROCESS.process(accel,gyro,gpsSys.speed||0,gpsSys.lat,gpsSys.lon,dt);
+    if(!processed)return; // Fix 2: skip stale reading
+    accel=processed.accel;  // Fix 1: unit-corrected
+    gyro=processed.gyro;    // Fix 5: bias-subtracted
+    if(processed.gpsFrozen){ // Fix 4: frozen GPS
+      gpsSys.speed=processed.speed;
+    }
+  }
+
   if(phase==='recording'&&gpsSys){
     DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
     if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
@@ -642,7 +970,14 @@ function tick(){
   if(phase==='jammed'||phase==='spoofed'){
     if(drPos){
       const bi=bestFormulaIdx();
-      drPos=F[bi].predict(drPos,dt)||drPos;
+      const formulaPos=F[bi].predict({...drPos},dt)||drPos;
+      // Fish agents also predict
+      FISH.tick(dt);
+      const fishPos=FISH.getBestPosition();
+      // Blend: 60% best formula + 40% best fish school
+      if(fishPos&&fishPos.lat){
+        drPos={lat:formulaPos.lat*0.6+fishPos.lat*0.4,lon:formulaPos.lon*0.6+fishPos.lon*0.4};
+      }else{drPos=formulaPos;}
       F.forEach((f,i)=>{if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;if(!f.drillTrail)f.drillTrail=[];if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();if(f.pos&&gpsTrue)f.drillDrift=hav(f.pos,gpsTrue);});
       const ll=[drPos.lat,drPos.lon];drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
       if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
@@ -698,10 +1033,20 @@ function tick(){
 
 // Controls
 function calibrate(){
-  log('Calibrating — hold still 5s','var(--amber)');
+  log('Calibrating — hold still 5s (accel bias + gyro bias)','var(--amber)');
   if(!useBoard)initPhoneSensors();
-  const iv=setInterval(()=>CAL.addStillSample(accel,gyro),100);
-  setTimeout(()=>{clearInterval(iv);log('Calibrated. Bias learned.','var(--green)');},5000);
+  PREPROCESS.gyroBiasCollecting=true;PREPROCESS.gyroBiasSamples=[];
+  const iv=setInterval(()=>{
+    CAL.addStillSample(accel,gyro);
+    if(PREPROCESS.gyroBiasCollecting)PREPROCESS.collectGyroBias(gyro.x,gyro.y,gyro.z);
+  },100);
+  setTimeout(()=>{
+    clearInterval(iv);
+    const gb=PREPROCESS.gyroBias;
+    log('Gyro bias: x='+gb.x.toFixed(2)+' y='+gb.y.toFixed(2)+' z='+gb.z.toFixed(2),'var(--green)');
+    log('Accel units: '+(PREPROCESS.accelInG===true?'g-units (converting)':PREPROCESS.accelInG===false?'m/s² (native)':'detecting...'),'var(--green)');
+    log('Calibrated — all 5 data fixes active','var(--green)');
+  },5000);
 }
 function startRec(){
   if(!gpsTrue){log('No GPS','var(--red)');return;}
@@ -709,8 +1054,9 @@ function startRec(){
   $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
   $('b1').style.display='none';$('b2').style.display='block';$('calMeter').style.display='block';
   buildFormulaTable();
+  FISH.init(gpsTrue.lat,gpsTrue.lon);
   tickIv=setInterval(tick,1000);
-  log('Recording — '+F.length+' formulas active, '+(boardConnected?'7 hardware sensors':'phone sensors'),'var(--green)');
+  log('Recording — '+F.length+' formulas + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish agents','var(--green)');
 }
 function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
@@ -797,6 +1143,26 @@ function showReport(dur){
       <div class="rr"><span>Gyro scale</span><span class="rv">${CAL.gyroScale.toFixed(4)}</span></div>
       <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOff.toFixed(1)}°</span></div>
       <div class="rr"><span>Speed mult</span><span class="rv">${CAL.speedMult.toFixed(4)}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--teal)">EVOLVING FISH AGENTS</div>
+      ${(()=>{const fs=FISH.stats();return`
+      <div class="rr"><span>Schools × Agents</span><span class="rv">${fs.schools} × ${fs.agents/fs.schools} = ${fs.agents}</span></div>
+      <div class="rr"><span>Generations evolved</span><span class="rv">${fs.generation}</span></div>
+      <div class="rr"><span>Best school</span><span class="rv">#${fs.bestSchool}</span></div>
+      <div class="rr"><span>School errors</span><span class="rv" style="font-size:8px">${fs.schoolErrors.join(' | ')}</span></div>
+      ${fs.topDNA?`
+      <div class="rr"><span>Best DNA velW</span><span class="rv">${fs.topDNA.velW.toFixed(3)}</span></div>
+      <div class="rr"><span>Best DNA accelW</span><span class="rv">${fs.topDNA.accelW.toFixed(3)}</span></div>
+      <div class="rr"><span>Best DNA drDecay</span><span class="rv">${fs.topDNA.drDecay.toFixed(4)}</span></div>
+      <div class="rr"><span>Best DNA zuptTh</span><span class="rv">${fs.topDNA.zuptTh.toFixed(3)}</span></div>
+      <div class="rr"><span>Best DNA hdgSrc</span><span class="rv">${['mag','gps','gyro'][fs.topDNA.hdgSrc]}</span></div>
+      `:''}`;})()}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--amber)">DATA QUALITY FIXES</div>
+      <div class="rr"><span>Accel units</span><span class="rv">${PREPROCESS.accelInG===true?'g→m/s² (converted)':PREPROCESS.accelInG===false?'m/s² (native)':'detecting'}</span></div>
+      <div class="rr"><span>Gyro bias ready</span><span class="rv">${PREPROCESS.gyroBiasReady?'Yes ('+PREPROCESS.gyroBias.x.toFixed(2)+','+PREPROCESS.gyroBias.y.toFixed(2)+','+PREPROCESS.gyroBias.z.toFixed(2)+')':'No'}</span></div>
+      <div class="rr"><span>GPS frozen events</span><span class="rv">${PREPROCESS.frozenCount}</span></div>
+      <div class="rr"><span>Speed median filter</span><span class="rv">Active (${PREPROCESS.speedHistory.length} samples)</span></div>
     </div>
     <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED</div>
       <div class="rr"><span>Avg drift</span><span class="rv" style="color:${avgD<20?'var(--green)':'var(--red)'}">${avgD.toFixed(1)}m</span></div>
