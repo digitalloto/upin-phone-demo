@@ -614,14 +614,6 @@ const UTIN={
   }
 };
 
-
-  findNear(lat,lon,n=5){return TOWERS.map(t=>({lat:t.lat,lon:t.lon,dist:hav({lat,lon},t),signal:Math.max(-110,Math.min(-50,-50-60*Math.log(Math.max(100,hav({lat,lon},t))/100)/Math.log(50)))})).sort((a,b)=>a.dist-b.dist).slice(0,n);},
-  trilaterate(towers){if(towers.length<3)return null;let sL=0,sO=0,sW=0;towers.forEach(t=>{const w=Math.pow(10,(t.signal+100)/30);sL+=t.lat*w;sO+=t.lon*w;sW+=w;});return{lat:sL/sW,lon:sO/sW};},
-  lastTowers:null,
-  update(lat,lon){this.lastTowers=this.findNear(lat,lon,7);},
-  predict(){return this.lastTowers&&this.lastTowers.length>=3?this.trilaterate(this.lastTowers):null;}
-};
-
 // ═══════════════════════════════════════
 // 24 FORMULAS — v3's 22 + 2 hardware-specific
 // ═══════════════════════════════════════
@@ -1368,23 +1360,23 @@ F.push(mkF('RSI Heading',(pos,dt)=>{
 
 // F39: SMA+MACD — trend speed + momentum direction
 F.push(mkF('SMA+MACD',(pos,dt)=>{
-  const p1=F.find(f=>f.name==='SMA Trend')._rawPredict.call({},pos,dt);
-  const p2=F.find(f=>f.name==='MACD')._rawPredict.call({},pos,dt);
+  const p1=F.find(f=>f.name==='SMA Trend').predict(pos,dt);
+  const p2=F.find(f=>f.name==='MACD').predict(pos,dt);
   if(!p1||!p2)return pos;
   return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
 }));
 
 // F40: Bollinger+RSI — mean reversion + turn detection
 F.push(mkF('Boll+RSI',(pos,dt)=>{
-  const p1=F.find(f=>f.name==='Bollinger')._rawPredict.call({},pos,dt);
-  const p2=F.find(f=>f.name==='RSI Heading')._rawPredict.call({},pos,dt);
+  const p1=F.find(f=>f.name==='Bollinger').predict(pos,dt);
+  const p2=F.find(f=>f.name==='RSI Heading').predict(pos,dt);
   if(!p1||!p2)return pos;
   return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
 }));
 
 // F41: VWMA+Ant — confidence-weighted + step counting
 F.push(mkF('VWMA+Ant',(pos,dt)=>{
-  const p1=F.find(f=>f.name==='VWMA')._rawPredict.call({},pos,dt);
+  const p1=F.find(f=>f.name==='VWMA').predict(pos,dt);
   const p2=ANIMAL.ant.predict(pos,dt);
   if(!p1)return p2||pos;if(!p2)return p1;
   return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
@@ -1392,7 +1384,7 @@ F.push(mkF('VWMA+Ant',(pos,dt)=>{
 
 // F42: MACD+CellTower — momentum + absolute anchor
 F.push(mkF('MACD+Cell',(pos,dt)=>{
-  const p1=F.find(f=>f.name==='MACD')._rawPredict.call({},pos,dt);
+  const p1=F.find(f=>f.name==='MACD').predict(pos,dt);
   const p2=UTIN.predict();
   if(!p1&&!p2)return pos;if(!p2)return p1||pos;if(!p1)return{lat:p2.lat,lon:p2.lon};
   return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
@@ -1401,7 +1393,7 @@ F.push(mkF('MACD+Cell',(pos,dt)=>{
 // F43: INS+Bollinger — physics + mean reversion
 F.push(mkF('INS+Boll',(pos,dt)=>{
   INS.update(accel,gyro,dt);const insP=INS.getLatLon();
-  const bollP=F.find(f=>f.name==='Bollinger')._rawPredict.call({},pos,dt);
+  const bollP=F.find(f=>f.name==='Bollinger').predict(pos,dt);
   if(!insP&&!bollP)return pos;if(!bollP)return insP||pos;if(!insP)return bollP;
   return{lat:insP.lat*0.5+bollP.lat*0.5,lon:insP.lon*0.5+bollP.lon*0.5};
 }));
