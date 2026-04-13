@@ -53,7 +53,7 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
 .ctable{width:100%;font-size:9px;margin-bottom:6px;border-collapse:collapse}
 .ctable th{text-align:left;color:var(--td);font-size:7px;text-transform:uppercase;letter-spacing:1px;padding:3px;border-bottom:1px solid var(--border)}
 .ctable td{padding:3px;border-bottom:1px solid var(--border);color:var(--tm)}
-.ctable td:last-child{text-align:right;font-weight:700;color:var(--tp)}
+.ctable td:last-child{text-align:right;font-weight:700;color:var(--tp);font-size:7px;max-width:120px;overflow:hidden}
 /* Buttons */
 .btns{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px}
 .btn{padding:10px 4px;border:none;border-radius:2px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -476,7 +476,13 @@ function initPhoneSensors(){
     accel={x:a.x||0,y:a.y||0,z:a.z||9.8};gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
     gravity={x:(g.x||0)-(a.x||0),y:(g.y||0)-(a.y||0),z:(g.z||9.8)-(a.z||0)};
   });
-  const sO=()=>window.addEventListener('deviceorientation',e=>{compass=e.alpha||0;pitch=e.beta||0;roll=e.gamma||0;});
+  const sO=()=>window.addEventListener('deviceorientation',e=>{
+      compass=e.alpha||0;pitch=e.beta||0;roll=e.gamma||0;
+      // Derive approximate mag vector from compass heading
+      // Real magnetometer gives x/y/z in µT. We simulate from heading.
+      const hRad=(e.alpha||0)*Math.PI/180;
+      mag={x:Math.cos(hRad)*45,y:Math.sin(hRad)*45,z:Math.sin((e.beta||0)*Math.PI/180)*25};
+    });
   if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')sM();}).catch(()=>{});
   else if('DeviceMotionEvent' in window)sM();
   if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')sO();}).catch(()=>{});
@@ -807,9 +813,9 @@ F.push(mkF('Mag Map Match',function(pos,dt){
 const FORMULAS=F;
 function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
 function scoreFormulas(gps,dt){
-  if(!gps||DATA.samples.length<5)return;
+  if(!gps||DATA.samples.length<3)return;
   F.forEach(f=>{
-    if(!f.pos){f.pos={lat:gps.lat,lon:gps.lon};return;}
+    if(!f.pos)f.pos={lat:gps.lat,lon:gps.lon};
     const predicted=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
     if(predicted){
       f.err=hav(predicted,gps);
@@ -1654,12 +1660,14 @@ function tick(){
       el.textContent=f.errAvg<999?f.errAvg.toFixed(1)+'m':'--';
       el.style.color=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)';
       $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'off');
-      $('fs'+i).textContent=i===bi?'BEST':(f.errAvg<10?'OK':'...');
-      $('fs'+i).style.color=i===bi?'var(--green)':'var(--td)';
+      // Show status + position for each formula
+      const posStr=f.pos?f.pos.lat.toFixed(5)+','+f.pos.lon.toFixed(5):'--';
+      $('fs'+i).textContent=i===bi?'BEST '+posStr:(f.errAvg<999?f.errAvg.toFixed(1)+'m':'no data');
+      $('fs'+i).style.color=i===bi?'var(--green)':(f.errAvg<999?'var(--tm)':'var(--td)');
     });
     // Cal meter
     if(phase==='recording'){
-      const err=F[bi].errAvg;const ready=err<10&&DATA.count()>30;
+      const err=F[bi].errAvg;const ready=DATA.count()>20;
       $('calV').textContent=err<999?err.toFixed(1):'--';
       $('calV').style.color=ready?'var(--green)':err<20?'var(--amber)':'var(--red)';
       $('calBar').style.width=Math.max(5,Math.min(100,100-err*2))+'%';
@@ -1699,6 +1707,9 @@ function calibrate(){
     log('Gyro bias: x='+gb.x.toFixed(2)+' y='+gb.y.toFixed(2)+' z='+gb.z.toFixed(2),'var(--green)');
     log('Accel units: '+(PREPROCESS.accelInG===true?'g-units (converting)':PREPROCESS.accelInG===false?'m/s² (native)':'detecting...'),'var(--green)');
     log('Calibrated — all 5 data fixes active','var(--green)');
+    $('badge').textContent='READY';$('badge').className='badge b-phone';
+    $('srcPhone').innerHTML='<span class="sdot live"></span>Cal';
+    $('srcPhoned').textContent='bias:'+CAL.accelBias.x.toFixed(2)+','+CAL.accelBias.y.toFixed(2);
   },5000);
 }
 function startRec(){
