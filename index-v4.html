@@ -232,7 +232,7 @@ let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
 let drills=[],stepCount=0,lastStepT=0;
 let tickIv=null,alertIv=null,simStep=0,uiFrame=0;
 // Board state
-let ws=null,boardConnected=false,boardData=null;
+let boardConnected=false,boardData=null;
 let useBoard=false; // true=hardware sensors, false=phone sensors
 
 const $=id=>document.getElementById(id);
@@ -351,48 +351,52 @@ const PREPROCESS={
 // ═══════════════════════════════════════
 // WEBSOCKET — connect to IoT board
 // ═══════════════════════════════════════
+let boardUrl='';let boardPollIv=null;
 function connectBoard(){
-  if(ws)ws.close();
-  log('Connecting to board ws://192.168.4.1:81...','var(--teal)');
+  // Prompt user for the URL where board publishes data
+  const url=prompt('Enter board data URL:','https://your-board-endpoint.com/data');
+  if(!url)return;
+  boardUrl=url;
+  log('Connecting to board at '+url+'...','var(--teal)');
   $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting...';
-  try{
-    ws=new WebSocket('ws://192.168.4.1:81');
-    ws.onopen=()=>{
+  // Poll the URL every 1 second
+  fetchBoardData();
+  boardPollIv=setInterval(fetchBoardData,1000);
+}
+function fetchBoardData(){
+  if(!boardUrl)return;
+  fetch(boardUrl).then(r=>r.json()).then(d=>{
+    if(!boardConnected){
       boardConnected=true;useBoard=true;
-      $('boardStatus').innerHTML='<span class="sdot live"></span> Connected — 7 sensors streaming';
+      $('boardStatus').innerHTML='<span class="sdot live"></span> Connected — polling '+boardUrl;
       $('badge').textContent='BOARD';$('badge').className='badge b-board';
-      log('Board connected! 7 hardware sensors active','var(--green)');
+      log('Board connected! Reading sensor data','var(--green)');
       $('bStart').disabled=false;$('bStart').style.opacity='1';
-    };
-    ws.onmessage=(e)=>{
-      try{boardData=JSON.parse(e.data);processBoardData(boardData);}catch(err){}
-    };
-    ws.onclose=()=>{
+    }
+    boardData=d;processBoardData(d);
+  }).catch(e=>{
+    if(boardConnected){
       boardConnected=false;
-      $('boardStatus').innerHTML='<span class="sdot err"></span> Disconnected — using phone sensors';
-      log('Board disconnected — falling back to phone','var(--red)');
-      if(useBoard)usePhone();
-    };
-    ws.onerror=()=>{
-      $('boardStatus').innerHTML='<span class="sdot err"></span> Connection failed';
-      log('Board not found — use phone sensors instead','var(--red)');
-    };
-  }catch(e){
-    $('boardStatus').innerHTML='<span class="sdot err"></span> WebSocket error';
-    log('WebSocket error: '+e.message,'var(--red)');
-  }
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Connection lost';
+      log('Board connection lost — using phone','var(--red)');
+    }else{
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Cannot reach '+boardUrl;
+      log('Board not reachable — use phone instead','var(--red)');
+      if(boardPollIv){clearInterval(boardPollIv);boardPollIv=null;}
+    }
+  });
 }
 
 function usePhone(){
   useBoard=false;boardConnected=false;
-  if(ws)ws.close();
+  if(boardPollIv){clearInterval(boardPollIv);boardPollIv=null;}
   $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Phone sensors only';
   $('badge').textContent='PHONE';$('badge').className='badge b-phone';
   initPhoneSensors();initPhoneGPS();
   log('Using phone sensors (fallback mode)','var(--amber)');
 }
 
-// Process board WebSocket data
+// Process board sensor data (from HTTP polling)
 function processBoardData(d){
   if(!d)return;
   // IMU (MPU9250)
@@ -419,7 +423,7 @@ function processBoardData(d){
     $('srcGPS').innerHTML='<span class="sdot live"></span>'+d.gps.sats+'sat';
     $('srcGPSd').textContent='hdop:'+d.gps.hdop;
     $('ovSat').textContent=d.gps.sats;
-    if(!marker){map.setView([pos.lat,pos.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}
+    if(!marker){map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!V._lastMarker||hav(V._lastMarker,pos)>5){marker.setLatLng([pos.lat,pos.lon]);V._lastMarker={lat:pos.lat,lon:pos.lon};}
   }
   // Laser (VL53L1X)
   if(d.laser&&d.laser.ok){
@@ -454,7 +458,7 @@ function initPhoneGPS(){
   navigator.geolocation.watchPosition(p=>{
     gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
     if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;
-    if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}
+    if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);marker=L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!V._lastMarker||hav(V._lastMarker,gpsTrue)>5){marker.setLatLng([gpsTrue.lat,gpsTrue.lon]);V._lastMarker={lat:gpsTrue.lat,lon:gpsTrue.lon};}
     $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
     $('srcGPSd').textContent='±'+Math.round(gpsTrue.acc)+'m';
   },()=>useSimGPS(),{enableHighAccuracy:true,maximumAge:500,timeout:8000});
@@ -462,7 +466,7 @@ function initPhoneGPS(){
 function useSimGPS(){
   log('Simulated GPS','var(--amber)');
   const base={lat:13.0827,lon:80.2707};
-  setInterval(()=>{simStep++;gpsTrue={lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.00001,lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.00001,acc:10};if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);$('bStart').disabled=false;$('bStart').style.opacity='1';}},1000);
+  setInterval(()=>{simStep++;gpsTrue={lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.00001,lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.00001,acc:10};if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);marker=L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!V._lastMarker||hav(V._lastMarker,gpsTrue)>5){marker.setLatLng([gpsTrue.lat,gpsTrue.lon]);V._lastMarker={lat:gpsTrue.lat,lon:gpsTrue.lon};}},1000);
 }
 function initPhoneSensors(){
   $('srcPhone').innerHTML='<span class="sdot live"></span>Active';$('srcPhoned').textContent='accel+gyro';
@@ -1667,10 +1671,10 @@ function tick(){
     if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue){
       const drift=hav(drPos,gpsTrue);$('ovErr').textContent=drift.toFixed(1)+'m';
     }
-    // Only pan map if moved >20m from last pan (prevents GPS jitter drift)
-    if(uiFrame%8===0&&(drPos||gpsSys)){
+    // Only pan during recording/denial, and only if moved >30m
+    if(uiFrame%10===0&&phase!=='idle'&&(drPos||gpsSys)){
       const p=drPos||gpsSys;
-      if(!V._lastPan||hav(V._lastPan,p)>20){
+      if(!V._lastPan||hav(V._lastPan,p)>30){
         map.panTo([p.lat,p.lon]);
         V._lastPan={lat:p.lat,lon:p.lon};
       }
@@ -1868,7 +1872,7 @@ function exportCSV(){
 }
 
 // Boot
-V._lastPan=null;
+V._lastPan=null;V._lastMarker=null;
 window.addEventListener('load',()=>{initMap();buildFormulaTable();log('UPIN v4 ready — connect board or use phone','var(--tm)');});
 return{connectBoard,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV};
 })();
