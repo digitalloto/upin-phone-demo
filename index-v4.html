@@ -1667,7 +1667,14 @@ function tick(){
     if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue){
       const drift=hav(drPos,gpsTrue);$('ovErr').textContent=drift.toFixed(1)+'m';
     }
-    if(uiFrame%8===0&&(drPos||gpsSys)){const p=drPos||gpsSys;map.panTo([p.lat,p.lon]);}
+    // Only pan map if moved >20m from last pan (prevents GPS jitter drift)
+    if(uiFrame%8===0&&(drPos||gpsSys)){
+      const p=drPos||gpsSys;
+      if(!V._lastPan||hav(V._lastPan,p)>20){
+        map.panTo([p.lat,p.lon]);
+        V._lastPan={lat:p.lat,lon:p.lon};
+      }
+    }
     $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?'BOARD LIVE':'ACTIVE');
   }
 }
@@ -1861,6 +1868,7 @@ function exportCSV(){
 }
 
 // Boot
+V._lastPan=null;
 window.addEventListener('load',()=>{initMap();buildFormulaTable();log('UPIN v4 ready — connect board or use phone','var(--tm)');});
 return{connectBoard,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV};
 })();
