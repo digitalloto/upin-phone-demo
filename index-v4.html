@@ -1844,6 +1844,9 @@ function startRec(){
   phase='recording';startTime=performance.now();lastTick=null;
   $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
   $('b1').style.display='none';$('b2').style.display='block';$('calMeter').style.display='block';
+  // Enable jam/spoof immediately — user can jam anytime during recording
+  $('bJam').disabled=false;$('bJam').style.opacity='1';
+  $('bSpoof').disabled=false;$('bSpoof').style.opacity='1';
   buildFormulaTable();
   FISH.init(gpsTrue.lat,gpsTrue.lon);
   COMBOS.init();
