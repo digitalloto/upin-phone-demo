@@ -440,18 +440,47 @@ function connectBLE(){
     }
   });
 }
+let bleGoodPkts=0;
 function onBLEData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
   let endIdx;
   while((endIdx=bleBuffer.indexOf('$'))!==-1){
-    const json=bleBuffer.substring(0,endIdx);
+    let json=bleBuffer.substring(0,endIdx).trim();
     bleBuffer=bleBuffer.substring(endIdx+1);
     blePackets++;
-    try{const d=JSON.parse(json);boardData=d;processBoardData(d);}
-    catch(e){bleErrors++;if(bleErrors<=3)log('BLE parse error: '+e.message,'var(--red)');}
+    if(!json)continue;
+    if(json[0]!=='{'){
+      bleErrors++;
+      const braceIdx=json.indexOf('{');
+      if(braceIdx>0)json=json.substring(braceIdx);
+      else continue;
+    }
+    // Fix common firmware JSON issues
+    json=json.replace(/:,/g,':null,');
+    json=json.replace(/,\s*}/g,'}');
+    json=json.replace(/:}/g,':null}');
+    try{
+      const d=JSON.parse(json);
+      if(d.imu||d.gps||d.baro||d.t!==undefined){
+        boardData=d;processBoardData(d);bleGoodPkts++;
+      }else{bleErrors++;}
+    }catch(e){
+      bleErrors++;
+      if(bleErrors<=5){
+        const snippet=json.length>80?json.substring(0,40)+'...'+json.substring(json.length-40):json;
+        log('BLE parse err #'+bleErrors+': '+snippet,'var(--red)');
+      }
+      if(blePackets>0&&blePackets%50===0){
+        const rate=Math.round(bleGoodPkts/blePackets*100);
+        log('BLE: '+bleGoodPkts+'/'+blePackets+' ok ('+rate+'%)','var(--amber)');
+      }
+    }
   }
-  if(bleBuffer.length>4000){bleBuffer='';bleErrors++;}
+  if(bleBuffer.length>4000){
+    bleBuffer='';bleErrors++;
+    log('BLE buffer overflow — resync','var(--red)');
+  }
 }
 function onBLEDisconnect(){
   const wasBLE=(boardSource==='ble');
@@ -1886,7 +1915,7 @@ function tick(){
         _lastPan={lat:p.lat,lon:p.lon};
       }
     }
-    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+blePackets+'pkt':'WiFi '+wifiPackets+'pkt'):'ACTIVE');
+    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+bleGoodPkts+'/'+blePackets+(bleErrors?' ('+bleErrors+'err)':''):'WiFi '+wifiPackets+'pkt'):'ACTIVE');
   }
 }
 

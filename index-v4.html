@@ -431,18 +431,59 @@ function connectBLE(){
     }
   });
 }
+let bleGoodPkts=0;
 function onBLEData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
   let endIdx;
   while((endIdx=bleBuffer.indexOf('$'))!==-1){
-    const json=bleBuffer.substring(0,endIdx);
+    let json=bleBuffer.substring(0,endIdx).trim();
     bleBuffer=bleBuffer.substring(endIdx+1);
     blePackets++;
-    try{const d=JSON.parse(json);boardData=d;processBoardData(d);}
-    catch(e){bleErrors++;if(bleErrors<=3)log('BLE parse error: '+e.message,'var(--red)');}
+    // Skip empty messages
+    if(!json)continue;
+    // Must start with '{' — if not, we lost the start of this message
+    if(json[0]!=='{'){
+      bleErrors++;
+      // Try to find a '{' in the string (partial recovery)
+      const braceIdx=json.indexOf('{');
+      if(braceIdx>0)json=json.substring(braceIdx);
+      else continue; // no '{' at all, skip entirely
+    }
+    // Fix common firmware JSON issues:
+    // 1. Empty values like "ble":, → "ble":null,
+    json=json.replace(/:,/g,':null,');
+    // 2. Trailing comma before } like ,"} → }
+    json=json.replace(/,\s*}/g,'}');
+    // 3. Empty value at end like :"} → :null}
+    json=json.replace(/:}/g,':null}');
+    try{
+      const d=JSON.parse(json);
+      // Validate: must have at least one expected field
+      if(d.imu||d.gps||d.baro||d.t!==undefined){
+        boardData=d;processBoardData(d);bleGoodPkts++;
+      }else{
+        bleErrors++;
+      }
+    }catch(e){
+      bleErrors++;
+      // Log first few errors with a snippet of the bad JSON for debugging
+      if(bleErrors<=5){
+        const snippet=json.length>80?json.substring(0,40)+'...'+json.substring(json.length-40):json;
+        log('BLE parse err #'+bleErrors+': '+snippet,'var(--red)');
+      }
+      // Show error rate periodically
+      if(blePackets>0&&blePackets%50===0){
+        const rate=Math.round(bleGoodPkts/blePackets*100);
+        log('BLE: '+bleGoodPkts+'/'+blePackets+' ok ('+rate+'%)','var(--amber)');
+      }
+    }
   }
-  if(bleBuffer.length>4000){bleBuffer='';bleErrors++;}
+  // Safety: buffer too large means we missed a '$' delimiter
+  if(bleBuffer.length>4000){
+    bleBuffer='';bleErrors++;
+    log('BLE buffer overflow — resync','var(--red)');
+  }
 }
 function onBLEDisconnect(){
   const wasBLE=(boardSource==='ble');
@@ -1815,7 +1856,7 @@ function tick(){
         _lastPan={lat:p.lat,lon:p.lon};
       }
     }
-    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+blePackets+'pkt':'WiFi '+wifiPackets+'pkt'):'ACTIVE');
+    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+bleGoodPkts+'/'+blePackets+(bleErrors?' ('+bleErrors+'err)':''):'WiFi '+wifiPackets+'pkt'):'ACTIVE');
   }
 }
 
