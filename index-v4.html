@@ -67,6 +67,15 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
 /* Board connect */
 .board-box{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:8px;margin-bottom:6px;text-align:center}
 .board-box .bt{font-family:'Orbitron',sans-serif;font-size:8px;font-weight:700;letter-spacing:2px;margin-bottom:4px}
+.btn-hw{font-family:'Orbitron',sans-serif;font-size:10px;font-weight:900;letter-spacing:3px;text-transform:uppercase;color:var(--cyan);background:rgba(0,229,255,.04);border:2px solid var(--cyan);padding:14px 8px;width:100%;cursor:pointer;border-radius:2px;-webkit-tap-highlight-color:transparent;transition:all .2s}
+.btn-hw:active{background:rgba(0,229,255,.15);transform:scale(.98)}
+.btn-hw.connected{color:var(--green);border-color:var(--green);background:rgba(0,255,136,.06)}
+.btn-hw.error{color:var(--red);border-color:var(--red);background:rgba(255,49,49,.06)}
+.btn-hw.connecting{color:var(--amber);border-color:var(--amber);background:rgba(255,184,0,.06);animation:pulseGlow 1.5s infinite}
+.ble-badge{display:inline-block;font-size:7px;font-weight:700;padding:2px 6px;border-radius:2px;letter-spacing:1px;margin-left:4px;vertical-align:middle}
+.ble-on{background:var(--cyan);color:#000}
+.ble-off{background:var(--border);color:var(--td)}
+.iphone-note{font-size:7px;color:var(--td);margin-top:4px;font-style:italic}
 /* Alert */
 .alert{display:none;border:1px solid;border-radius:2px;padding:8px;margin-bottom:6px;text-align:center}
 .alert .at{font-family:'Orbitron',sans-serif;font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:3px}
@@ -110,12 +119,11 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
 <div id="panel">
   <!-- Board connection -->
   <div class="board-box" id="boardBox">
-    <div class="bt" style="color:var(--teal)">SENSOR BOARD</div>
-    <div id="boardStatus" style="font-size:9px;color:var(--td)"><span class="sdot off"></span> Not connected — join UPIN-SENSOR-BOARD WiFi first</div>
-    <div class="btns" style="margin-top:6px">
-      <button class="btn btn-teal" onclick="V.connectBoard()">Connect to Hardware</button>
-      <button class="btn btn-dim" onclick="V.usePhone()">Use Phone Only</button>
-    </div>
+    <div class="bt" style="color:var(--cyan)">HARDWARE BOARD <span class="ble-badge ble-off" id="bleBadge">BLE</span></div>
+    <button class="btn-hw" id="bleBtn" onclick="V.connectBoard()">CONNECT HARDWARE BOARD</button>
+    <div id="boardStatus" style="font-size:8px;color:var(--td);margin-top:6px"><span class="sdot off"></span> Tap to connect via Bluetooth</div>
+    <div style="margin-top:6px"><button class="btn btn-dim" onclick="V.usePhone()" style="width:100%">Use Phone Only</button></div>
+    <div class="iphone-note">iPhone users: BLE not supported in any browser. Use WiFi connection instead.</div>
   </div>
   <!-- Metrics -->
   <div class="mrow">
@@ -350,54 +358,122 @@ const PREPROCESS={
 };
 
 // ═══════════════════════════════════════
-// WEBSOCKET — connect to IoT board
+// BLE — connect to IoT board via Bluetooth
 // ═══════════════════════════════════════
-let boardUrl='http://192.168.4.1/data';let boardPollIv=null;let boardFails=0;
+const BLE_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const BLE_TX_CHAR='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+let bleDevice=null,bleChar=null,bleBuffer='',blePackets=0,bleErrors=0;
+
 function connectBoard(){
-  boardFails=0;
-  if(boardPollIv){clearInterval(boardPollIv);boardPollIv=null;}
-  log('Connecting to UPIN sensor board at '+boardUrl+'...','var(--teal)');
-  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting to 192.168.4.1...';
-  // Poll the board every 200ms (5Hz)
-  fetchBoardData();
-  boardPollIv=setInterval(fetchBoardData,200);
-}
-function fetchBoardData(){
-  if(!boardUrl)return;
-  fetch(boardUrl).then(r=>r.json()).then(d=>{
-    if(!boardConnected){
-      boardConnected=true;useBoard=true;
-      $('boardStatus').innerHTML='<span class="sdot live"></span> Board live — 5Hz polling';
-      $('badge').textContent='BOARD';$('badge').className='badge b-board';
-      log('Board connected! Reading sensor data','var(--green)');
-      $('bStart').disabled=false;$('bStart').style.opacity='1';
-    }
-    boardFails=0;boardData=d;processBoardData(d);
-  }).catch(e=>{
-    boardFails++;
-    if(boardConnected){
-      boardConnected=false;useBoard=false;
-      $('boardStatus').innerHTML='<span class="sdot err"></span> Connection lost — retrying...';
-      log('Board connection lost — retrying...','var(--red)');
-    }else if(boardFails<=3){
-      $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting... attempt '+boardFails;
-    }else if(boardFails===4){
-      $('boardStatus').innerHTML='<span class="sdot err"></span> Cannot reach 192.168.4.1 — are you on UPIN-SENSOR-BOARD WiFi?';
-      log('Board not reachable — connect to UPIN-SENSOR-BOARD WiFi first','var(--red)');
-    }
-    // Keep retrying — don't clear interval (board may come back)
-    if(boardFails>20){clearInterval(boardPollIv);boardPollIv=null;
-      $('boardStatus').innerHTML='<span class="sdot err"></span> Gave up — tap Connect to retry';
-      log('Stopped retrying after 20 fails','var(--red)');
+  // Check Web Bluetooth support
+  if(!navigator.bluetooth){
+    log('Web Bluetooth not available — use Chrome on Android or laptop','var(--red)');
+    $('boardStatus').innerHTML='<span class="sdot err"></span> Bluetooth not supported in this browser';
+    $('bleBtn').className='btn-hw error';$('bleBtn').textContent='BLE NOT SUPPORTED';
+    return;
+  }
+  // If already connected, disconnect first
+  if(bleDevice&&bleDevice.gatt.connected){
+    disconnectBLE();return;
+  }
+  log('Requesting BLE connection to UPIN-BLE...','var(--cyan)');
+  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Requesting Bluetooth...';
+  $('bleBtn').className='btn-hw connecting';$('bleBtn').textContent='CONNECTING...';
+
+  navigator.bluetooth.requestDevice({
+    filters:[{name:'UPIN-BLE'}],
+    optionalServices:[BLE_SERVICE]
+  }).then(device=>{
+    bleDevice=device;
+    device.addEventListener('gattserverdisconnected',onBLEDisconnect);
+    log('Device found: '+device.name+' — connecting GATT...','var(--cyan)');
+    $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting to '+device.name+'...';
+    return device.gatt.connect();
+  }).then(server=>{
+    log('GATT connected — getting UART service...','var(--cyan)');
+    return server.getPrimaryService(BLE_SERVICE);
+  }).then(service=>{
+    log('UART service found — getting TX characteristic...','var(--cyan)');
+    return service.getCharacteristic(BLE_TX_CHAR);
+  }).then(char=>{
+    bleChar=char;
+    log('TX characteristic ready — starting notifications...','var(--cyan)');
+    return char.startNotifications();
+  }).then(()=>{
+    bleChar.addEventListener('characteristicvaluechanged',onBLEData);
+    boardConnected=true;useBoard=true;bleBuffer='';blePackets=0;bleErrors=0;
+    $('boardStatus').innerHTML='<span class="sdot live"></span> HARDWARE CONNECTED — 7 SENSORS';
+    $('bleBtn').className='btn-hw connected';$('bleBtn').textContent='HARDWARE CONNECTED — TAP TO DISCONNECT';
+    $('badge').textContent='BOARD';$('badge').className='badge b-board';
+    $('bleBadge').className='ble-badge ble-on';
+    $('bStart').disabled=false;$('bStart').style.opacity='1';
+    log('BLE connected! Receiving sensor data at 5Hz','var(--green)');
+  }).catch(err=>{
+    const msg=err.message||String(err);
+    if(msg.includes('cancelled')||msg.includes('canceled')){
+      log('BLE pairing cancelled by user','var(--amber)');
+      $('boardStatus').innerHTML='<span class="sdot off"></span> Cancelled — tap to try again';
+      $('bleBtn').className='btn-hw';$('bleBtn').textContent='CONNECT HARDWARE BOARD';
+    }else{
+      log('BLE error: '+msg,'var(--red)');
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Error: '+msg;
+      $('bleBtn').className='btn-hw error';$('bleBtn').textContent='CONNECTION FAILED — TAP TO RETRY';
     }
   });
 }
 
-function usePhone(){
-  useBoard=false;boardConnected=false;
-  if(boardPollIv){clearInterval(boardPollIv);boardPollIv=null;}
-  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Phone sensors only';
+function onBLEData(event){
+  const raw=new TextDecoder().decode(event.target.value);
+  bleBuffer+=raw;
+  // Check for end-of-message marker "$"
+  let endIdx;
+  while((endIdx=bleBuffer.indexOf('$'))!==-1){
+    const json=bleBuffer.substring(0,endIdx);
+    bleBuffer=bleBuffer.substring(endIdx+1);
+    blePackets++;
+    try{
+      const d=JSON.parse(json);
+      boardData=d;processBoardData(d);
+    }catch(e){
+      bleErrors++;
+      if(bleErrors<=3)log('BLE parse error (pkt #'+blePackets+'): '+e.message,'var(--red)');
+    }
+  }
+  // Safety: if buffer grows too large without "$", clear it (corrupted stream)
+  if(bleBuffer.length>4000){bleBuffer='';bleErrors++;log('BLE buffer overflow — cleared','var(--red)');}
+}
+
+function onBLEDisconnect(){
+  boardConnected=false;useBoard=false;
+  $('boardStatus').innerHTML='<span class="sdot err"></span> Disconnected — tap to reconnect';
+  $('bleBtn').className='btn-hw error';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
   $('badge').textContent='PHONE';$('badge').className='badge b-phone';
+  $('bleBadge').className='ble-badge ble-off';
+  log('BLE disconnected — falling back to phone sensors ('+blePackets+' packets received, '+bleErrors+' errors)','var(--red)');
+  initPhoneSensors();initPhoneGPS();
+}
+
+function disconnectBLE(){
+  if(bleChar){try{bleChar.removeEventListener('characteristicvaluechanged',onBLEData);}catch(e){}}
+  if(bleDevice&&bleDevice.gatt.connected){bleDevice.gatt.disconnect();}
+  boardConnected=false;useBoard=false;
+  $('boardStatus').innerHTML='<span class="sdot off"></span> Disconnected';
+  $('bleBtn').className='btn-hw';$('bleBtn').textContent='CONNECT HARDWARE BOARD';
+  $('badge').textContent='PHONE';$('badge').className='badge b-phone';
+  $('bleBadge').className='ble-badge ble-off';
+  log('BLE disconnected manually','var(--amber)');
+  initPhoneSensors();initPhoneGPS();
+}
+
+function usePhone(){
+  if(bleDevice&&bleDevice.gatt.connected)disconnectBLE();
+  else{
+    useBoard=false;boardConnected=false;
+    $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Phone sensors only';
+    $('bleBtn').className='btn-hw';$('bleBtn').textContent='CONNECT HARDWARE BOARD';
+    $('badge').textContent='PHONE';$('badge').className='badge b-phone';
+    $('bleBadge').className='ble-badge ble-off';
+  }
   initPhoneSensors();initPhoneGPS();
   log('Using phone sensors (fallback mode)','var(--amber)');
 }
@@ -1657,7 +1733,7 @@ function tick(){
     if(startTime)$('mTime').textContent=fmt((now-startTime)/1000);
     if(DATA.samples.length>1){const l=DATA.samples[DATA.samples.length-1];$('mSpd').textContent=Math.round(l.speed*3.6);$('mHdg').textContent=Math.round(l.heading)+'°';}
     $('mAlt').textContent=baroAlt?baroAlt.toFixed(1):'--';
-    $('ovSrc').textContent=boardConnected?'BOARD':'PHONE';
+    $('ovSrc').textContent=boardConnected?'BLE':'PHONE';
     // Formula table (textContent updates only)
     const bi=bestFormulaIdx();
     F.forEach((f,i)=>{
@@ -1693,7 +1769,7 @@ function tick(){
         _lastPan={lat:p.lat,lon:p.lon};
       }
     }
-    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?'BOARD LIVE':'ACTIVE');
+    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?'BLE '+blePackets+'pkt':'ACTIVE');
   }
 }
 
@@ -1726,7 +1802,7 @@ function startRec(){
   FISH.init(gpsTrue.lat,gpsTrue.lon);
   COMBOS.init();
   tickIv=setInterval(tick,1000);
-  log('Recording — '+F.length+' formulas + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish agents','var(--green)');
+  log('Recording — '+F.length+' formulas + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish agents'+(boardConnected?' [BLE HARDWARE]':' [PHONE]'),'var(--green)');
 }
 function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
@@ -1779,7 +1855,7 @@ function showReport(dur){
   let drillsHTML=drills.map((d,di)=>{
     const top=d.formulaResults?d.formulaResults.slice(0,5).map((f,ri)=>`<div class="rr"><span>${ri===0?'◈':ri===1?'◇':'○'} ${f.name}</span><span class="rv" style="color:${f.drift<15?'var(--green)':f.drift<50?'var(--amber)':'var(--red)'}">${f.drift<999?f.drift.toFixed(1)+'m':'--'}</span></div>`).join(''):'';
     return`<div style="background:var(--bg);border:1px solid var(--border);padding:6px;margin:4px 0;border-radius:2px">
-      <div style="font-family:'Orbitron',sans-serif;font-size:8px;color:var(--amber);letter-spacing:2px">DRILL ${di+1} — ${fmt(d.blindSec)} ${d.type.toUpperCase()} ${d.boardActive?'(BOARD)':'(PHONE)'}</div>
+      <div style="font-family:'Orbitron',sans-serif;font-size:8px;color:var(--amber);letter-spacing:2px">DRILL ${di+1} — ${fmt(d.blindSec)} ${d.type.toUpperCase()} ${d.boardActive?'(BLE HARDWARE)':'(PHONE)'}</div>
       <div class="rr"><span>Drift</span><span class="rv" style="color:${d.driftM<20?'var(--green)':'var(--red)'}">${d.driftM.toFixed(1)}m [${d.grade}]</span></div>
       ${top}</div>`;}).join('');
 
@@ -1789,8 +1865,8 @@ function showReport(dur){
       <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
       <div class="rr"><span>Samples</span><span class="rv">${DATA.count()}</span></div>
       <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
-      <div class="rr"><span>Formulas</span><span class="rv">${F.length} (${boardConnected?'27 hw+sw':'24 phone'})</span></div>
-      <div class="rr"><span>Data source</span><span class="rv">${boardConnected?'IoT Board (7 sensors)':'Phone'}</span></div>
+      <div class="rr"><span>Formulas</span><span class="rv">${F.length} (${boardConnected?F.length+' hw+sw':'24 phone'})</span></div>
+      <div class="rr"><span>Data source</span><span class="rv">${boardConnected?'IoT Board BLE (7 sensors) — '+blePackets+' pkts':'Phone'}</span></div>
       <div class="rr"><span>Cell towers (4G+2G)</span><span class="rv">${(cellTowers4G||0)+(cellTowers2G||0)} towers</span></div>
       <div class="rr"><span>Laser range</span><span class="rv">${laserMm?laserMm+'mm':'N/A'}</span></div>
       <div class="rr"><span>Avg speed</span><span class="rv">${(avgSpd*3.6).toFixed(1)} km/h</span></div>
@@ -1829,9 +1905,9 @@ function showReport(dur){
       }).join(''):''}
     </div>
     <div class="rc"><div class="rct" style="color:var(--teal)">DATA SOURCES</div>
-      <div class="rr"><span>IMU (accel+gyro+mag)</span><span class="rv">${boardConnected?'MPU9250 (HW)':'Phone MEMS'}</span></div>
+      <div class="rr"><span>IMU (accel+gyro+mag)</span><span class="rv">${boardConnected?'MPU9250 via BLE':'Phone MEMS'}</span></div>
       <div class="rr"><span>Barometer</span><span class="rv">${pressure?'BMP280 '+pressure.toFixed(0)+'hPa':'None'}</span></div>
-      <div class="rr"><span>GPS</span><span class="rv">${boardConnected?'NEO-6M':'Phone'}</span></div>
+      <div class="rr"><span>GPS</span><span class="rv">${boardConnected?'NEO-6M via BLE':'Phone'}</span></div>
       <div class="rr"><span>Laser ranging</span><span class="rv">${laserMm?laserMm+'mm':'Not connected'}</span></div>
       <div class="rr"><span>Cell towers (4G)</span><span class="rv">${cellTowers4G||'--'}</span></div>
       <div class="rr"><span>Cell towers (2G)</span><span class="rv">${cellTowers2G||'--'}</span></div>
@@ -1882,14 +1958,23 @@ function showReport(dur){
 }
 function exportCSV(){
   let c='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs\n';
-  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${boardConnected?'board':'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0}\n`;});
+  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${boardConnected?'ble':'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0}\n`;});
   c+='\nFormulas\nRank,Name,Error(m)\n';
   [...F].map((f,i)=>({n:f.name,e:f.errAvg})).sort((a,b)=>a.e-b.e).forEach((f,i)=>{c+=`${i+1},${f.n},${f.e<999?f.e.toFixed(1):'--'}\n`;});
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v4-data.csv';a.click();
 }
 
 // Boot
-window.addEventListener('load',()=>{initMap();buildFormulaTable();log('UPIN v4 ready — connect board or use phone','var(--tm)');});
+window.addEventListener('load',()=>{
+  initMap();buildFormulaTable();
+  if(!navigator.bluetooth){
+    $('bleBtn').textContent='BLE NOT AVAILABLE — USE PHONE';
+    $('boardStatus').innerHTML='<span class="sdot off"></span> Web Bluetooth requires Chrome on Android/laptop';
+    log('UPIN v4 ready — BLE not available, using phone sensors','var(--amber)');
+  }else{
+    log('UPIN v4 ready — tap CONNECT HARDWARE BOARD for BLE','var(--cyan)');
+  }
+});
 return{connectBoard,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV};
 })();
 </script>
