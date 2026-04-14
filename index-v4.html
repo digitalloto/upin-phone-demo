@@ -111,9 +111,9 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
   <!-- Board connection -->
   <div class="board-box" id="boardBox">
     <div class="bt" style="color:var(--teal)">SENSOR BOARD</div>
-    <div id="boardStatus" style="font-size:9px;color:var(--td)"><span class="sdot off"></span> Not connected</div>
+    <div id="boardStatus" style="font-size:9px;color:var(--td)"><span class="sdot off"></span> Not connected — join UPIN-SENSOR-BOARD WiFi first</div>
     <div class="btns" style="margin-top:6px">
-      <button class="btn btn-teal" onclick="V.connectBoard()">Connect Board</button>
+      <button class="btn btn-teal" onclick="V.connectBoard()">Connect to Hardware</button>
       <button class="btn btn-dim" onclick="V.usePhone()">Use Phone Only</button>
     </div>
   </div>
@@ -352,38 +352,43 @@ const PREPROCESS={
 // ═══════════════════════════════════════
 // WEBSOCKET — connect to IoT board
 // ═══════════════════════════════════════
-let boardUrl='';let boardPollIv=null;
+let boardUrl='http://192.168.4.1/data';let boardPollIv=null;let boardFails=0;
 function connectBoard(){
-  // Prompt user for the URL where board publishes data
-  const url=prompt('Enter board data URL:','https://your-board-endpoint.com/data');
-  if(!url)return;
-  boardUrl=url;
-  log('Connecting to board at '+url+'...','var(--teal)');
-  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting...';
-  // Poll the URL every 1 second
+  boardFails=0;
+  if(boardPollIv){clearInterval(boardPollIv);boardPollIv=null;}
+  log('Connecting to UPIN sensor board at '+boardUrl+'...','var(--teal)');
+  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting to 192.168.4.1...';
+  // Poll the board every 200ms (5Hz)
   fetchBoardData();
-  boardPollIv=setInterval(fetchBoardData,1000);
+  boardPollIv=setInterval(fetchBoardData,200);
 }
 function fetchBoardData(){
   if(!boardUrl)return;
   fetch(boardUrl).then(r=>r.json()).then(d=>{
     if(!boardConnected){
       boardConnected=true;useBoard=true;
-      $('boardStatus').innerHTML='<span class="sdot live"></span> Connected — polling '+boardUrl;
+      $('boardStatus').innerHTML='<span class="sdot live"></span> Board live — 5Hz polling';
       $('badge').textContent='BOARD';$('badge').className='badge b-board';
       log('Board connected! Reading sensor data','var(--green)');
       $('bStart').disabled=false;$('bStart').style.opacity='1';
     }
-    boardData=d;processBoardData(d);
+    boardFails=0;boardData=d;processBoardData(d);
   }).catch(e=>{
+    boardFails++;
     if(boardConnected){
-      boardConnected=false;
-      $('boardStatus').innerHTML='<span class="sdot err"></span> Connection lost';
-      log('Board connection lost — using phone','var(--red)');
-    }else{
-      $('boardStatus').innerHTML='<span class="sdot err"></span> Cannot reach '+boardUrl;
-      log('Board not reachable — use phone instead','var(--red)');
-      if(boardPollIv){clearInterval(boardPollIv);boardPollIv=null;}
+      boardConnected=false;useBoard=false;
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Connection lost — retrying...';
+      log('Board connection lost — retrying...','var(--red)');
+    }else if(boardFails<=3){
+      $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting... attempt '+boardFails;
+    }else if(boardFails===4){
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Cannot reach 192.168.4.1 — are you on UPIN-SENSOR-BOARD WiFi?';
+      log('Board not reachable — connect to UPIN-SENSOR-BOARD WiFi first','var(--red)');
+    }
+    // Keep retrying — don't clear interval (board may come back)
+    if(boardFails>20){clearInterval(boardPollIv);boardPollIv=null;
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Gave up — tap Connect to retry';
+      log('Stopped retrying after 20 fails','var(--red)');
     }
   });
 }
