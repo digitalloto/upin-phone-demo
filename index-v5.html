@@ -2140,16 +2140,34 @@ function tick(){
         else{PUE._circle.setLatLng([pCenter.lat,pCenter.lon]);PUE._circle.setRadius(pRadius);}
       }
 
-      // Draw top 5 formula trails on map (every 5th tick)
+      // Draw top 5 formula trails + position dots on map (every 5th tick)
       if(uiFrame%5===0){
-        const ranked=[...F].map((f,i)=>({i,err:f.drillDrift||f.errAvg||999})).sort((a,b)=>a.err-b.err);
+        const ranked=[...F].map((f,i)=>({i,f,err:f.drillDrift||f.errAvg||999})).filter(x=>x.f.pos).sort((a,b)=>a.err-b.err);
         const colors=['#00E5FF','#00FF88','#FFB800','#3B82F6','#A855F7'];
         for(let r=0;r<5&&r<ranked.length;r++){
-          const f=F[ranked[r].i];
-          if(!f.drillTrail||f.drillTrail.length<2)continue;
-          if(!f.mapLine)f.mapLine=L.polyline(f.drillTrail,{color:colors[r],weight:2,opacity:.6,dashArray:'4,4'}).addTo(map);
-          else f.mapLine.setLatLngs(f.drillTrail);
+          const f=ranked[r].f;
+          // Trail line
+          if(f.drillTrail&&f.drillTrail.length>=2){
+            if(!f.mapLine)f.mapLine=L.polyline(f.drillTrail,{color:colors[r],weight:2,opacity:.6,dashArray:'4,4'}).addTo(map);
+            else f.mapLine.setLatLngs(f.drillTrail);
+          }
+          // Position dot
+          if(f.pos){
+            const ll=[f.pos.lat,f.pos.lon];
+            if(!f._mapDot){
+              f._mapDot=L.circleMarker(ll,{radius:5,color:colors[r],fillColor:colors[r],fillOpacity:0.8,weight:1}).addTo(map);
+              f._mapDot.bindTooltip(f.name,{permanent:false,direction:'top',offset:[0,-8]});
+            }else{
+              f._mapDot.setLatLng(ll);
+              f._mapDot.setStyle({color:colors[r],fillColor:colors[r]});
+            }
+          }
         }
+        // Remove dots for formulas no longer in top 5
+        F.forEach((f,i)=>{
+          const inTop=ranked.slice(0,5).some(r=>r.i===i);
+          if(!inTop&&f._mapDot){map.removeLayer(f._mapDot);f._mapDot=null;}
+        });
         // Draw weighted avg trail in white for comparison
         if(F._waTrail&&F._waTrail.length>1){
           if(!F._waLine)F._waLine=L.polyline(F._waTrail,{color:'#ffffff',weight:1,opacity:.4,dashArray:'2,4'}).addTo(map);
@@ -2272,7 +2290,7 @@ function jam(){
   PUE.activate(); // Lock the envelope at current position + speed
   $('badge').textContent='JAMMED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('jalrt').style.display='block';
-  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}if(f._mapDot){map.removeLayer(f._mapDot);f._mapDot=null;}});
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
   const ps=PUE.stats();log('GPS JAMMED — envelope: '+Math.round(ps.radius)+'m radius @ '+Math.round(ps.speed*3.6)+'km/h','var(--amber)');
@@ -2282,7 +2300,7 @@ function spoof(){
   PUE.activate(); // Lock the envelope
   $('badge').textContent='SPOOFED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('salrt').style.display='block';
-  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}if(f._mapDot){map.removeLayer(f._mapDot);f._mapDot=null;}});
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('sT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
   log('GPS SPOOFED — envelope active, formulas constrained','var(--red)');
@@ -2298,7 +2316,7 @@ function resurface(){
   // Clean up PUE circle from map
   if(PUE._circle){map.removeLayer(PUE._circle);PUE._circle=null;}
   PUE.active=false;
-  F.forEach(f=>{if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  F.forEach(f=>{if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}if(f._mapDot){map.removeLayer(f._mapDot);f._mapDot=null;}});
   if(F._waLine){map.removeLayer(F._waLine);F._waLine=null;}F._waTrail=[];
   if(gpsTrue){L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1}).bindPopup('Resurface #'+drills.length+'<br>Drift: '+drift.toFixed(1)+'m ['+grade+']').addTo(map);}
   phase='recording';$('badge').textContent='RECORDING';$('badge').className='badge b-rec';
