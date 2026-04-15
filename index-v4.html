@@ -1686,6 +1686,70 @@ const COMBOS={
 F.push(mkF('Auto Combo',(pos,dt)=>{const p=COMBOS.bestPredict(pos,dt);return p||pos;}));
 
 // ═══════════════════════════════════════
+// TERRAIN FINGERPRINT — mag+baro+cell pattern matching
+// ═══════════════════════════════════════
+const TERRAIN={
+  prints:[],lastPos:null,
+  record(lat,lon){
+    if(this.lastPos&&hav(this.lastPos,{lat,lon})<10)return;
+    this.lastPos={lat,lon};
+    const magMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+    this.prints.push({lat,lon,mag:magMag,baro:pressure,cells:cellTowers4G+cellTowers2G,wifi:wifiAPs});
+    if(this.prints.length>2000)this.prints.shift();
+  },
+  match(){
+    if(this.prints.length<20)return null;
+    const curMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+    let bestD=Infinity,bestP=null;
+    this.prints.forEach(p=>{
+      const d=Math.abs(p.mag-curMag)*1.0+Math.abs(p.baro-pressure)*0.5+Math.abs(p.cells-(cellTowers4G+cellTowers2G))*5;
+      if(d<bestD){bestD=d;bestP=p;}
+    });
+    if(bestP&&bestD<25)return{lat:bestP.lat,lon:bestP.lon,conf:Math.max(0.1,1-bestD/25)};
+    return null;
+  }
+};
+F.push(mkF('Terrain FP',(pos,dt)=>{
+  const m=TERRAIN.match();if(!m)return pos;
+  const v=velFromGPS(5);
+  if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+m.lat*0.4,lon:vP.lon*0.6+m.lon*0.4};}
+  return{lat:m.lat,lon:m.lon};
+}));
+
+// ═══════════════════════════════════════
+// POSITION UNCERTAINTY ENVELOPE (PUE)
+// Physics-based constraint: you can only be within speed×time
+// from last known position. Any formula outside = WRONG.
+// ═══════════════════════════════════════
+const PUE={
+  lastGoodPos:null,lastGoodSpeed:0,lastGoodTime:0,maxAccel:3.0,
+  active:false,enforced:0,total:0,_circle:null,
+  updateFromGPS(pos,speed){this.lastGoodPos={lat:pos.lat,lon:pos.lon};this.lastGoodSpeed=speed||0;this.lastGoodTime=performance.now();this.active=false;},
+  activate(){this.active=true;this.enforced=0;this.total=0;},
+  getRadius(){
+    if(!this.active||!this.lastGoodPos)return Infinity;
+    const t=(performance.now()-this.lastGoodTime)/1000;
+    return Math.min(this.lastGoodSpeed*t+0.5*this.maxAccel*t*t,100000);
+  },
+  getCenter(){
+    if(!this.lastGoodPos)return null;
+    const cellPos=UTIN.predict();
+    if(cellPos)return{lat:this.lastGoodPos.lat*0.5+cellPos.lat*0.5,lon:this.lastGoodPos.lon*0.5+cellPos.lon*0.5};
+    return this.lastGoodPos;
+  },
+  constrain(predicted){
+    if(!this.active||!this.lastGoodPos||!predicted)return predicted;
+    this.total++;
+    const center=this.getCenter(),radius=this.getRadius(),dist=hav(predicted,center);
+    if(dist<=radius)return predicted;
+    this.enforced++;
+    const ratio=radius/dist;
+    return{lat:center.lat+(predicted.lat-center.lat)*ratio,lon:center.lon+(predicted.lon-center.lon)*ratio};
+  },
+  stats(){return{radius:this.active?this.getRadius():0,elapsed:this.active?(performance.now()-this.lastGoodTime)/1000:0,speed:this.lastGoodSpeed,enforced:this.enforced,total:this.total,pct:this.total>0?Math.round(this.enforced/this.total*100):0};}
+};
+
+// ═══════════════════════════════════════
 // MAP + TICK + CONTROLS + REPORT
 // ═══════════════════════════════════════
 function initMap(){
@@ -1733,6 +1797,8 @@ function tick(){
     COMBOS.score(gpsSys,dt);
     // Animal methods: record all environmental data at this GPS position
     ANIMAL.recordAll(gpsSys.lat,gpsSys.lon,accel,dt);
+    TERRAIN.record(gpsSys.lat,gpsSys.lon);
+    PUE.updateFromGPS(gpsSys,gpsSys.speed||avgSpeed(5));
     // Calibrate ant step length from GPS distance every 50 steps
     if(ANIMAL.ant.steps%50===0&&ANIMAL.ant.steps>0&&lastPos){
       const gDist=hav(lastPos,gpsSys);
@@ -1754,7 +1820,7 @@ function tick(){
       ANIMAL.ant.detectStep(accel.x,accel.y,accel.z);
       ANIMAL.predictDenied(drPos,dt);
       F.forEach((f,i)=>{
-        if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;
+        if(f.pos){let p=f.predict(f.pos,dt)||f.pos;f.pos=PUE.constrain(p);}
         if(!f.drillTrail)f.drillTrail=[];
         if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);
         if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();
@@ -1784,6 +1850,13 @@ function tick(){
       drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
       if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
       drawPos(ll,15,'#FFB800');
+
+      // PUE constraint circle on map
+      if(PUE.active&&PUE.lastGoodPos){
+        const pc=PUE.getCenter(),pr=PUE.getRadius();
+        if(!PUE._circle)PUE._circle=L.circle([pc.lat,pc.lon],{radius:pr,color:'#f06060',fillOpacity:.04,weight:1,dashArray:'6,4'}).addTo(map);
+        else{PUE._circle.setLatLng([pc.lat,pc.lon]);PUE._circle.setRadius(pr);}
+      }
 
       // Draw top 5 formula trails on map (every 5th tick)
       if(uiFrame%5===0){
@@ -1847,6 +1920,7 @@ function tick(){
     }
     if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue){
       const drift=hav(drPos,gpsTrue);$('ovErr').textContent=drift.toFixed(1)+'m';
+      const ps=PUE.stats();$('ovSrc').textContent='PUE:'+Math.round(ps.radius)+'m '+ps.enforced+'/'+ps.total;
     }
     // Only pan during recording/denial, and only if moved >30m
     if(uiFrame%10===0&&phase!=='idle'&&(drPos||gpsSys)){
@@ -1896,21 +1970,23 @@ function startRec(){
 }
 function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
+  PUE.activate();
   $('badge').textContent='JAMMED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('jalrt').style.display='block';
   F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
-  log('GPS JAMMED — '+F.length+' formulas predicting','var(--amber)');
+  log('GPS JAMMED — PUE envelope: '+Math.round(PUE.lastGoodSpeed*3.6)+'km/h, '+F.length+' formulas constrained','var(--amber)');
 }
 function spoof(){
   if(phase!=='recording')return;phase='spoofed';drillStart=performance.now();gpsSys=null;
-  $('badge').textContent='SPOOFED';$('badge').className='badge b-spoof';
+  PUE.activate();
+  $('badge').textContent='SPOOFED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('salrt').style.display='block';
   F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('sT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
-  log('GPS SPOOFED — signal rejected','var(--red)');
+  log('GPS SPOOFED — PUE envelope active, formulas constrained','var(--red)');
 }
 function resurface(){
   if(phase!=='jammed'&&phase!=='spoofed')return;
@@ -1918,14 +1994,16 @@ function resurface(){
   const drift=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
   const dps=bs>0?drift/bs:0;let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
   const fRes=F.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999})).sort((a,b)=>a.drift-b.drift);
-  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected});
+  const ps=PUE.stats();
+  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected,pue:{radius:Math.round(ps.radius),enforced:ps.enforced,total:ps.total,pct:ps.pct}});
   F.forEach(f=>{if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
   if(F._waLine){map.removeLayer(F._waLine);F._waLine=null;}F._waTrail=[];
   if(gpsTrue){L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1}).bindPopup('Resurface #'+drills.length+'<br>Drift: '+drift.toFixed(1)+'m ['+grade+']').addTo(map);}
   phase='recording';$('badge').textContent='RECORDING';$('badge').className='badge b-rec';
   $('b3').style.display='none';$('b2').style.display='block';$('jalrt').style.display='none';$('salrt').style.display='none';
   if(CAL.predictionErr<10){$('bJam').disabled=false;$('bJam').style.opacity='1';$('bSpoof').disabled=false;$('bSpoof').style.opacity='1';}
-  log('RESURFACE #'+drills.length+': drift='+drift.toFixed(1)+'m ['+grade+'] best='+fRes[0].name,'var(--purple)');
+  if(PUE._circle){map.removeLayer(PUE._circle);PUE._circle=null;}PUE.active=false;
+  log('RESURFACE #'+drills.length+': drift='+drift.toFixed(1)+'m ['+grade+'] best='+fRes[0].name+' | PUE: '+ps.enforced+'/'+ps.total+' bound ('+ps.pct+'%)','var(--purple)');
   CAL.learn();
 }
 function endTest(){
