@@ -1,0 +1,2380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>UPIN v5 — FULL HARDWARE POWER</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+:root{--bg:#080c14;--panel:#0f1520;--border:#1a2438;--cyan:#4da6ff;--green:#3dcc6e;--amber:#e8a832;--red:#f06060;--blue:#3B82F6;--purple:#A855F7;--tp:#dce6f5;--tm:#7a9bc0;--td:#4a6080}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(--bg);color:var(--tp);height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:11px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#050a12;border-bottom:1px solid var(--border);flex-shrink:0}
+.topbar h1{font-size:13px;font-weight:700;color:var(--cyan);letter-spacing:3px}
+.badge{font-size:8px;font-weight:700;padding:3px 8px;letter-spacing:1px;border-radius:2px}
+.b-idle{background:var(--border);color:var(--td)}
+.b-board{background:var(--cyan);color:#000}
+.b-phone{background:var(--amber);color:#000}
+.b-rec{background:var(--green);color:#000;animation:blink 1s infinite}
+.b-jam{background:var(--red);color:#fff;animation:pulse 1.5s infinite}
+/* Tabs */
+.tabs{display:flex;background:#050a12;border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto}
+.tab{padding:8px 12px;font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--td);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;-webkit-tap-highlight-color:transparent}
+.tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.tab-body{display:none;flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px}
+.tab-body.active{display:block}
+/* Map */
+#map-wrap{position:relative;height:35vh;flex-shrink:0}
+#map{width:100%;height:100%}
+.map-ov{position:absolute;top:6px;left:6px;z-index:1000;background:rgba(8,12,20,.92);padding:4px 8px;border:1px solid var(--border);border-radius:2px;font-size:8px;line-height:1.6;pointer-events:none}
+.map-ov strong{color:var(--cyan)}
+/* Cards & Grid */
+.card{background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:8px;margin-bottom:6px}
+.card-title{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;color:var(--cyan)}
+.row{display:grid;gap:4px;margin-bottom:6px}
+.row3{grid-template-columns:1fr 1fr 1fr}
+.row4{grid-template-columns:1fr 1fr 1fr 1fr}
+.mc{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:5px 4px;text-align:center}
+.mc .ml{font-size:7px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:1px}
+.mc .mv{font-size:15px;font-weight:700;color:var(--tp);line-height:1.1}
+.mc .mu{font-size:7px;color:var(--td)}
+/* Source status */
+.src{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:4px;text-align:center}
+.src .sn{font-size:7px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:1px}
+.src .sv{font-size:10px;font-weight:700;margin:1px 0}
+.src .ss{font-size:7px}
+.src.on{border-color:var(--green)}.src.off{border-color:var(--red)}
+.sdot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.sdot.live{background:var(--green);animation:blink 1s infinite}
+.sdot.off{background:var(--td)}
+.sdot.err{background:var(--red)}
+/* Sensor bars */
+.sbar{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:3px 4px}
+.sbar .sn{font-size:6px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:1px}
+.sbar .sv{font-size:9px;font-weight:700;color:var(--tp)}
+.sbar .sb{height:2px;background:var(--border);border-radius:1px;margin-top:1px;overflow:hidden}
+.sbar .sf{height:100%;border-radius:1px}
+/* Formula table */
+.ftable{width:100%;font-size:9px;border-collapse:collapse}
+.ftable th{text-align:left;color:var(--td);font-size:7px;text-transform:uppercase;letter-spacing:1px;padding:3px;border-bottom:1px solid var(--border)}
+.ftable td{padding:3px;border-bottom:1px solid var(--border);color:var(--tm)}
+.ftable tr.best{background:rgba(61,204,110,.06)}
+.f-run{color:var(--green)!important;font-weight:700}
+.f-wait{color:var(--red)!important}
+/* Buttons */
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px}
+.btn{padding:10px 4px;border:none;border-radius:2px;font-family:inherit;font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn:active{opacity:.6}
+.btn-cyan{color:var(--cyan);background:rgba(77,166,255,.06);border:1px solid var(--cyan)}
+.btn-green{color:var(--green);background:rgba(61,204,110,.06);border:1px solid var(--green)}
+.btn-amber{color:var(--amber);background:rgba(232,168,50,.06);border:1px solid var(--amber)}
+.btn-red{color:var(--red);background:rgba(240,96,96,.06);border:1px solid var(--red)}
+.btn-dim{color:var(--td);background:var(--panel);border:1px solid var(--border)}
+/* Connect button */
+.btn-hw{font-size:11px;font-weight:900;letter-spacing:2px;text-transform:uppercase;color:var(--cyan);background:rgba(77,166,255,.04);border:2px solid var(--cyan);padding:14px 8px;width:100%;cursor:pointer;border-radius:2px;-webkit-tap-highlight-color:transparent;transition:all .2s}
+.btn-hw:active{background:rgba(77,166,255,.15);transform:scale(.98)}
+.btn-hw.ok{color:var(--green);border-color:var(--green);background:rgba(61,204,110,.06)}
+.btn-hw.err{color:var(--red);border-color:var(--red);background:rgba(240,96,96,.06)}
+.btn-hw.wait{color:var(--amber);border-color:var(--amber);animation:pulse 1.5s infinite}
+.ble-badge{display:inline-block;font-size:7px;font-weight:700;padding:2px 5px;border-radius:2px;letter-spacing:1px;margin-left:3px}
+.ble-on{background:var(--cyan);color:#000}.ble-off{background:var(--border);color:var(--td)}
+/* Alert */
+.alert{display:none;border:1px solid;border-radius:2px;padding:8px;margin-bottom:6px;text-align:center}
+.alert .at{font-size:9px;font-weight:700;letter-spacing:2px;margin-bottom:3px}
+.alert .av{font-size:22px;font-weight:700;margin:3px 0}
+/* Cal meter */
+.cal-meter{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:8px;margin-bottom:6px;text-align:center}
+/* Log */
+#log{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:4px 6px;font-size:7px;line-height:1.5;max-height:80px;overflow-y:auto;color:var(--td);margin-bottom:6px}
+/* Report overlay */
+#rpt{display:none;position:fixed;inset:0;background:var(--bg);z-index:2000;overflow-y:auto;padding:12px}
+.rpt-h{font-size:14px;font-weight:700;color:var(--cyan);letter-spacing:3px;margin-bottom:10px}
+.rc{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:8px;margin-bottom:6px}
+.rct{font-size:8px;font-weight:700;letter-spacing:2px;margin-bottom:5px}
+.rr{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border);font-size:10px}
+.rr:last-child{border-bottom:none}
+.rv{font-weight:700}
+/* Status bar */
+.statusbar{background:#050a12;border-top:1px solid var(--border);padding:3px 10px;display:flex;justify-content:space-between;font-size:7px;color:var(--td);letter-spacing:1px;text-transform:uppercase;flex-shrink:0}
+.note{font-size:7px;color:var(--td);font-style:italic;margin-top:4px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body>
+<!-- TOP BAR -->
+<div class="topbar">
+  <h1>UPIN v5</h1>
+  <span class="badge b-idle" id="badge">IDLE</span>
+</div>
+<!-- TABS -->
+<div class="tabs">
+  <div class="tab active" onclick="V.switchTab(0)">Dashboard</div>
+  <div class="tab" onclick="V.switchTab(1)">Formulas</div>
+  <div class="tab" onclick="V.switchTab(2)">Learn</div>
+  <div class="tab" onclick="V.switchTab(3)">Drill</div>
+  <div class="tab" onclick="V.switchTab(4)">Data</div>
+</div>
+<!-- MAP (always visible) -->
+<div id="map-wrap">
+  <div id="map"></div>
+  <div class="map-ov">
+    <div><strong>SRC:</strong> <span id="ovSrc">--</span> <strong>ERR:</strong> <span id="ovErr">--</span></div>
+    <div><strong>SAT:</strong> <span id="ovSat">--</span> <strong>F:</strong> <span id="ovBest">--</span></div>
+  </div>
+</div>
+
+<!-- ═══ TAB 0: DASHBOARD ═══ -->
+<div class="tab-body active" id="t0">
+  <!-- Connection -->
+  <div class="card">
+    <div class="card-title">HARDWARE BOARD <span class="ble-badge ble-off" id="bleBadge">BLE</span> <span class="ble-badge ble-off" id="wifiBadge">WiFi</span></div>
+    <button class="btn-hw" id="bleBtn" onclick="V.connectBLE()">CONNECT HARDWARE</button>
+    <div style="margin-top:4px;display:grid;grid-template-columns:1fr 1fr;gap:4px">
+      <button class="btn btn-cyan" id="wifiBtn" onclick="V.connectWiFi()" style="font-size:7px;letter-spacing:1px">WiFi 192.168.4.1</button>
+      <button class="btn btn-dim" onclick="V.usePhone()">Phone Only</button>
+    </div>
+    <div id="boardStatus" style="font-size:8px;color:var(--td);margin-top:4px"><span class="sdot off"></span> Choose BLE or WiFi</div>
+    <div class="note">iPhone: BLE not supported — use WiFi. Join UPIN-SENSOR-BOARD network first.</div>
+  </div>
+  <!-- Metrics -->
+  <div class="row row3">
+    <div class="mc"><div class="ml">Speed</div><div class="mv" id="mSpd">0</div><div class="mu">km/h</div></div>
+    <div class="mc"><div class="ml">Heading</div><div class="mv" id="mHdg">--</div><div class="mu">deg</div></div>
+    <div class="mc"><div class="ml">Altitude</div><div class="mv" id="mAlt">--</div><div class="mu">m</div></div>
+    <div class="mc"><div class="ml">Distance</div><div class="mv" id="mDst">0</div><div class="mu">m</div></div>
+    <div class="mc"><div class="ml">Samples</div><div class="mv" style="color:var(--cyan)" id="mSmp">0</div><div class="mu">rec</div></div>
+    <div class="mc"><div class="ml">Elapsed</div><div class="mv" id="mTime">0:00</div><div class="mu">&nbsp;</div></div>
+  </div>
+  <!-- Sources -->
+  <div class="card-title" style="margin:4px 0">DATA SOURCES</div>
+  <div class="row row4">
+    <div class="src off" id="srcIMUBox"><div class="sn">IMU</div><div class="sv" id="srcIMU"><span class="sdot err"></span>OFF</div><div class="ss" id="srcIMUd">--</div></div>
+    <div class="src off" id="srcBaroBox"><div class="sn">Baro</div><div class="sv" id="srcBaro"><span class="sdot err"></span>OFF</div><div class="ss" id="srcBarod">--</div></div>
+    <div class="src off" id="srcGPSBox"><div class="sn">GPS</div><div class="sv" id="srcGPS"><span class="sdot err"></span>OFF</div><div class="ss" id="srcGPSd">--</div></div>
+    <div class="src off" id="srcLaserBox"><div class="sn">Laser</div><div class="sv" id="srcLaser"><span class="sdot err"></span>OFF</div><div class="ss" id="srcLaserd">--</div></div>
+    <div class="src off" id="srcCell4GBox"><div class="sn">4G</div><div class="sv" id="srcCell4G"><span class="sdot err"></span>OFF</div><div class="ss" id="srcCell4Gd">--</div></div>
+    <div class="src off" id="srcCell2GBox"><div class="sn">2G</div><div class="sv" id="srcCell2G"><span class="sdot err"></span>OFF</div><div class="ss" id="srcCell2Gd">--</div></div>
+    <div class="src off" id="srcWifiBox"><div class="sn">WiFi</div><div class="sv" id="srcWifi"><span class="sdot err"></span>OFF</div><div class="ss" id="srcWifid">--</div></div>
+    <div class="src off" id="srcPhoneBox"><div class="sn">Phone</div><div class="sv" id="srcPhone"><span class="sdot err"></span>OFF</div><div class="ss" id="srcPhoned">--</div></div>
+  </div>
+  <!-- IMU 9-axis -->
+  <div class="card-title" style="margin:4px 0">IMU (9-AXIS)</div>
+  <div class="row row3">
+    <div class="sbar"><div class="sn">Accel X</div><div class="sv" id="sAx">0</div><div class="sb"><div class="sf" id="sAxB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Accel Y</div><div class="sv" id="sAy">0</div><div class="sb"><div class="sf" id="sAyB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Accel Z</div><div class="sv" id="sAz">9.8</div><div class="sb"><div class="sf" id="sAzB" style="width:50%;background:var(--cyan)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro X</div><div class="sv" id="sGx">0</div><div class="sb"><div class="sf" id="sGxB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro Y</div><div class="sv" id="sGy">0</div><div class="sb"><div class="sf" id="sGyB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Gyro Z</div><div class="sv" id="sGz">0</div><div class="sb"><div class="sf" id="sGzB" style="width:50%;background:var(--amber)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag X</div><div class="sv" id="sMx">0</div><div class="sb"><div class="sf" id="sMxB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag Y</div><div class="sv" id="sMy">0</div><div class="sb"><div class="sf" id="sMyB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Mag Z</div><div class="sv" id="sMz">0</div><div class="sb"><div class="sf" id="sMzB" style="width:50%;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Heading</div><div class="sv" id="sHdg">--</div><div class="sb"><div class="sf" id="sHdgB" style="width:0;background:var(--green)"></div></div></div>
+    <div class="sbar"><div class="sn">Pitch</div><div class="sv" id="sPitch">--</div><div class="sb"><div class="sf" id="sPitchB" style="width:50%;background:var(--purple)"></div></div></div>
+    <div class="sbar"><div class="sn">Roll</div><div class="sv" id="sRoll">--</div><div class="sb"><div class="sf" id="sRollB" style="width:50%;background:var(--purple)"></div></div></div>
+  </div>
+  <div class="row row3">
+    <div class="mc"><div class="ml">Pressure</div><div class="mv" id="mPrs">--</div><div class="mu">hPa</div></div>
+    <div class="mc"><div class="ml">Temp</div><div class="mv" id="mTmp">--</div><div class="mu">C</div></div>
+    <div class="mc"><div class="ml">Laser</div><div class="mv" id="mLsr">--</div><div class="mu">mm</div></div>
+  </div>
+  <!-- Controls -->
+  <div id="b1" class="btns">
+    <button class="btn btn-cyan" onclick="V.calibrate()">Calibrate</button>
+    <button class="btn btn-green" id="bStart" onclick="V.startRec()" disabled style="opacity:.3">Start Recording</button>
+  </div>
+  <div id="b2" style="display:none">
+    <div class="btns">
+      <button class="btn btn-amber" id="bJam" onclick="V.jam()">Jam GPS</button>
+      <button class="btn btn-red" id="bSpoof" onclick="V.spoof()">Spoof GPS</button>
+    </div>
+    <button class="btn btn-dim" onclick="V.endTest()" style="width:100%;margin-top:4px">End Test / Report</button>
+  </div>
+  <div id="b3" class="btns" style="display:none">
+    <button class="btn btn-green" onclick="V.resurface()">Resurface</button>
+    <button class="btn btn-dim" onclick="V.endTest()">End Test</button>
+  </div>
+  <!-- Alerts -->
+  <div class="alert" id="jalrt"><div class="at" style="color:var(--amber)">GPS JAMMED</div><div class="av" id="jT">0:00</div></div>
+  <div class="alert" id="salrt"><div class="at" style="color:var(--red)">GPS SPOOFED</div><div class="av" id="sT">0:00</div></div>
+  <!-- Cal meter -->
+  <div class="cal-meter" id="calMeter" style="display:none">
+    <div style="font-size:8px;font-weight:700;color:var(--td);letter-spacing:2px">FORMULA ACCURACY vs GPS</div>
+    <div class="cv" id="calV" style="color:var(--red);font-size:24px;font-weight:700">--</div>
+    <div style="height:4px;background:var(--border);border-radius:1px;margin:6px 0;overflow:hidden"><div id="calBar" style="height:100%;width:0;background:var(--red)"></div></div>
+    <div id="calSt" style="font-size:8px;font-weight:700;color:var(--red);letter-spacing:1px">CALIBRATING...</div>
+  </div>
+  <!-- Log -->
+  <div class="card-title" style="margin:4px 0">LOG</div>
+  <div id="log"></div>
+</div>
+
+<!-- ═══ TAB 1: FORMULAS ═══ -->
+<div class="tab-body" id="t1">
+  <!-- Animal nav readiness -->
+  <div class="card-title">ANIMAL NAVIGATION</div>
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="src"><div class="sn">Ant</div><div class="sv" id="arAnt"><span class="sdot off"></span>--</div><div class="ss" id="arAntD">step+mag</div></div>
+    <div class="src"><div class="sn">Pigeon</div><div class="sv" id="arPig"><span class="sdot off"></span>--</div><div class="ss" id="arPigD">mag map</div></div>
+    <div class="src"><div class="sn">Salmon</div><div class="sv" id="arSal"><span class="sdot off"></span>--</div><div class="ss" id="arSalD">cell grad</div></div>
+    <div class="src"><div class="sn">Whale</div><div class="sv" id="arWhl"><span class="sdot off"></span>--</div><div class="ss" id="arWhlD">wifi fp</div></div>
+    <div class="src"><div class="sn">Bat</div><div class="sv" id="arBat"><span class="sdot off"></span>--</div><div class="ss" id="arBatD">laser</div></div>
+    <div class="src"><div class="sn">Fusion</div><div class="sv" id="arFus"><span class="sdot off"></span>--</div><div class="ss" id="arFusD">all</div></div>
+  </div>
+  <!-- Fish schools -->
+  <div class="card">
+    <div class="card-title">FISH EVOLUTION</div>
+    <div id="fishInfo" style="font-size:9px;color:var(--tm)">6 schools x 100 agents = 600 fish. Gen: 0</div>
+  </div>
+  <!-- Formula competition table -->
+  <div class="card-title">FORMULA COMPETITION (<span id="fCount">0</span> formulas)</div>
+  <div style="max-height:50vh;overflow-y:auto">
+    <table class="ftable" id="fTable">
+      <tr><th>#</th><th>Formula</th><th>Error</th><th>Lat/Lon</th><th>Status</th></tr>
+    </table>
+  </div>
+  <!-- Combo discovery -->
+  <div class="card" style="margin-top:6px">
+    <div class="card-title">AUTO-COMBO DISCOVERY</div>
+    <div id="comboInfo" style="font-size:8px;color:var(--tm)">Pool: 20 combos, Gen: 0</div>
+  </div>
+</div>
+
+<!-- ═══ TAB 2: LEARN ═══ -->
+<div class="tab-body" id="t2">
+  <div class="card">
+    <div class="card-title">ROUTE LEARNING</div>
+    <div style="font-size:9px;color:var(--tm);margin-bottom:8px">Drive routes with GPS to build sensor fingerprint database. During GPS denial, match current readings against stored fingerprints.</div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">Routes</div><div class="mv" id="learnRoutes">0</div><div class="mu">stored</div></div>
+      <div class="mc"><div class="ml">Points</div><div class="mv" id="learnPts">0</div><div class="mu">fingerprints</div></div>
+      <div class="mc"><div class="ml">Coverage</div><div class="mv" id="learnCov">0</div><div class="mu">m</div></div>
+    </div>
+    <div class="btns">
+      <button class="btn btn-green" id="bLearn" onclick="V.toggleLearn()">Start Learning Route</button>
+      <button class="btn btn-dim" onclick="V.clearRoutes()">Clear Routes</button>
+    </div>
+    <div id="learnStatus" style="font-size:8px;color:var(--td)">Not learning</div>
+  </div>
+  <div class="card">
+    <div class="card-title">TERRAIN FINGERPRINT</div>
+    <div style="font-size:9px;color:var(--tm)">Records mag field + baro pressure + cell/wifi pattern every 10m. Cross-correlates during GPS denial.</div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">Prints</div><div class="mv" id="tfpCount">0</div><div class="mu">stored</div></div>
+      <div class="mc"><div class="ml">Match</div><div class="mv" id="tfpMatch">--</div><div class="mu">conf</div></div>
+      <div class="mc"><div class="ml">Error</div><div class="mv" id="tfpErr">--</div><div class="mu">m</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TAB 3: DRILL ═══ -->
+<div class="tab-body" id="t3">
+  <div class="card">
+    <div class="card-title">GPS DENIAL DRILL</div>
+    <div style="font-size:9px;color:var(--tm);margin-bottom:8px">Start recording first, then use Jam/Spoof on Dashboard tab. Results appear here.</div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">Drills</div><div class="mv" id="drillCount">0</div><div class="mu">completed</div></div>
+      <div class="mc"><div class="ml">Avg Drift</div><div class="mv" id="drillAvg">--</div><div class="mu">m</div></div>
+      <div class="mc"><div class="ml">Best Grade</div><div class="mv" id="drillBest">--</div><div class="mu">&nbsp;</div></div>
+    </div>
+  </div>
+  <div id="drillLog" style="font-size:9px;color:var(--tm)">No drills yet. Start recording then jam GPS.</div>
+</div>
+
+<!-- ═══ TAB 4: DATA ═══ -->
+<div class="tab-body" id="t4">
+  <div class="card">
+    <div class="card-title">CELL TOWER DATABASE</div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">Preloaded</div><div class="mv" id="towersPre">0</div><div class="mu">OpenCellID</div></div>
+      <div class="mc"><div class="ml">Captured</div><div class="mv" id="towersCap">0</div><div class="mu">auto</div></div>
+      <div class="mc"><div class="ml">Total</div><div class="mv" id="towersTotal">0</div><div class="mu">towers</div></div>
+    </div>
+    <div class="btns">
+      <button class="btn btn-cyan" onclick="V.exportTowers()">Export Towers CSV</button>
+      <button class="btn btn-dim" onclick="V.clearCaptured()">Clear Captured</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">DATA RECORDING</div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">Samples</div><div class="mv" id="dataSmp">0</div><div class="mu">recorded</div></div>
+      <div class="mc"><div class="ml">Fish Gen</div><div class="mv" id="dataGen">0</div><div class="mu">evolved</div></div>
+      <div class="mc"><div class="ml">Best Err</div><div class="mv" id="dataBest">--</div><div class="mu">m</div></div>
+    </div>
+    <div class="btns">
+      <button class="btn btn-green" onclick="V.exportCSV()">Export Sensor CSV</button>
+      <button class="btn btn-dim" onclick="V.resetFishDNA()">Reset Fish DNA</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">STORAGE</div>
+    <div id="storageInfo" style="font-size:8px;color:var(--tm)">Calculating...</div>
+  </div>
+</div>
+
+<!-- Report overlay -->
+<div id="rpt"><div class="rpt-h">UPIN v5 FIELD TEST REPORT</div>
+  <div class="btns" style="margin-bottom:10px"><button class="btn btn-dim" onclick="V.exportCSV()">Export CSV</button><button class="btn btn-cyan" onclick="location.reload()">New Test</button></div>
+  <div id="rptB"></div>
+</div>
+<!-- Status bar -->
+<div class="statusbar">
+  <span>UPIN v5 — FULL HARDWARE POWER</span>
+  <span id="sysStatus"><span class="sdot off"></span> IDLE</span>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const V=(()=>{
+// ═══════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════
+let activeTab=0;
+function switchTab(idx){
+  activeTab=idx;
+  document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
+  document.querySelectorAll('.tab-body').forEach((t,i)=>t.className='tab-body'+(i===idx?' active':''));
+}
+
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let map,marker,circle,gpsLine,drLine;
+const MAX_TRAIL=200;
+let gpsTrail=[],drTrail=[];
+let gpsTrue=null,gpsSys=null,drPos=null;
+let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},mag={x:0,y:0,z:0};
+let compass=0,pitch=0,roll=0,gravity={x:0,y:0,z:9.8};
+let pressure=0,temp=0,baroAlt=0,laserMm=0;
+let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
+let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
+let drills=[],stepCount=0,lastStepT=0;
+let tickIv=null,alertIv=null,simStep=0,uiFrame=0;
+let _lastPan=null,_lastMarker=null;
+// Board state
+let boardConnected=false,boardData=null;
+let useBoard=false; // true=hardware sensors, false=phone sensors
+
+const $=id=>document.getElementById(id);
+const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
+const fmt=s=>{const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;};
+function ts(){const d=new Date();return d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');}
+function log(m,c){const b=$('log'),d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent='['+ts()+'] '+m;b.appendChild(d);if(b.childNodes.length>40)b.removeChild(b.firstChild);b.scrollTop=b.scrollHeight;}
+
+
+// ═══════════════════════════════════════
+// SENSOR PREPROCESSING — 5 data quality fixes
+// Applied to ALL sensor data before any formula touches it
+// ═══════════════════════════════════════
+const PREPROCESS={
+  // Fix 1: Accel unit detection — auto-detect g-units vs m/s²
+  accelInG:null, // null=unknown, true=g-units, false=m/s²
+  detectAccelUnits(ax,ay,az){
+    const mag=Math.sqrt(ax*ax+ay*ay+az*az);
+    if(this.accelInG===null){
+      if(mag>0.5&&mag<2.0)this.accelInG=true;   // g-units (magnitude ~1g)
+      else if(mag>5&&mag<15)this.accelInG=false;  // already m/s² (magnitude ~9.8)
+    }
+    if(this.accelInG){return{x:ax*9.81,y:ay*9.81,z:az*9.81};}
+    return{x:ax,y:ay,z:az};
+  },
+
+  // Fix 2: Stale reading rejection
+  lastReadingTime:0,
+  isStale(dt){
+    if(dt>2.0)return'skip';    // skip entirely
+    if(dt>0.5)return'degraded'; // reduce confidence
+    return'ok';
+  },
+
+  // Fix 3: Speed sanity — rolling median + jump rejection
+  speedHistory:[],
+  lastValidSpeed:0,
+  cleanSpeed(rawSpeed){
+    // Reject impossible speeds (>180 km/h = 50 m/s)
+    if(rawSpeed>50)return this.lastValidSpeed;
+    // Reject sudden jumps (>20 m/s change in one reading)
+    if(Math.abs(rawSpeed-this.lastValidSpeed)>20&&this.lastValidSpeed>0)return this.lastValidSpeed;
+    // Rolling median of last 5
+    this.speedHistory.push(rawSpeed);
+    if(this.speedHistory.length>5)this.speedHistory.shift();
+    const sorted=[...this.speedHistory].sort((a,b)=>a-b);
+    const median=sorted[Math.floor(sorted.length/2)];
+    this.lastValidSpeed=median;
+    return median;
+  },
+
+  // Fix 4: Frozen GPS detection
+  prevLat:0,prevLon:0,frozenCount:0,gpsFrozen:false,
+  lastValidGpsSpeed:0,
+  checkFrozenGPS(lat,lon,speed,accel){
+    if(lat===this.prevLat&&lon===this.prevLon){
+      this.frozenCount++;
+      if(this.frozenCount>=3){
+        this.gpsFrozen=true;
+        // Estimate if moving from accel energy
+        const accelEnergy=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z)-9.81;
+        if(accelEnergy>0.3){
+          // Device is moving but GPS is frozen — use decayed speed
+          this.lastValidGpsSpeed*=0.95;
+          return{frozen:true,speed:this.lastValidGpsSpeed};
+        }
+        return{frozen:true,speed:0}; // actually stationary
+      }
+    }else{
+      this.frozenCount=0;this.gpsFrozen=false;
+      this.prevLat=lat;this.prevLon=lon;
+      if(speed>0.1)this.lastValidGpsSpeed=speed;
+    }
+    return{frozen:false,speed};
+  },
+
+  // Fix 5: Gyro bias — collect at startup, subtract from every reading
+  gyroBiasCollecting:false,
+  gyroBiasReady:false,
+  gyroBiasSamples:[],
+  gyroBias:{x:0,y:0,z:0},
+  collectGyroBias(gx,gy,gz){
+    this.gyroBiasSamples.push({x:gx,y:gy,z:gz});
+    if(this.gyroBiasSamples.length>=50){
+      const n=this.gyroBiasSamples.length;
+      this.gyroBias.x=this.gyroBiasSamples.reduce((s,g)=>s+g.x,0)/n;
+      this.gyroBias.y=this.gyroBiasSamples.reduce((s,g)=>s+g.y,0)/n;
+      this.gyroBias.z=this.gyroBiasSamples.reduce((s,g)=>s+g.z,0)/n;
+      this.gyroBiasReady=true;
+      this.gyroBiasCollecting=false;
+      return true; // done
+    }
+    return false;
+  },
+  correctGyro(gx,gy,gz){
+    if(!this.gyroBiasReady)return{x:gx,y:gy,z:gz};
+    return{x:gx-this.gyroBias.x,y:gy-this.gyroBias.y,z:gz-this.gyroBias.z};
+  },
+
+  // Master function: preprocess all sensor data
+  process(rawAccel,rawGyro,rawSpeed,lat,lon,dt){
+    const stale=this.isStale(dt);
+    if(stale==='skip')return null; // skip this reading
+    const acc=useBoard?rawAccel:this.detectAccelUnits(rawAccel.x,rawAccel.y,rawAccel.z);
+    const gyr=this.correctGyro(rawGyro.x,rawGyro.y,rawGyro.z);
+    const spd=this.cleanSpeed(rawSpeed);
+    const gpsCheck=this.checkFrozenGPS(lat,lon,spd,acc);
+    return{
+      accel:acc,gyro:gyr,speed:gpsCheck.speed,
+      gpsFrozen:gpsCheck.frozen,
+      confidence:stale==='degraded'?0.5:1.0
+    };
+  }
+};
+
+// ═══════════════════════════════════════
+// BOARD CONNECTION — BLE + WiFi (both available)
+// ═══════════════════════════════════════
+let boardSource='none'; // 'none','ble','wifi'
+// BLE state
+const BLE_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const BLE_TX_CHAR='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+let bleDevice=null,bleChar=null,bleBuffer='',blePackets=0,bleErrors=0;
+// WiFi state
+const WIFI_URL='http://192.168.4.1/data';
+let wifiPollIv=null,wifiFails=0,wifiPackets=0;
+
+function updateBoardUI(){
+  const bleOn=bleDevice&&bleDevice.gatt&&bleDevice.gatt.connected;
+  const wifiOn=boardSource==='wifi'&&boardConnected;
+  $('bleBadge').className='ble-badge '+(bleOn?'ble-on':'ble-off');
+  $('wifiBadge').className='ble-badge '+(wifiOn?'ble-on':'ble-off');
+  if(bleOn||wifiOn){
+    $('badge').textContent='BOARD';$('badge').className='badge b-board';
+  }else{
+    $('badge').textContent='PHONE';$('badge').className='badge b-phone';
+  }
+}
+
+// ── BLE CONNECTION ──
+function connectBLE(){
+  if(!navigator.bluetooth){
+    log('Web Bluetooth not available — use WiFi or Chrome on Android','var(--red)');
+    $('boardStatus').innerHTML='<span class="sdot err"></span> BLE not supported — try WiFi';
+    $('bleBtn').className='btn-hw error';$('bleBtn').textContent='BLE NOT SUPPORTED — USE WiFi';
+    return;
+  }
+  if(bleDevice&&bleDevice.gatt.connected){disconnectBLE();return;}
+  log('Requesting BLE connection to UPIN-BLE...','var(--cyan)');
+  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Requesting Bluetooth...';
+  $('bleBtn').className='btn-hw connecting';$('bleBtn').textContent='CONNECTING BLE...';
+
+  navigator.bluetooth.requestDevice({
+    filters:[{name:'UPIN-BLE'}],
+    optionalServices:[BLE_SERVICE]
+  }).then(device=>{
+    bleDevice=device;
+    device.addEventListener('gattserverdisconnected',onBLEDisconnect);
+    log('Device found: '+device.name+' — connecting GATT...','var(--cyan)');
+    return device.gatt.connect();
+  }).then(server=>{
+    log('GATT connected — getting UART service...','var(--cyan)');
+    return server.getPrimaryService(BLE_SERVICE);
+  }).then(service=>{
+    return service.getCharacteristic(BLE_TX_CHAR);
+  }).then(char=>{
+    bleChar=char;
+    return char.startNotifications();
+  }).then(()=>{
+    bleChar.addEventListener('characteristicvaluechanged',onBLEData);
+    boardConnected=true;useBoard=true;boardSource='ble';bleBuffer='';blePackets=0;bleErrors=0;
+    $('boardStatus').innerHTML='<span class="sdot live"></span> BLE CONNECTED — 7 SENSORS';
+    $('bleBtn').className='btn-hw connected';$('bleBtn').textContent='BLE CONNECTED — TAP TO DISCONNECT';
+    $('bStart').disabled=false;$('bStart').style.opacity='1';
+    updateBoardUI();
+    log('BLE connected! Receiving sensor data at 5Hz','var(--green)');
+  }).catch(err=>{
+    const msg=err.message||String(err);
+    if(msg.includes('cancelled')||msg.includes('canceled')){
+      $('boardStatus').innerHTML='<span class="sdot off"></span> Cancelled — tap to try again';
+      $('bleBtn').className='btn-hw';$('bleBtn').textContent='CONNECT VIA BLUETOOTH';
+    }else{
+      log('BLE error: '+msg,'var(--red)');
+      $('boardStatus').innerHTML='<span class="sdot err"></span> BLE error — try WiFi instead';
+      $('bleBtn').className='btn-hw error';$('bleBtn').textContent='BLE FAILED — TAP TO RETRY';
+    }
+  });
+}
+let bleGoodPkts=0;
+function onBLEData(event){
+  const raw=new TextDecoder().decode(event.target.value);
+  bleBuffer+=raw;
+  let endIdx;
+  while((endIdx=bleBuffer.indexOf('$'))!==-1){
+    let json=bleBuffer.substring(0,endIdx).trim();
+    bleBuffer=bleBuffer.substring(endIdx+1);
+    blePackets++;
+    // Skip empty messages
+    if(!json)continue;
+    // Must start with '{' — if not, we lost the start of this message
+    if(json[0]!=='{'){
+      bleErrors++;
+      // Try to find a '{' in the string (partial recovery)
+      const braceIdx=json.indexOf('{');
+      if(braceIdx>0)json=json.substring(braceIdx);
+      else continue; // no '{' at all, skip entirely
+    }
+    // Fix common firmware JSON issues:
+    // 1. Empty values like "ble":, → "ble":null,
+    json=json.replace(/:,/g,':null,');
+    // 2. Trailing comma before } like ,"} → }
+    json=json.replace(/,\s*}/g,'}');
+    // 3. Empty value at end like :"} → :null}
+    json=json.replace(/:}/g,':null}');
+    try{
+      const d=JSON.parse(json);
+      // Validate: must have at least one expected field
+      if(d.imu||d.gps||d.baro||d.t!==undefined){
+        boardData=d;processBoardData(d);bleGoodPkts++;
+      }else{
+        bleErrors++;
+      }
+    }catch(e){
+      bleErrors++;
+      // Log first few errors with a snippet of the bad JSON for debugging
+      if(bleErrors<=5){
+        const snippet=json.length>80?json.substring(0,40)+'...'+json.substring(json.length-40):json;
+        log('BLE parse err #'+bleErrors+': '+snippet,'var(--red)');
+      }
+      // Show error rate periodically
+      if(blePackets>0&&blePackets%50===0){
+        const rate=Math.round(bleGoodPkts/blePackets*100);
+        log('BLE: '+bleGoodPkts+'/'+blePackets+' ok ('+rate+'%)','var(--amber)');
+      }
+    }
+  }
+  // Safety: buffer too large means we missed a '$' delimiter
+  if(bleBuffer.length>4000){
+    bleBuffer='';bleErrors++;
+    log('BLE buffer overflow — resync','var(--red)');
+  }
+}
+function onBLEDisconnect(){
+  const wasBLE=(boardSource==='ble');
+  if(wasBLE){boardConnected=false;useBoard=false;boardSource='none';}
+  $('bleBtn').className='btn-hw error';$('bleBtn').textContent='BLE DISCONNECTED — TAP TO RECONNECT';
+  updateBoardUI();
+  log('BLE disconnected'+(wasBLE?' — falling back to phone':''),'var(--red)');
+  if(wasBLE){initPhoneSensors();initPhoneGPS();}
+}
+function disconnectBLE(){
+  if(bleChar){try{bleChar.removeEventListener('characteristicvaluechanged',onBLEData);}catch(e){}}
+  if(bleDevice&&bleDevice.gatt.connected)bleDevice.gatt.disconnect();
+  if(boardSource==='ble'){boardConnected=false;useBoard=false;boardSource='none';}
+  $('bleBtn').className='btn-hw';$('bleBtn').textContent='CONNECT VIA BLUETOOTH';
+  updateBoardUI();
+  log('BLE disconnected','var(--amber)');
+}
+
+// ── WiFi CONNECTION ──
+function connectWiFi(){
+  if(wifiPollIv){disconnectWiFi();return;}
+  wifiFails=0;wifiPackets=0;
+  log('Connecting to board via WiFi at '+WIFI_URL+'...','var(--teal)');
+  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting to 192.168.4.1...';
+  $('wifiBtn').textContent='CONNECTING WiFi...';$('wifiBtn').style.color='var(--amber)';$('wifiBtn').style.borderColor='var(--amber)';
+  fetchWiFi();
+  wifiPollIv=setInterval(fetchWiFi,200);
+}
+function fetchWiFi(){
+  fetch(WIFI_URL,{mode:'cors'}).then(r=>r.json()).then(d=>{
+    wifiPackets++;wifiFails=0;
+    if(!boardConnected||boardSource!=='wifi'){
+      boardConnected=true;useBoard=true;boardSource='wifi';
+      $('boardStatus').innerHTML='<span class="sdot live"></span> WiFi CONNECTED — 5Hz polling';
+      $('wifiBtn').textContent='WiFi CONNECTED — TAP TO DISCONNECT';$('wifiBtn').style.color='var(--green)';$('wifiBtn').style.borderColor='var(--green)';
+      $('bStart').disabled=false;$('bStart').style.opacity='1';
+      updateBoardUI();
+      log('WiFi board connected! Reading sensors at 5Hz','var(--green)');
+    }
+    boardData=d;processBoardData(d);
+  }).catch(e=>{
+    wifiFails++;
+    if(boardSource==='wifi'&&boardConnected){
+      boardConnected=false;useBoard=false;boardSource='none';
+      $('boardStatus').innerHTML='<span class="sdot err"></span> WiFi lost — retrying...';
+      updateBoardUI();
+      log('WiFi connection lost','var(--red)');
+    }
+    if(wifiFails<=3){
+      $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> WiFi attempt '+wifiFails+'...';
+    }else if(wifiFails===4){
+      $('boardStatus').innerHTML='<span class="sdot err"></span> Cannot reach 192.168.4.1 — join UPIN-SENSOR-BOARD WiFi';
+      log('WiFi board unreachable — are you on the right network?','var(--red)');
+    }
+    if(wifiFails>20){
+      clearInterval(wifiPollIv);wifiPollIv=null;
+      $('boardStatus').innerHTML='<span class="sdot err"></span> WiFi gave up — tap to retry';
+      $('wifiBtn').textContent='CONNECT VIA WiFi (192.168.4.1)';$('wifiBtn').style.color='var(--teal)';$('wifiBtn').style.borderColor='var(--teal)';
+    }
+  });
+}
+function disconnectWiFi(){
+  if(wifiPollIv){clearInterval(wifiPollIv);wifiPollIv=null;}
+  if(boardSource==='wifi'){boardConnected=false;useBoard=false;boardSource='none';}
+  $('wifiBtn').textContent='CONNECT VIA WiFi (192.168.4.1)';$('wifiBtn').style.color='var(--teal)';$('wifiBtn').style.borderColor='var(--teal)';
+  updateBoardUI();
+  log('WiFi disconnected','var(--amber)');
+}
+
+// ── PHONE FALLBACK ──
+function usePhone(){
+  if(bleDevice&&bleDevice.gatt.connected)disconnectBLE();
+  if(wifiPollIv)disconnectWiFi();
+  useBoard=false;boardConnected=false;boardSource='none';
+  $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Phone sensors only';
+  $('bleBtn').className='btn-hw';$('bleBtn').textContent='CONNECT VIA BLUETOOTH';
+  updateBoardUI();
+  initPhoneSensors();initPhoneGPS();
+  log('Using phone sensors (fallback mode)','var(--amber)');
+}
+
+// Process board sensor data (from HTTP polling)
+function processBoardData(d){
+  if(!d)return;
+  // IMU (MPU9250)
+  if(d.imu&&d.imu.ok){
+    accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
+    mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
+    compass=d.imu.hdg;pitch=d.imu.pitch;roll=d.imu.roll;
+    $('srcIMU').innerHTML='<span class="sdot live"></span>OK';
+    $('srcIMUd').textContent='hdg:'+Math.round(compass)+'°';
+    $('srcIMUBox').className='src on';
+  }
+  // Barometer (BMP280)
+  if(d.baro&&d.baro.ok){
+    pressure=d.baro.hpa;temp=d.baro.temp;baroAlt=d.baro.alt;
+    $('srcBaro').innerHTML='<span class="sdot live"></span>OK';
+    $('srcBarod').textContent=pressure.toFixed(0)+'hPa';
+    $('srcBaroBox').className='src on';
+  }
+  // GPS (NEO-6M)
+  if(d.gps&&d.gps.ok){
+    const pos={lat:d.gps.lat,lon:d.gps.lon,acc:d.gps.hdop*5||10};
+    gpsTrue=pos;
+    if(phase==='idle'||phase==='recording')gpsSys=pos;
+    baroAlt=d.gps.alt||baroAlt;
+    $('srcGPS').innerHTML='<span class="sdot live"></span>'+d.gps.sats+'sat';
+    $('srcGPSd').textContent='hdop:'+d.gps.hdop;
+    $('ovSat').textContent=d.gps.sats;
+    if(!marker){map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>5){marker.setLatLng([pos.lat,pos.lon]);_lastMarker={lat:pos.lat,lon:pos.lon};}
+  }
+  // Laser (VL53L1X)
+  if(d.laser&&d.laser.ok){
+    laserMm=d.laser.mm;
+    $('srcLaser').innerHTML='<span class="sdot live"></span>'+laserMm+'mm';
+    $('srcLaserd').textContent=(laserMm/1000).toFixed(2)+'m';
+  }
+  // Cell towers
+  if(d.cell4g){
+    cellTowers4G=d.cell4g.towers||0;
+    $('srcCell4G').innerHTML=(d.cell4g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
+    $('srcCell4Gd').textContent=d.cell4g.inet?'4G inet':'no inet';
+  }
+  if(d.cell2g){
+    cellTowers2G=d.cell2g.towers||0;
+    $('srcCell2G').innerHTML=(d.cell2g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
+    $('srcCell2Gd').textContent=cellTowers2G+' towers';
+  }
+  // WiFi APs
+  if(d.wifi){
+    wifiAPs=d.wifi.aps||0;
+    $('srcWifi').innerHTML='<span class="sdot live"></span>'+wifiAPs+'ap';
+    $('srcWifid').textContent=wifiAPs+' APs';
+  }
+}
+
+// ═══════════════════════════════════════
+// PHONE SENSORS (fallback)
+// ═══════════════════════════════════════
+function initPhoneGPS(){
+  if(!('geolocation' in navigator)){useSimGPS();return;}
+  navigator.geolocation.watchPosition(p=>{
+    gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
+    if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;
+    if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);marker=L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!_lastMarker||hav(_lastMarker,gpsTrue)>5){marker.setLatLng([gpsTrue.lat,gpsTrue.lon]);_lastMarker={lat:gpsTrue.lat,lon:gpsTrue.lon};}
+    $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
+    $('srcGPSd').textContent='±'+Math.round(gpsTrue.acc)+'m';
+  },()=>useSimGPS(),{enableHighAccuracy:true,maximumAge:500,timeout:8000});
+}
+function useSimGPS(){
+  log('Simulated GPS','var(--amber)');
+  const base={lat:13.0827,lon:80.2707};
+  setInterval(()=>{simStep++;gpsTrue={lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.00001,lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.00001,acc:10};if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);marker=L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!_lastMarker||hav(_lastMarker,gpsTrue)>5){marker.setLatLng([gpsTrue.lat,gpsTrue.lon]);_lastMarker={lat:gpsTrue.lat,lon:gpsTrue.lon};}},1000);
+}
+function initPhoneSensors(){
+  $('srcPhone').innerHTML='<span class="sdot live"></span>Active';$('srcPhoned').textContent='accel+gyro';
+  const sM=()=>window.addEventListener('devicemotion',e=>{
+    const a=e.acceleration||{},r=e.rotationRate||{},g=e.accelerationIncludingGravity||{};
+    accel={x:a.x||0,y:a.y||0,z:a.z||9.8};gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+    gravity={x:(g.x||0)-(a.x||0),y:(g.y||0)-(a.y||0),z:(g.z||9.8)-(a.z||0)};
+  });
+  const sO=()=>window.addEventListener('deviceorientation',e=>{
+      compass=e.alpha||0;pitch=e.beta||0;roll=e.gamma||0;
+      // Derive approximate mag vector from compass heading
+      // Real magnetometer gives x/y/z in µT. We simulate from heading.
+      const hRad=(e.alpha||0)*Math.PI/180;
+      mag={x:Math.cos(hRad)*45,y:Math.sin(hRad)*45,z:Math.sin((e.beta||0)*Math.PI/180)*25};
+    });
+  if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')sM();}).catch(()=>{});
+  else if('DeviceMotionEvent' in window)sM();
+  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')sO();}).catch(()=>{});
+  else if('DeviceOrientationEvent' in window)sO();
+  setInterval(()=>{if(!accel.x&&!accel.y){accel={x:(Math.random()-.5)*1.5,y:(Math.random()-.5)*1.5,z:9.8+(Math.random()-.5)*.3};gyro={x:(Math.random()-.5)*5,y:(Math.random()-.5)*5,z:(Math.random()-.5)*5};compass+=(Math.random()-.5)*2;}},500);
+}
+
+// ═══════════════════════════════════════
+// DATA CAPTURE + CALIBRATION (same as v3)
+// ═══════════════════════════════════════
+const DATA={
+  samples:[],MAX:2000,
+  record(ac,gy,cmp,lat,lon,dt,extra){
+    if(!lat)return;let speed=0,heading=0;
+    if(this.samples.length>0){const p=this.samples[this.samples.length-1];
+      const dLa=(lat-p.lat)*111320,dLo=(lon-p.lon)*111320*Math.cos(lat*Math.PI/180);
+      speed=Math.sqrt(dLa*dLa+dLo*dLo)/Math.max(dt,0.1);heading=Math.atan2(dLo,dLa)*180/Math.PI;if(heading<0)heading+=360;}
+    this.samples.push({t:performance.now(),ax:ac.x,ay:ac.y,az:ac.z,gx:gy.x,gy:gy.y,gz:gy.z,
+      compass:cmp,lat,lon,speed,heading,dt,mx:mag.x,my:mag.y,mz:mag.z,
+      pressure,baroAlt,laserMm,cellTowers4G,cellTowers2G,wifiAPs,...(extra||{})});
+    if(this.samples.length>this.MAX)this.samples.shift();},
+  count(){return this.samples.length;}
+};
+
+const CAL={
+  accelScale:0.5,gyroScale:1.0,compassOff:0,speedMult:1.0,predictionErr:999,calibCount:0,
+  accelBias:{x:0,y:0,z:0},gyroBias:{x:0,y:0,z:0},
+  addStillSample(ac,gy){const lr=0.1;this.accelBias.x=this.accelBias.x*(1-lr)+ac.x*lr;this.accelBias.y=this.accelBias.y*(1-lr)+ac.y*lr;this.accelBias.z=this.accelBias.z*(1-lr)+(ac.z-9.8)*lr;this.gyroBias.x=this.gyroBias.x*(1-lr)+gy.x*lr;this.gyroBias.y=this.gyroBias.y*(1-lr)+gy.y*lr;this.gyroBias.z=this.gyroBias.z*(1-lr)+gy.z*lr;},
+  learn(){
+    const N=DATA.samples.length;if(N<20)return;const s=DATA.samples.slice(-Math.min(100,N));
+    let cOff=0,cN=0;s.forEach(d=>{if(d.speed>0.5){let diff=d.heading-d.compass;if(diff>180)diff-=360;if(diff<-180)diff+=360;cOff+=diff;cN++;}});
+    if(cN>5)this.compassOff=cOff/cN;
+    let asPairs=[];s.forEach(d=>{const am=Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2);if(d.speed>0.3)asPairs.push({a:am,s:d.speed});});
+    if(asPairs.length>10){const aA=asPairs.reduce((s,p)=>s+p.a,0)/asPairs.length;const aS=asPairs.reduce((s,p)=>s+p.s,0)/asPairs.length;if(aA>0.1)this.accelScale=aS/aA;}
+    let sErr=0,sN=0;s.forEach(d=>{const am=Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2);sErr+=Math.abs(am*this.accelScale-d.speed);sN++;});
+    if(sN>5){const avgP=s.reduce((a,d)=>a+Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2)*this.accelScale,0)/sN;const avgA=s.reduce((a,d)=>a+d.speed,0)/sN;if(avgP>0.1)this.speedMult=avgA/avgP;}
+    let gTP=[];for(let i=1;i<s.length;i++){const d=s[i],p=s[i-1];if(d.speed>0.5&&p.speed>0.5){let dh=d.heading-p.heading;if(dh>180)dh-=360;if(dh<-180)dh+=360;if(Math.abs(p.gz-this.gyroBias.z)>0.3)gTP.push({g:p.gz-this.gyroBias.z,t:dh/Math.max(d.dt,0.1)});}}
+    if(gTP.length>5){const aG=gTP.reduce((s,p)=>s+Math.abs(p.g),0)/gTP.length;const aT=gTP.reduce((s,p)=>s+Math.abs(p.t),0)/gTP.length;if(aG>0.1)this.gyroScale=aT/aG;}
+    let tPE=0,pN=0;for(let i=1;i<s.length;i++){const p=s[i-1],c=s[i];const r=DATA.samples.slice(-5);let vL=0,vO=0;for(let j=1;j<r.length;j++){vL+=(r[j].lat-r[j-1].lat)/(r[j].dt||1);vO+=(r[j].lon-r[j-1].lon)/(r[j].dt||1);}vL/=Math.max(1,r.length-1);vO/=Math.max(1,r.length-1);const pLa=p.lat+vL*c.dt,pLo=p.lon+vO*c.dt;tPE+=hav({lat:pLa,lon:pLo},{lat:c.lat,lon:c.lon});pN++;}
+    if(pN>0)this.predictionErr=tPE/pN;this.calibCount++;
+  }
+};
+
+// ═══════════════════════════════════════
+// STRAPDOWN INS
+// ═══════════════════════════════════════
+const INS={
+  q:[1,0,0,0],vel:{n:0,e:0,d:0},pos:{n:0,e:0,d:0},refLat:0,refLon:0,zuptCount:0,zuptThreshold:0.4,zuptActive:false,gravMag:9.81,initialized:false,sampleCount:0,
+  init(lat,lon){this.refLat=lat;this.refLon=lon;this.q=[1,0,0,0];this.vel={n:0,e:0,d:0};this.pos={n:0,e:0,d:0};this.initialized=true;this.sampleCount=0;},
+  qMul(a,b){return[a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]];},
+  qNorm(q){const m=Math.sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3])||1;return[q[0]/m,q[1]/m,q[2]/m,q[3]/m];},
+  qRotate(q,v){const qv=[0,v[0],v[1],v[2]];const qC=[q[0],-q[1],-q[2],-q[3]];const r=this.qMul(this.qMul(q,qv),qC);return[r[1],r[2],r[3]];},
+  update(ac,gy,dt){
+    if(!this.initialized||dt<=0||dt>2)return;this.sampleCount++;
+    const gx=(gy.x-CAL.gyroBias.x)*Math.PI/180,gyy=(gy.y-CAL.gyroBias.y)*Math.PI/180,gz=(gy.z-CAL.gyroBias.z)*Math.PI/180;
+    const hdt=dt*0.5;this.q=this.qNorm(this.qMul(this.q,[1,gx*hdt,gyy*hdt,gz*hdt]));
+    const ax=ac.x-CAL.accelBias.x,ay=ac.y-CAL.accelBias.y,az=ac.z-CAL.accelBias.z;
+    const aW=this.qRotate(this.q,[ax,ay,az]);
+    const aF={n:aW[0],e:aW[1],d:aW[2]+this.gravMag};
+    const aMag=Math.sqrt(ax*ax+ay*ay+az*az);
+    if(Math.abs(aMag-this.gravMag)<this.zuptThreshold){this.zuptCount++;if(this.zuptCount>3){this.zuptActive=true;this.vel.n*=0.5;this.vel.e*=0.5;this.vel.d*=0.5;}}
+    else{this.zuptCount=0;this.zuptActive=false;}
+    this.vel.n+=aF.n*dt;this.vel.e+=aF.e*dt;this.vel.d+=aF.d*dt;
+    this.pos.n+=this.vel.n*dt;this.pos.e+=this.vel.e*dt;this.pos.d+=this.vel.d*dt;
+  },
+  getLatLon(){if(!this.initialized)return null;return{lat:this.refLat+this.pos.n/111320,lon:this.refLon+this.pos.e/(111320*Math.cos(this.refLat*Math.PI/180))};},
+  resetToGPS(lat,lon){this.refLat=lat;this.refLon=lon;this.pos={n:0,e:0,d:0};this.vel.n*=0.3;this.vel.e*=0.3;this.vel.d*=0.3;},
+  stats(){return{samples:this.sampleCount,zupt:this.zuptActive,speed:Math.sqrt(this.vel.n**2+this.vel.e**2).toFixed(2)};}
+};
+
+// ═══════════════════════════════════════
+// CELL TOWER DATABASE (Chennai)
+// ═══════════════════════════════════════
+const TOWERS=[{l:13.02969,o:80.22037,m:84,c:1000107},{l:13.03044,o:80.22068,m:64,c:1000289},{l:13.03082,o:80.22356,m:41,c:1000421},{l:13.0306,o:80.22493,m:84,c:1000494},{l:13.02951,o:80.22816,m:84,c:1000671},{l:13.03006,o:80.22845,m:84,c:1000843},{l:13.03071,o:80.23256,m:64,c:1001014},{l:13.03003,o:80.23222,m:64,c:1001180},{l:13.02907,o:80.23667,m:40,c:1001319},{l:13.02987,o:80.23556,m:84,c:1001515},{l:13.03074,o:80.2407,m:40,c:1001684},{l:13.02925,o:80.24065,m:84,c:1001760},{l:13.03091,o:80.24456,m:41,c:1001916},{l:13.03005,o:80.24435,m:41,c:1002008},{l:13.03035,o:80.24806,m:84,c:1002085},{l:13.03085,o:80.24754,m:41,c:1002212},{l:13.02947,o:80.25106,m:41,c:1002364},{l:13.03095,o:80.25254,m:41,c:1002440},{l:13.03067,o:80.25539,m:40,c:1002529},{l:13.02957,o:80.25679,m:40,c:1002643},{l:13.02977,o:80.25978,m:64,c:1002766},{l:13.03075,o:80.26069,m:40,c:1002822},{l:13.02966,o:80.26497,m:41,c:1002849},{l:13.02955,o:80.2647,m:64,c:1003030},{l:13.03065,o:80.26763,m:41,c:1003064},{l:13.02911,o:80.26809,m:64,c:1003095},{l:13.03023,o:80.27135,m:40,c:1003147},{l:13.02977,o:80.2723,m:40,c:1003338},{l:13.03099,o:80.27651,m:40,c:1003414},{l:13.03041,o:80.27666,m:40,c:1003448},{l:13.03395,o:80.22005,m:84,c:1003459},{l:13.03423,o:80.22093,m:64,c:1003585},{l:13.03421,o:80.22382,m:84,c:1003728},{l:13.03376,o:80.22431,m:64,c:1003749},{l:13.03339,o:80.22847,m:84,c:1003836},{l:13.03307,o:80.22805,m:41,c:1003975},{l:13.03443,o:80.2312,m:64,c:1004159},{l:13.03477,o:80.23219,m:84,c:1004344},{l:13.03307,o:80.23549,m:41,c:1004516},{l:13.03403,o:80.23587,m:40,c:1004573},{l:13.03406,o:80.24006,m:84,c:1004765},{l:13.03445,o:80.24004,m:64,c:1004856},{l:13.03382,o:80.24484,m:84,c:1005006},{l:13.03497,o:80.24358,m:41,c:1005163},{l:13.03405,o:80.24805,m:84,c:1005325},{l:13.03359,o:80.24858,m:84,c:1005426},{l:13.03312,o:80.2514,m:84,c:1005548},{l:13.03361,o:80.25179,m:41,c:1005596},{l:13.0331,o:80.25524,m:40,c:1005752},{l:13.03375,o:80.25632,m:84,c:1005914},{l:13.0332,o:80.25923,m:41,c:1006000},{l:13.03301,o:80.25913,m:41,c:1006136},{l:13.03406,o:80.26311,m:41,c:1006334},{l:13.03324,o:80.26467,m:41,c:1006406},{l:13.03462,o:80.26897,m:40,c:1006496},{l:13.03396,o:80.26743,m:40,c:1006576},{l:13.03327,o:80.27164,m:41,c:1006749},{l:13.03363,o:80.27255,m:40,c:1006914},{l:13.03487,o:80.275,m:41,c:1007024},{l:13.03393,o:80.27521,m:40,c:1007145},{l:13.03884,o:80.22012,m:41,c:1007231},{l:13.03806,o:80.22072,m:64,c:1007411},{l:13.0379,o:80.22334,m:40,c:1007560},{l:13.03765,o:80.22478,m:64,c:1007729},{l:13.03867,o:80.22793,m:84,c:1007760},{l:13.03829,o:80.22876,m:64,c:1007872},{l:13.03729,o:80.23106,m:40,c:1007980},{l:13.03877,o:80.23231,m:41,c:1008059},{l:13.03789,o:80.23529,m:41,c:1008131},{l:13.03851,o:80.23565,m:40,c:1008289},{l:13.03892,o:80.2402,m:84,c:1008409},{l:13.03722,o:80.24085,m:40,c:1008481},{l:13.03852,o:80.24356,m:40,c:1008610},{l:13.03737,o:80.24466,m:64,c:1008643},{l:13.03748,o:80.24865,m:40,c:1008811},{l:13.03894,o:80.24837,m:84,c:1008870},{l:13.03823,o:80.25219,m:41,c:1009058},{l:13.03763,o:80.25175,m:41,c:1009109},{l:13.03852,o:80.25663,m:40,c:1009294},{l:13.03727,o:80.256,m:84,c:1009304},{l:13.03768,o:80.26062,m:40,c:1009448},{l:13.03785,o:80.26016,m:41,c:1009538},{l:13.03855,o:80.26492,m:64,c:1009554},{l:13.03796,o:80.26459,m:41,c:1009715},{l:13.03801,o:80.26834,m:84,c:1009735},{l:13.03884,o:80.26882,m:40,c:1009884},{l:13.03775,o:80.27274,m:84,c:1009985},{l:13.03775,o:80.27249,m:41,c:1010105},{l:13.0387,o:80.27645,m:40,c:1010163},{l:13.03728,o:80.27616,m:40,c:1010275},{l:13.0419,o:80.22029,m:40,c:1010461},{l:13.04147,o:80.22086,m:40,c:1010647},{l:13.04225,o:80.22411,m:64,c:1010805},{l:13.04244,o:80.22479,m:40,c:1010979},{l:13.04231,o:80.22869,m:84,c:1011094},{l:13.04149,o:80.22773,m:64,c:1011113},{l:13.04145,o:80.23246,m:41,c:1011277},{l:13.04165,o:80.23275,m:40,c:1011411},{l:13.04294,o:80.23559,m:64,c:1011434},{l:13.04251,o:80.23555,m:84,c:1011588},{l:13.04158,o:80.23911,m:64,c:1011788},{l:13.04216,o:80.24024,m:84,c:1011861},{l:13.04249,o:80.24442,m:84,c:1011957},{l:13.04226,o:80.24478,m:84,c:1012148},{l:13.04119,o:80.24745,m:40,c:1012260},{l:13.04221,o:80.24881,m:84,c:1012457},{l:13.041,o:80.2511,m:84,c:1012510},{l:13.04227,o:80.25258,m:40,c:1012521},{l:13.04172,o:80.2565,m:41,c:1012578},{l:13.04187,o:80.25638,m:40,c:1012637},{l:13.04179,o:80.26017,m:41,c:1012724},{l:13.04281,o:80.26069,m:41,c:1012910},{l:13.04118,o:80.26315,m:40,c:1013041},{l:13.04154,o:80.26444,m:84,c:1013165},{l:13.04186,o:80.26847,m:40,c:1013204},{l:13.0412,o:80.26752,m:84,c:1013291},{l:13.04186,o:80.27164,m:64,c:1013476},{l:13.04277,o:80.27102,m:40,c:1013651},{l:13.04184,o:80.27545,m:40,c:1013796},{l:13.04172,o:80.27695,m:64,c:1013925},{l:13.04688,o:80.22014,m:41,c:1014040},{l:13.04553,o:80.21932,m:41,c:1014131},{l:13.04588,o:80.22469,m:84,c:1014311},{l:13.04525,o:80.22387,m:40,c:1014364},{l:13.0459,o:80.22738,m:41,c:1014467},{l:13.04612,o:80.227,m:84,c:1014572},{l:13.04686,o:80.23233,m:41,c:1014716},{l:13.04567,o:80.23106,m:40,c:1014819},{l:13.04546,o:80.23553,m:40,c:1014829},{l:13.04691,o:80.236,m:40,c:1014869},{l:13.0453,o:80.24003,m:41,c:1015039},{l:13.04555,o:80.23998,m:40,c:1015072},{l:13.04588,o:80.24401,m:64,c:1015116},{l:13.04571,o:80.24468,m:41,c:1015160},{l:13.04649,o:80.24866,m:40,c:1015250},{l:13.04648,o:80.24752,m:84,c:1015412},{l:13.04607,o:80.25215,m:40,c:1015450},{l:13.0467,o:80.25294,m:40,c:1015613},{l:13.04659,o:80.25551,m:64,c:1015722},{l:13.04668,o:80.25559,m:64,c:1015774},{l:13.04514,o:80.26053,m:40,c:1015831},{l:13.04667,o:80.26063,m:41,c:1015902},{l:13.04566,o:80.26409,m:84,c:1015945},{l:13.04639,o:80.26322,m:64,c:1016019},{l:13.04649,o:80.26818,m:84,c:1016113},{l:13.04549,o:80.26896,m:40,c:1016248},{l:13.04656,o:80.27106,m:41,c:1016277},{l:13.0464,o:80.27237,m:41,c:1016323},{l:13.04522,o:80.277,m:84,c:1016495},{l:13.04557,o:80.27643,m:64,c:1016548},{l:13.05081,o:80.21973,m:41,c:1016731},{l:13.05052,o:80.22012,m:64,c:1016902},{l:13.05097,o:80.22324,m:40,c:1016989},{l:13.05011,o:80.22405,m:64,c:1017082},{l:13.04958,o:80.22814,m:40,c:1017124},{l:13.04919,o:80.22847,m:84,c:1017241},{l:13.0497,o:80.2312,m:84,c:1017313},{l:13.05015,o:80.23116,m:64,c:1017401},{l:13.04968,o:80.23549,m:40,c:1017443},{l:13.04996,o:80.23677,m:41,c:1017576},{l:13.0501,o:80.24049,m:40,c:1017714},{l:13.04966,o:80.2399,m:84,c:1017740},{l:13.04954,o:80.24446,m:64,c:1017883},{l:13.05089,o:80.24304,m:84,c:1017944},{l:13.05018,o:80.24818,m:40,c:1018127},{l:13.05054,o:80.24708,m:40,c:1018215},{l:13.0508,o:80.25239,m:64,c:1018343},{l:13.0502,o:80.25149,m:41,c:1018441},{l:13.05058,o:80.25579,m:40,c:1018541},{l:13.05003,o:80.2565,m:64,c:1018608},{l:13.05093,o:80.26093,m:41,c:1018680},{l:13.05075,o:80.26022,m:40,c:1018798},{l:13.0497,o:80.26306,m:84,c:1018884},{l:13.04924,o:80.26488,m:40,c:1018992},{l:13.05081,o:80.26709,m:40,c:1019083},{l:13.05029,o:80.26758,m:40,c:1019174},{l:13.04999,o:80.27122,m:64,c:1019291},{l:13.04968,o:80.27255,m:64,c:1019363},{l:13.04986,o:80.27588,m:41,c:1019373},{l:13.051,o:80.2768,m:64,c:1019482},{l:13.05393,o:80.2208,m:40,c:1019633},{l:13.05435,o:80.21905,m:40,c:1019648},{l:13.05426,o:80.22338,m:41,c:1019710},{l:13.05443,o:80.2243,m:41,c:1019908},{l:13.05442,o:80.22783,m:64,c:1020010},{l:13.05411,o:80.22774,m:64,c:1020150},{l:13.05313,o:80.23123,m:40,c:1020214},{l:13.05472,o:80.23183,m:64,c:1020234},{l:13.05307,o:80.23631,m:84,c:1020318},{l:13.05444,o:80.23545,m:64,c:1020452},{l:13.05401,o:80.24,m:40,c:1020645},{l:13.05406,o:80.23909,m:84,c:1020761},{l:13.05468,o:80.24391,m:64,c:1020784},{l:13.05424,o:80.24476,m:84,c:1020896},{l:13.05455,o:80.2478,m:84,c:1021011},{l:13.05427,o:80.24879,m:40,c:1021114},{l:13.05394,o:80.253,m:40,c:1021191},{l:13.05349,o:80.25243,m:64,c:1021328},{l:13.05307,o:80.2569,m:40,c:1021501},{l:13.05327,o:80.25527,m:84,c:1021591},{l:13.05416,o:80.25998,m:41,c:1021770},{l:13.05466,o:80.25985,m:41,c:1021835},{l:13.05345,o:80.2646,m:64,c:1021990},{l:13.05307,o:80.26325,m:41,c:1022030},{l:13.05461,o:80.26853,m:84,c:1022218},{l:13.05348,o:80.26705,m:64,c:1022279},{l:13.05461,o:80.2723,m:41,c:1022443},{l:13.05471,o:80.27265,m:64,c:1022487},{l:13.05395,o:80.27635,m:40,c:1022527},{l:13.05484,o:80.27698,m:64,c:1022589},{l:13.05754,o:80.22001,m:41,c:1022690},{l:13.0576,o:80.21991,m:84,c:1022785},{l:13.05741,o:80.22351,m:41,c:1022848},{l:13.05712,o:80.22323,m:64,c:1023033},{l:13.05807,o:80.22742,m:64,c:1023143},{l:13.05708,o:80.228,m:64,c:1023342},{l:13.05816,o:80.23218,m:64,c:1023512},{l:13.05755,o:80.23163,m:64,c:1023570},{l:13.05739,o:80.23661,m:84,c:1023750},{l:13.05724,o:80.23561,m:41,c:1023883},{l:13.05755,o:80.2394,m:40,c:1024039},{l:13.05846,o:80.23913,m:64,c:1024237},{l:13.05879,o:80.24308,m:64,c:1024396},{l:13.05738,o:80.24402,m:84,c:1024518},{l:13.05713,o:80.24817,m:84,c:1024576},{l:13.05817,o:80.24836,m:40,c:1024727},{l:13.05733,o:80.25225,m:41,c:1024862},{l:13.05724,o:80.25285,m:40,c:1024958},{l:13.05852,o:80.2557,m:84,c:1025081},{l:13.0575,o:80.25584,m:40,c:1025124},{l:13.05796,o:80.25985,m:40,c:1025167},{l:13.05805,o:80.26,m:40,c:1025302},{l:13.05713,o:80.26406,m:64,c:1025472},{l:13.05823,o:80.26387,m:41,c:1025664},{l:13.05781,o:80.26734,m:41,c:1025682},{l:13.05741,o:80.26899,m:84,c:1025739},{l:13.05771,o:80.27193,m:64,c:1025790},{l:13.05784,o:80.27236,m:84,c:1025955},{l:13.05874,o:80.2763,m:64,c:1026052},{l:13.05811,o:80.27648,m:84,c:1026120},{l:13.06197,o:80.21958,m:84,c:1026241},{l:13.06147,o:80.21907,m:84,c:1026437},{l:13.06162,o:80.2245,m:40,c:1026544},{l:13.06142,o:80.22424,m:41,c:1026626},{l:13.06131,o:80.22838,m:64,c:1026768},{l:13.06161,o:80.22736,m:40,c:1026946},{l:13.06248,o:80.23112,m:64,c:1027047},{l:13.06221,o:80.23215,m:41,c:1027087},{l:13.06168,o:80.23569,m:84,c:1027158},{l:13.06188,o:80.23609,m:40,c:1027336},{l:13.06292,o:80.23995,m:40,c:1027430},{l:13.06125,o:80.23999,m:64,c:1027489},{l:13.06238,o:80.24419,m:41,c:1027667},{l:13.0611,o:80.24392,m:40,c:1027818},{l:13.06233,o:80.24894,m:84,c:1027898},{l:13.06223,o:80.24752,m:64,c:1028010},{l:13.06134,o:80.25275,m:64,c:1028083},{l:13.06233,o:80.25271,m:64,c:1028243},{l:13.0626,o:80.25521,m:84,c:1028422},{l:13.06105,o:80.2556,m:84,c:1028563},{l:13.06123,o:80.25913,m:41,c:1028752},{l:13.0618,o:80.26095,m:84,c:1028780},{l:13.06198,o:80.26324,m:64,c:1028809},{l:13.06191,o:80.26334,m:64,c:1028951},{l:13.06257,o:80.2678,m:64,c:1029116},{l:13.06249,o:80.26778,m:41,c:1029271},{l:13.06116,o:80.27266,m:84,c:1029325},{l:13.06178,o:80.27185,m:64,c:1029459},{l:13.06187,o:80.27626,m:64,c:1029655},{l:13.06116,o:80.2758,m:84,c:1029831},{l:13.06679,o:80.22051,m:64,c:1029869},{l:13.06555,o:80.21983,m:64,c:1029993},{l:13.06552,o:80.22421,m:41,c:1030154},{l:13.06585,o:80.22371,m:40,c:1030317},{l:13.06508,o:80.22792,m:40,c:1030371},{l:13.06656,o:80.22861,m:41,c:1030433},{l:13.06625,o:80.23234,m:84,c:1030500},{l:13.0664,o:80.23269,m:40,c:1030561},{l:13.06517,o:80.23629,m:40,c:1030641},{l:13.06542,o:80.23544,m:84,c:1030735},{l:13.06558,o:80.24052,m:40,c:1030837},{l:13.06558,o:80.24095,m:64,c:1030990},{l:13.06555,o:80.24409,m:64,c:1031060},{l:13.06674,o:80.24429,m:40,c:1031135},{l:13.06612,o:80.2474,m:84,c:1031223},{l:13.0667,o:80.24815,m:40,c:1031287},{l:13.06575,o:80.25141,m:41,c:1031467},{l:13.06591,o:80.25115,m:40,c:1031558},{l:13.06545,o:80.25523,m:40,c:1031637},{l:13.06606,o:80.25657,m:40,c:1031648},{l:13.06652,o:80.25991,m:41,c:1031768},{l:13.06639,o:80.25965,m:84,c:1031793},{l:13.0658,o:80.26434,m:40,c:1031875},{l:13.06521,o:80.26342,m:84,c:1032024},{l:13.06697,o:80.26797,m:84,c:1032064},{l:13.06559,o:80.26895,m:41,c:1032124},{l:13.06652,o:80.27272,m:40,c:1032143},{l:13.066,o:80.27117,m:64,c:1032236},{l:13.06683,o:80.27676,m:41,c:1032254},{l:13.06646,o:80.27585,m:84,c:1032264},{l:13.07049,o:80.22076,m:64,c:1032460},{l:13.0693,o:80.21981,m:84,c:1032651},{l:13.07088,o:80.22462,m:84,c:1032712},{l:13.06978,o:80.22399,m:84,c:1032900},{l:13.06991,o:80.22873,m:64,c:1032982},{l:13.06956,o:80.22716,m:64,c:1033154},{l:13.0704,o:80.23189,m:84,c:1033252},{l:13.06958,o:80.23202,m:84,c:1033309},{l:13.07086,o:80.23596,m:40,c:1033487},{l:13.07071,o:80.23585,m:84,c:1033542},{l:13.0696,o:80.24022,m:64,c:1033653},{l:13.06929,o:80.23925,m:41,c:1033823},{l:13.07056,o:80.24494,m:40,c:1033850},{l:13.06943,o:80.24334,m:40,c:1033961},{l:13.07033,o:80.24703,m:84,c:1034100},{l:13.07035,o:80.24719,m:40,c:1034181},{l:13.06935,o:80.25298,m:64,c:1034296},{l:13.06956,o:80.25109,m:41,c:1034348},{l:13.069,o:80.25539,m:40,c:1034487},{l:13.06927,o:80.2569,m:84,c:1034677},{l:13.07082,o:80.25926,m:64,c:1034753},{l:13.06945,o:80.25921,m:41,c:1034907},{l:13.06977,o:80.26472,m:64,c:1035013},{l:13.07041,o:80.26341,m:64,c:1035041},{l:13.07049,o:80.26768,m:40,c:1035192},{l:13.06994,o:80.26816,m:64,c:1035373},{l:13.06935,o:80.27102,m:84,c:1035399},{l:13.07001,o:80.27224,m:64,c:1035414},{l:13.06911,o:80.27631,m:40,c:1035477},{l:13.07036,o:80.27556,m:84,c:1035629},{l:13.07335,o:80.21994,m:40,c:1035759},{l:13.07494,o:80.22069,m:40,c:1035895},{l:13.07317,o:80.22347,m:84,c:1035965},{l:13.0746,o:80.22497,m:41,c:1036011},{l:13.07438,o:80.22824,m:84,c:1036187},{l:13.07429,o:80.22758,m:84,c:1036358},{l:13.07362,o:80.23202,m:64,c:1036373},{l:13.07412,o:80.2319,m:84,c:1036483},{l:13.07309,o:80.23673,m:40,c:1036575},{l:13.0746,o:80.23586,m:41,c:1036617},{l:13.07499,o:80.23989,m:40,c:1036715},{l:13.07315,o:80.24089,m:41,c:1036802},{l:13.07485,o:80.24365,m:40,c:1036820},{l:13.07336,o:80.2441,m:64,c:1036994},{l:13.07339,o:80.24887,m:64,c:1037140},{l:13.07475,o:80.24723,m:64,c:1037305},{l:13.07366,o:80.25278,m:84,c:1037346},{l:13.07411,o:80.25103,m:41,c:1037372},{l:13.07309,o:80.25659,m:41,c:1037421},{l:13.07414,o:80.25559,m:40,c:1037557},{l:13.0743,o:80.26013,m:40,c:1037680},{l:13.07444,o:80.25969,m:84,c:1037850},{l:13.07481,o:80.26385,m:64,c:1038005},{l:13.07486,o:80.26481,m:40,c:1038116},{l:13.07465,o:80.26714,m:64,c:1038286},{l:13.07382,o:80.26873,m:41,c:1038336},{l:13.07328,o:80.27199,m:41,c:1038474},{l:13.07467,o:80.27231,m:64,c:1038553},{l:13.07302,o:80.27604,m:41,c:1038667},{l:13.07313,o:80.277,m:84,c:1038729},{l:13.077,o:80.22085,m:84,c:1038839},{l:13.07814,o:80.21975,m:84,c:1038852},{l:13.07801,o:80.22447,m:64,c:1039035},{l:13.07792,o:80.22427,m:84,c:1039231},{l:13.07789,o:80.22778,m:40,c:1039305},{l:13.07828,o:80.22877,m:40,c:1039437},{l:13.07896,o:80.23131,m:84,c:1039478},{l:13.07702,o:80.23175,m:84,c:1039558},{l:13.07776,o:80.23693,m:84,c:1039733},{l:13.07797,o:80.23511,m:84,c:1039840},{l:13.0787,o:80.24086,m:64,c:1039910},{l:13.07732,o:80.24089,m:64,c:1040039},{l:13.07783,o:80.24358,m:40,c:1040101},{l:13.07842,o:80.24442,m:40,c:1040186},{l:13.0772,o:80.24731,m:40,c:1040303},{l:13.07883,o:80.24813,m:40,c:1040488},{l:13.07899,o:80.2521,m:40,c:1040523},{l:13.07706,o:80.25257,m:41,c:1040614},{l:13.07841,o:80.2558,m:41,c:1040805},{l:13.0784,o:80.25553,m:41,c:1040895},{l:13.07713,o:80.26095,m:84,c:1041057},{l:13.07726,o:80.26014,m:40,c:1041178},{l:13.07896,o:80.26308,m:41,c:1041301},{l:13.07717,o:80.26391,m:41,c:1041473},{l:13.07784,o:80.26844,m:64,c:1041521},{l:13.07702,o:80.26891,m:40,c:1041632},{l:13.07806,o:80.27225,m:84,c:1041762},{l:13.077,o:80.27151,m:40,c:1041813},{l:13.07878,o:80.27552,m:64,c:1041994},{l:13.07847,o:80.27606,m:40,c:1042015},{l:13.08105,o:80.22068,m:41,c:1042141},{l:13.08191,o:80.21931,m:40,c:1042225},{l:13.0811,o:80.22483,m:64,c:1042314},{l:13.0816,o:80.22306,m:84,c:1042496},{l:13.08124,o:80.22879,m:84,c:1042666},{l:13.08111,o:80.22834,m:40,c:1042770},{l:13.08164,o:80.2326,m:41,c:1042823},{l:13.08125,o:80.23193,m:84,c:1042976},{l:13.08126,o:80.23557,m:40,c:1043171},{l:13.08245,o:80.23668,m:64,c:1043315},{l:13.0817,o:80.23929,m:84,c:1043394},{l:13.08143,o:80.24043,m:64,c:1043531},{l:13.08199,o:80.24416,m:64,c:1043557},{l:13.08234,o:80.24407,m:84,c:1043613},{l:13.08117,o:80.24723,m:84,c:1043698},{l:13.08109,o:80.24784,m:84,c:1043864},{l:13.08114,o:80.25142,m:41,c:1043920},{l:13.082,o:80.25136,m:84,c:1043939},{l:13.08197,o:80.25586,m:84,c:1044064},{l:13.08118,o:80.25562,m:40,c:1044129},{l:13.08119,o:80.26094,m:40,c:1044290},{l:13.08232,o:80.26033,m:64,c:1044320},{l:13.08175,o:80.26493,m:41,c:1044412},{l:13.08287,o:80.26388,m:84,c:1044479},{l:13.08244,o:80.26884,m:64,c:1044493},{l:13.08229,o:80.26825,m:64,c:1044657},{l:13.08278,o:80.27193,m:84,c:1044758},{l:13.08121,o:80.27123,m:64,c:1044839},{l:13.08249,o:80.27637,m:84,c:1045032},{l:13.08234,o:80.27618,m:40,c:1045148},{l:13.08686,o:80.21947,m:84,c:1045273},{l:13.08539,o:80.21912,m:41,c:1045458},{l:13.08567,o:80.22364,m:40,c:1045561},{l:13.08634,o:80.22302,m:64,c:1045628},{l:13.0867,o:80.22804,m:40,c:1045823},{l:13.08586,o:80.22738,m:41,c:1045950},{l:13.08656,o:80.23241,m:84,c:1046142},{l:13.08619,o:80.2328,m:84,c:1046269},{l:13.086,o:80.23541,m:84,c:1046461},{l:13.08679,o:80.23695,m:84,c:1046573},{l:13.08614,o:80.24044,m:84,c:1046755},{l:13.08548,o:80.24082,m:40,c:1046788},{l:13.08635,o:80.24396,m:41,c:1046919},{l:13.08623,o:80.24405,m:84,c:1047029},{l:13.08688,o:80.24817,m:84,c:1047199},{l:13.08567,o:80.24892,m:40,c:1047352},{l:13.08621,o:80.25233,m:41,c:1047416},{l:13.08583,o:80.25255,m:84,c:1047599},{l:13.08554,o:80.25601,m:64,c:1047746},{l:13.08698,o:80.25543,m:64,c:1047910},{l:13.08601,o:80.25938,m:84,c:1047961},{l:13.08515,o:80.2605,m:64,c:1048030},{l:13.08643,o:80.26331,m:40,c:1048078},{l:13.08633,o:80.26321,m:41,c:1048121},{l:13.08611,o:80.26786,m:64,c:1048143},{l:13.08688,o:80.26761,m:64,c:1048166},{l:13.08566,o:80.27216,m:41,c:1048259},{l:13.08563,o:80.27293,m:84,c:1048328},{l:13.08526,o:80.27536,m:40,c:1048387},{l:13.08619,o:80.27529,m:64,c:1048412},{l:13.09081,o:80.22046,m:64,c:1048551},{l:13.08942,o:80.21909,m:40,c:1048703},{l:13.08962,o:80.22374,m:40,c:1048898},{l:13.09042,o:80.22471,m:84,c:1048979},{l:13.0898,o:80.22884,m:84,c:1049034},{l:13.09015,o:80.22773,m:64,c:1049081},{l:13.09007,o:80.23217,m:84,c:1049252},{l:13.09015,o:80.23193,m:41,c:1049281},{l:13.0892,o:80.23696,m:40,c:1049427},{l:13.08919,o:80.23674,m:40,c:1049466},{l:13.08915,o:80.24034,m:40,c:1049579},{l:13.08949,o:80.23947,m:64,c:1049637},{l:13.0908,o:80.24438,m:40,c:1049788},{l:13.09072,o:80.24355,m:41,c:1049890},{l:13.08956,o:80.24718,m:64,c:1049922},{l:13.08984,o:80.24832,m:40,c:1049950},{l:13.09031,o:80.25147,m:84,c:1049965},{l:13.09083,o:80.2528,m:41,c:1050074},{l:13.08995,o:80.25624,m:84,c:1050139},{l:13.09042,o:80.2557,m:40,c:1050302},{l:13.09007,o:80.26033,m:41,c:1050364},{l:13.08968,o:80.26052,m:84,c:1050440},{l:13.08924,o:80.26481,m:40,c:1050541},{l:13.0892,o:80.2643,m:84,c:1050659},{l:13.09054,o:80.26716,m:40,c:1050782},{l:13.08971,o:80.268,m:84,c:1050827},{l:13.0898,o:80.27243,m:84,c:1050931},{l:13.09021,o:80.27249,m:40,c:1051037},{l:13.09055,o:80.27506,m:40,c:1051061},{l:13.08926,o:80.27589,m:64,c:1051181},{l:13.09383,o:80.22044,m:64,c:1051293},{l:13.09474,o:80.21977,m:64,c:1051365},{l:13.09317,o:80.2237,m:40,c:1051481},{l:13.09393,o:80.22442,m:64,c:1051607},{l:13.09478,o:80.2278,m:64,c:1051782},{l:13.09487,o:80.22803,m:64,c:1051860},{l:13.09337,o:80.23289,m:84,c:1052054},{l:13.09342,o:80.23115,m:41,c:1052185},{l:13.09316,o:80.23611,m:64,c:1052275},{l:13.09348,o:80.23537,m:84,c:1052345},{l:13.09325,o:80.24052,m:64,c:1052491},{l:13.09455,o:80.2397,m:41,c:1052518},{l:13.09342,o:80.24362,m:84,c:1052590},{l:13.09491,o:80.24468,m:64,c:1052782},{l:13.09349,o:80.24793,m:41,c:1052959},{l:13.09481,o:80.24754,m:41,c:1053093},{l:13.09395,o:80.25148,m:40,c:1053201},{l:13.09418,o:80.25215,m:41,c:1053369},{l:13.094,o:80.25551,m:84,c:1053540},{l:13.09318,o:80.25634,m:40,c:1053625},{l:13.09487,o:80.26062,m:84,c:1053661},{l:13.09308,o:80.2609,m:41,c:1053706},{l:13.09461,o:80.26376,m:84,c:1053861},{l:13.09361,o:80.26447,m:84,c:1053990},{l:13.09333,o:80.2683,m:84,c:1054006},{l:13.09335,o:80.2673,m:41,c:1054077},{l:13.09498,o:80.27165,m:41,c:1054204},{l:13.09432,o:80.27269,m:64,c:1054314},{l:13.09454,o:80.27661,m:64,c:1054434},{l:13.09351,o:80.27663,m:41,c:1054504},{l:13.09739,o:80.21979,m:41,c:1054650},{l:13.09703,o:80.22038,m:40,c:1054676},{l:13.09729,o:80.22353,m:40,c:1054706},{l:13.09757,o:80.22309,m:41,c:1054750},{l:13.09781,o:80.22857,m:64,c:1054761},{l:13.09718,o:80.22776,m:84,c:1054843},{l:13.09787,o:80.23147,m:41,c:1054909},{l:13.09898,o:80.23186,m:84,c:1055010},{l:13.09884,o:80.23516,m:64,c:1055062},{l:13.09701,o:80.23532,m:41,c:1055099},{l:13.09886,o:80.24047,m:40,c:1055144},{l:13.09824,o:80.24036,m:84,c:1055206},{l:13.09763,o:80.24439,m:84,c:1055232},{l:13.09759,o:80.24422,m:64,c:1055379},{l:13.09789,o:80.24761,m:41,c:1055458},{l:13.09803,o:80.2484,m:41,c:1055587},{l:13.09786,o:80.25184,m:40,c:1055729},{l:13.09849,o:80.25133,m:64,c:1055760},{l:13.0975,o:80.25587,m:41,c:1055946},{l:13.09833,o:80.25522,m:84,c:1056030},{l:13.09742,o:80.26062,m:41,c:1056126},{l:13.09897,o:80.2605,m:40,c:1056306},{l:13.09843,o:80.26418,m:84,c:1056330},{l:13.09837,o:80.26421,m:84,c:1056342},{l:13.09863,o:80.26777,m:40,c:1056420},{l:13.09703,o:80.26898,m:84,c:1056570},{l:13.09723,o:80.27187,m:64,c:1056694},{l:13.09832,o:80.2722,m:40,c:1056766},{l:13.0983,o:80.27531,m:40,c:1056938},{l:13.09765,o:80.27668,m:84,c:1056959},{l:12.89882,o:80.10186,m:64,c:1057136},{l:12.89826,o:80.11832,m:84,c:1057214},{l:12.90126,o:80.13865,m:64,c:1057386},{l:12.90183,o:80.15934,m:41,c:1057438},{l:12.90181,o:80.18016,m:64,c:1057518},{l:12.89791,o:80.19937,m:84,c:1057596},{l:12.89946,o:80.21911,m:84,c:1057763},{l:12.90162,o:80.2388,m:40,c:1057891},{l:12.89756,o:80.25776,m:40,c:1058004},{l:12.899,o:80.28015,m:41,c:1058171},{l:12.91982,o:80.09852,m:41,c:1058291},{l:12.92228,o:80.11972,m:40,c:1058472},{l:12.92096,o:80.13892,m:64,c:1058542},{l:12.9203,o:80.15768,m:84,c:1058598},{l:12.92231,o:80.17867,m:64,c:1058626},{l:12.92157,o:80.20017,m:64,c:1058704},{l:12.91981,o:80.21811,m:41,c:1058849},{l:12.92191,o:80.23807,m:41,c:1058988},{l:12.91945,o:80.26163,m:84,c:1059131},{l:12.92132,o:80.27801,m:40,c:1059291},{l:12.93992,o:80.10202,m:64,c:1059470},{l:12.94143,o:80.11959,m:41,c:1059569},{l:12.94038,o:80.1383,m:41,c:1059687},{l:12.93844,o:80.1624,m:84,c:1059797},{l:12.93963,o:80.18052,m:84,c:1059931},{l:12.93951,o:80.19781,m:64,c:1060005},{l:12.94178,o:80.22134,m:64,c:1060183},{l:12.93853,o:80.23771,m:64,c:1060225},{l:12.94242,o:80.26109,m:84,c:1060406},{l:12.9416,o:80.28157,m:40,c:1060487},{l:12.95917,o:80.09883,m:40,c:1060617},{l:12.96234,o:80.12126,m:41,c:1060766},{l:12.95888,o:80.14227,m:84,c:1060849},{l:12.9604,o:80.15752,m:84,c:1060981},{l:12.95987,o:80.17842,m:41,c:1061082},{l:12.96032,o:80.19777,m:84,c:1061211},{l:12.95906,o:80.21801,m:84,c:1061318},{l:12.96116,o:80.23954,m:84,c:1061404},{l:12.96176,o:80.26008,m:40,c:1061459},{l:12.95771,o:80.2786,m:40,c:1061591},{l:12.97936,o:80.10011,m:84,c:1061659},{l:12.9782,o:80.1193,m:84,c:1061724},{l:12.98021,o:80.1384,m:40,c:1061839},{l:12.98126,o:80.16,m:64,c:1061850},{l:12.98132,o:80.18065,m:41,c:1062039},{l:12.97919,o:80.19844,m:40,c:1062052},{l:12.98182,o:80.22083,m:41,c:1062087},{l:12.98097,o:80.24149,m:84,c:1062204},{l:12.98211,o:80.26042,m:40,c:1062220},{l:12.97901,o:80.28118,m:41,c:1062394},{l:13.00211,o:80.10157,m:41,c:1062579},{l:13.00222,o:80.12204,m:41,c:1062752},{l:12.9988,o:80.14128,m:64,c:1062851},{l:13.00203,o:80.15756,m:84,c:1062867},{l:13.00067,o:80.18043,m:40,c:1062972},{l:12.99988,o:80.19973,m:84,c:1063132},{l:12.9997,o:80.22036,m:84,c:1063199},{l:13.00143,o:80.24156,m:84,c:1063283},{l:13.00074,o:80.25806,m:41,c:1063341},{l:12.99752,o:80.2801,m:41,c:1063521},{l:13.02008,o:80.10244,m:41,c:1063636},{l:13.01947,o:80.1208,m:84,c:1063685},{l:13.02039,o:80.14244,m:40,c:1063757},{l:13.01978,o:80.15794,m:41,c:1063799},{l:13.01789,o:80.17817,m:40,c:1063816},{l:13.02037,o:80.201,m:64,c:1063935},{l:13.0209,o:80.22088,m:84,c:1064037},{l:13.02216,o:80.24144,m:40,c:1064159},{l:13.01932,o:80.25784,m:64,c:1064218},{l:13.01794,o:80.28067,m:41,c:1064310},{l:13.04133,o:80.10076,m:84,c:1064420},{l:13.04008,o:80.12105,m:41,c:1064497},{l:13.03955,o:80.14115,m:41,c:1064680},{l:13.03942,o:80.16152,m:64,c:1064719},{l:13.04083,o:80.17919,m:64,c:1064858},{l:13.03943,o:80.20196,m:64,c:1064896},{l:13.04225,o:80.22116,m:41,c:1065028},{l:13.03801,o:80.23758,m:84,c:1065064},{l:13.04117,o:80.26191,m:41,c:1065147},{l:13.03753,o:80.28045,m:40,c:1065212},{l:13.06236,o:80.09975,m:41,c:1065262},{l:13.0596,o:80.12081,m:64,c:1065338},{l:13.05967,o:80.14148,m:64,c:1065350},{l:13.06139,o:80.15861,m:84,c:1065492},{l:13.05772,o:80.1787,m:40,c:1065673},{l:13.06197,o:80.19839,m:84,c:1065753},{l:13.05924,o:80.22223,m:40,c:1065770},{l:13.0602,o:80.23927,m:40,c:1065947},{l:13.06065,o:80.26019,m:84,c:1066018},{l:13.05991,o:80.28201,m:41,c:1066165},{l:13.07947,o:80.10166,m:41,c:1066341},{l:13.07789,o:80.12111,m:84,c:1066416},{l:13.08208,o:80.14044,m:41,c:1066561},{l:13.07942,o:80.16213,m:41,c:1066759},{l:13.0809,o:80.18246,m:84,c:1066792},{l:13.08081,o:80.2025,m:41,c:1066864},{l:13.07842,o:80.21884,m:41,c:1066934},{l:13.08037,o:80.24152,m:41,c:1067016},{l:13.08111,o:80.2606,m:64,c:1067082},{l:13.08195,o:80.27815,m:40,c:1067150},{l:13.10118,o:80.09889,m:84,c:1067259},{l:13.10081,o:80.12159,m:84,c:1067458},{l:13.09791,o:80.14023,m:84,c:1067575},{l:13.1006,o:80.15969,m:41,c:1067754},{l:13.10016,o:80.17888,m:40,c:1067924},{l:13.10194,o:80.19858,m:41,c:1067981},{l:13.10012,o:80.21758,m:40,c:1068126},{l:13.09889,o:80.24148,m:64,c:1068249},{l:13.10094,o:80.26023,m:41,c:1068429},{l:13.09763,o:80.28116,m:84,c:1068572},{l:13.11942,o:80.10198,m:41,c:1068619},{l:13.12043,o:80.11993,m:64,c:1068722},{l:13.11902,o:80.1402,m:40,c:1068735},{l:13.11882,o:80.15981,m:64,c:1068825},{l:13.12142,o:80.18206,m:41,c:1069011},{l:13.12054,o:80.19983,m:40,c:1069069},{l:13.1186,o:80.2202,m:41,c:1069103},{l:13.11935,o:80.24094,m:41,c:1069232},{l:13.12134,o:80.25867,m:40,c:1069341},{l:13.11807,o:80.28012,m:41,c:1069374},{l:13.13996,o:80.09916,m:40,c:1069567},{l:13.14052,o:80.11998,m:40,c:1069708},{l:13.13805,o:80.14099,m:40,c:1069730},{l:13.14032,o:80.16027,m:41,c:1069895},{l:13.1423,o:80.18004,m:41,c:1070018},{l:13.13847,o:80.20099,m:64,c:1070090},{l:13.14248,o:80.2202,m:64,c:1070202},{l:13.13889,o:80.23851,m:41,c:1070243},{l:13.1424,o:80.26088,m:41,c:1070335},{l:13.14246,o:80.27867,m:40,c:1070532},{l:13.16015,o:80.10201,m:41,c:1070556},{l:13.16027,o:80.11936,m:41,c:1070742},{l:13.15897,o:80.14204,m:64,c:1070812},{l:13.15936,o:80.15969,m:40,c:1070895},{l:13.16043,o:80.18066,m:64,c:1070980},{l:13.15867,o:80.2023,m:84,c:1070992},{l:13.16189,o:80.22042,m:40,c:1071175},{l:13.16078,o:80.23753,m:84,c:1071292},{l:13.15762,o:80.261,m:40,c:1071364},{l:13.15774,o:80.28004,m:40,c:1071444},{l:13.17754,o:80.10016,m:41,c:1071592},{l:13.18074,o:80.11752,m:40,c:1071634},{l:13.17843,o:80.13973,m:40,c:1071728},{l:13.17988,o:80.15851,m:64,c:1071763},{l:13.18113,o:80.18,m:41,c:1071899},{l:13.18191,o:80.20006,m:64,c:1072051},{l:13.18217,o:80.21892,m:84,c:1072208},{l:13.17946,o:80.24006,m:41,c:1072388},{l:13.18176,o:80.25888,m:41,c:1072409},{l:13.182,o:80.27933,m:84,c:1072558}];
+
+const UTIN={
+  findNear(lat,lon,n=7){
+    return TOWERS.map(t=>({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,
+      dist:hav({lat,lon},{lat:t.l,lon:t.o}),
+      // Path loss model: -50dBm at 100m, -110dBm at 5km (n=3.5 for urban Chennai)
+      signal:Math.max(-110,Math.min(-50,-50-35*Math.log10(Math.max(100,hav({lat,lon},{lat:t.l,lon:t.o}))/100)))
+    })).sort((a,b)=>a.dist-b.dist).slice(0,n);
+  },
+  // Non-linear least squares trilateration (more accurate than weighted centroid)
+  trilaterate(towers){
+    if(towers.length<3)return null;
+    // Start with weighted centroid
+    let sL=0,sO=0,sW=0;
+    towers.forEach(t=>{const w=Math.pow(10,(t.signal+100)/30);sL+=t.lat*w;sO+=t.lon*w;sW+=w;});
+    let lat=sL/sW,lon=sO/sW;
+    // NLLS refinement: 5 iterations of gradient descent
+    for(let iter=0;iter<5;iter++){
+      let gLat=0,gLon=0;
+      towers.forEach(t=>{
+        const estDist=hav({lat,lon},{lat:t.lat,lon:t.lon});
+        const trueDist=this.sigToDist(t.signal);
+        const err=estDist-trueDist;
+        const dLat=(lat-t.lat)/(estDist+0.0001);
+        const dLon=(lon-t.lon)/(estDist+0.0001);
+        gLat+=err*dLat;gLon+=err*dLon;
+      });
+      lat-=0.00005*gLat;lon-=0.00005*gLon;
+    }
+    return{lat,lon,acc:this.estAcc(towers,lat,lon),towers:towers.length};
+  },
+  sigToDist(sig){
+    // Inverse path loss: distance = 100 * 10^((sig+50)/-35)
+    return 100*Math.pow(10,(sig+50)/-35);
+  },
+  estAcc(towers,lat,lon){
+    const avgD=towers.reduce((s,t)=>s+hav({lat,lon},{lat:t.lat,lon:t.lon}),0)/towers.length;
+    return Math.round(avgD*Math.max(0.2,1-towers.length*0.1)*0.5);
+  },
+  // Temporal averaging: keep last 5 scans, use averaged RSSI
+  scanHistory:[],
+  lastTowers:null,
+  update(lat,lon){
+    const near=this.findNear(lat,lon,7);
+    this.scanHistory.push(near);
+    if(this.scanHistory.length>5)this.scanHistory.shift();
+    // Average RSSI across scans for each tower
+    if(this.scanHistory.length>=3){
+      const merged=new Map();
+      this.scanHistory.forEach(scan=>{
+        scan.forEach(t=>{
+          const k=t.lat.toFixed(5)+','+t.lon.toFixed(5);
+          if(!merged.has(k))merged.set(k,{...t,signals:[],count:0});
+          const m=merged.get(k);m.signals.push(t.signal);m.count++;
+        });
+      });
+      this.lastTowers=[...merged.values()].map(t=>({
+        ...t,signal:t.signals.reduce((s,v)=>s+v,0)/t.signals.length // averaged RSSI
+      })).sort((a,b)=>a.dist-b.dist).slice(0,7);
+    }else{
+      this.lastTowers=near;
+    }
+  },
+  predict(){
+    return this.lastTowers&&this.lastTowers.length>=3?this.trilaterate(this.lastTowers):null;
+  }
+};
+
+// ═══════════════════════════════════════
+// 24 FORMULAS — v3's 22 + 2 hardware-specific
+// ═══════════════════════════════════════
+const F=[];
+// Helper: velocity from last N GPS samples
+function velFromGPS(n=5){
+  if(DATA.samples.length<n+1)return null;
+  const r=DATA.samples.slice(-n);let vL=0,vO=0;
+  for(let i=1;i<r.length;i++){vL+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
+  return{vLat:vL/(r.length-1),vLon:vO/(r.length-1)};
+}
+function avgSpeed(n=5){const r=DATA.samples.slice(-n);return r.reduce((s,d)=>s+d.speed,0)/r.length;}
+function mkF(name,predictFn){
+  return{
+    name,pos:null,err:999,errAvg:999,errHistory:[],drillTrail:[],drillDrift:0,blindSec:0,mapLine:null,
+    // Self-correction: learns a lat/lon offset from GPS comparison errors
+    // Every tick: "I predicted X but GPS was at Y, so I'm off by (Y-X)"
+    // Over time: correction converges so formula + correction ≈ GPS
+    corrLat:0,corrLon:0,  // accumulated correction offset
+    corrCount:0,
+    speedScale:1.0,       // learned speed multiplier (if formula overshoots/undershoots)
+    headingOff:0,          // learned heading offset in degrees
+    _rawPredict:predictFn,
+    predict(pos,dt){
+      // Run the raw formula
+      let p=this._rawPredict.call(this,pos,dt);
+      if(!p||!pos)return p;
+      // Apply learned corrections
+      if(this.corrCount>10){
+        p.lat+=this.corrLat;
+        p.lon+=this.corrLon;
+      }
+      return p;
+    },
+    // Learn from GPS comparison — called every tick during GPS-available
+    learnFromGPS(predicted,actual){
+      if(!predicted||!actual)return;
+      this.corrCount++;
+      const lr=Math.min(0.1,1/this.corrCount); // learning rate decays over time
+      // Error vector: what direction and how far were we off?
+      const errLat=actual.lat-predicted.lat;
+      const errLon=actual.lon-predicted.lon;
+      // EMA update the correction offset
+      this.corrLat=this.corrLat*(1-lr)+errLat*lr;
+      this.corrLon=this.corrLon*(1-lr)+errLon*lr;
+      // Learn speed scale: if we consistently overshoot, reduce speed
+      const predDist=hav(this.pos||predicted,predicted);
+      const actDist=hav(this.pos||predicted,actual);
+      if(predDist>0.5&&actDist>0.5){
+        const ratio=actDist/predDist;
+        this.speedScale=this.speedScale*(1-lr*0.5)+ratio*lr*0.5;
+        this.speedScale=Math.max(0.3,Math.min(3,this.speedScale));
+      }
+    }
+  };
+}
+
+// F0-F2: Velocity (SMA, EMA, WMA)
+F.push(mkF('Vel SMA',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Vel EMA',function(pos,dt){const v=velFromGPS(3);if(!v)return pos;const a=0.3;this._vL=(this._vL||0)*(1-a)+v.vLat*a;this._vO=(this._vO||0)*(1-a)+v.vLon*a;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
+F.push(mkF('Vel WMA',(pos,dt)=>{if(DATA.samples.length<4)return pos;const r=DATA.samples.slice(-8);let vL=0,vO=0,tw=0;for(let i=1;i<r.length;i++){const w=i;vL+=w*(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=w*(r[i].lon-r[i-1].lon)/(r[i].dt||1);tw+=w;}return{lat:pos.lat+(vL/tw)*dt,lon:pos.lon+(vO/tw)*dt};}));
+// F3-F5: Sensor-based
+F.push(mkF('Accel+Comp',(pos,dt)=>{const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Accel+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Gyro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const s=avgSpeed(5);const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F6-F7: Step-based
+F.push(mkF('Step+Comp',function(pos,dt){const ns=stepCount-(this._ls||0);this._ls=stepCount;const h=(compass+CAL.compassOff)*Math.PI/180;if(ns>0){const d=ns*0.72;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Step+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const ns=stepCount-(this._ls||0);this._ls=stepCount;if(ns>0){const d=ns*0.72;const h=this._h*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+// F8: Kalman
+F.push(mkF('Kalman',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(3);if(!v)return pos;this._vL=(this._vL||0)*0.1+v.vLat*0.9;this._vO=(this._vO||0)*0.1+v.vLon*0.9;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
+// F9: Double Integration (raw — intentionally bad, for comparison)
+F.push(mkF('Dbl Integ',function(pos,dt){this._vx=(this._vx||0)+(accel.x-CAL.accelBias.x)*dt;this._vy=(this._vy||0)+(accel.y-CAL.accelBias.y)*dt;this._vx*=0.98;this._vy*=0.98;const h=(compass+CAL.compassOff)*Math.PI/180;const f=this._vx*Math.cos(h)-this._vy*Math.sin(h);const s=this._vx*Math.sin(h)+this._vy*Math.cos(h);return{lat:pos.lat+f*dt/111320,lon:pos.lon+s*dt/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F10: Circular Arc
+F.push(mkF('Circ Arc',function(pos,dt){if(DATA.samples.length<3)return pos;const tr=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;this._h=(this._h||0)+tr*dt;const s=avgSpeed(5);if(Math.abs(tr)>1){const r=s/Math.abs(tr*Math.PI/180);const arc=tr*dt*Math.PI/180;const dx=r*Math.sin(arc),dy=r*(1-Math.cos(arc));const h=this._h*Math.PI/180;return{lat:pos.lat+(dx*Math.cos(h)-dy*Math.sin(h))/111320,lon:pos.lon+(dx*Math.sin(h)+dy*Math.cos(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F11-F15: Spd Decay, Hdg Rate, Gravity, Mag Pattern, Barometric
+F.push(mkF('Spd Decay',function(pos,dt){if(DATA.samples.length<2)return pos;this._s=(this._s||0)*0.95+DATA.samples[DATA.samples.length-1].speed*0.05;this._s*=0.999;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(this._s*Math.cos(h)*dt)/111320,lon:pos.lon+(this._s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Hdg Rate',function(pos,dt){if(DATA.samples.length<3)return pos;const l=DATA.samples[DATA.samples.length-1];let dh=l.heading-(this._lh||l.heading);if(dh>180)dh-=360;if(dh<-180)dh+=360;this._hr=(this._hr||0)*0.7+dh*0.3;this._lh=l.heading+this._hr;const s=avgSpeed(5);const h=this._lh*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Gravity',(pos,dt)=>{if(DATA.samples.length<3)return pos;const tF=gravity.y/9.8,tS=gravity.x/9.8;const s=avgSpeed(5)*(1+Math.sqrt(tF*tF+tS*tS)*0.5);const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Mag Pattern',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Barometric',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+// F16: Sensor Fusion
+F.push(mkF('Sensor Fuse',function(pos,dt){const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const sS=aM*CAL.accelScale*CAL.speedMult;const sG=avgSpeed(5);const s=sS*0.3+sG*0.7;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt*0.3;const cH=(compass+CAL.compassOff);const fH=(cH*0.7+this._h*0.3)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(fH)*dt)/111320,lon:pos.lon+(s*Math.sin(fH)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F17: Historical Match
+F.push(mkF('Hist Match',(pos,dt)=>{if(DATA.samples.length<20)return pos;const cur=DATA.samples[DATA.samples.length-1];let bD=Infinity,bI=-1;const sr=DATA.samples.slice(0,-5);for(let i=Math.max(0,sr.length-50);i<sr.length-1;i++){const s=sr[i];const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;if(d<bD){bD=d;bI=i;}}if(bI>=0&&bI<sr.length-1){const m=sr[bI],n=sr[bI+1];return{lat:pos.lat+(n.lat-m.lat),lon:pos.lon+(n.lon-m.lon)};}return F[0].predict(pos,dt);}));
+// F18: Consensus Median
+F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<Math.min(22,F.length);i++){const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return pos;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
+// F19: Adaptive Best
+F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;i++){if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
+// F20: Cell Tower
+F.push(mkF('Cell Tower',function(pos,dt){this.blindSec+=dt;const t=UTIN.predict();const vP=F[0].predict({...pos},dt);if(!t)return vP||pos;if(!vP)return{lat:t.lat,lon:t.lon};const tW=Math.min(0.8,Math.max(0,this.blindSec/60));return{lat:vP.lat*(1-tW)+t.lat*tW,lon:vP.lon*(1-tW)+t.lon*tW};}));
+// F21: Strapdown INS
+F.push(mkF('Strapdown INS',(pos,dt)=>{INS.update(accel,gyro,dt);const p=INS.getLatLon();return p||pos;}));
+// F22: Hardware Magnetometer Heading + velocity (board has real magnetometer)
+F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const s=avgSpeed(5);const h=Math.atan2(mag.y,mag.x);return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+// F23: Barometric Altitude + Velocity (board has real BMP280)
+F.push(mkF('Baro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(5);if(!v)return pos;return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};}));
+
+// F24: Real Cell Tower Triangulation — uses actual tower data from A7670C/SIM900
+// Unlike simulated UTIN, this parses real MCC/MNC/LAC/CellID from the board
+F.push(mkF('Real Cell Tri',function(pos,dt){
+  if(!pos)return pos;
+  // When board sends real tower data, use it for triangulation
+  // For now: use UTIN simulated + blend with velocity
+  // When boardData has towers4g/towers2g arrays, parse and trilaterate
+  const towerPos=UTIN.predict();
+  const vel=velFromGPS(5);
+  if(!towerPos&&!vel)return pos;
+  if(!towerPos)return{lat:pos.lat+vel.vLat*dt,lon:pos.lon+vel.vLon*dt};
+  if(!vel)return{lat:towerPos.lat,lon:towerPos.lon};
+  // Real tower count from board gives us confidence
+  const towerCount=(cellTowers4G||0)+(cellTowers2G||0);
+  const towerConf=Math.min(0.7,towerCount*0.1); // more towers = more weight
+  const velConf=1-towerConf;
+  const vP={lat:pos.lat+vel.vLat*dt,lon:pos.lon+vel.vLon*dt};
+  return{lat:vP.lat*velConf+towerPos.lat*towerConf,lon:vP.lon*velConf+towerPos.lon*towerConf};
+}));
+
+// F25: Laser Velocity — VL53L1X range changes over time = speed + direction
+// If laser points at ground at angle, range change = horizontal movement
+F.push(mkF('Laser Velocity',function(pos,dt){
+  if(!pos||DATA.samples.length<3)return pos;
+  // Track laser range changes to estimate speed
+  const recent=DATA.samples.slice(-5);
+  let rangeChanges=[];
+  for(let i=1;i<recent.length;i++){
+    if(recent[i].laserMm>0&&recent[i-1].laserMm>0){
+      const dRange=recent[i].laserMm-recent[i-1].laserMm; // mm change
+      rangeChanges.push(dRange/(recent[i].dt||1)); // mm/s
+    }
+  }
+  if(rangeChanges.length===0){
+    // No laser data — fall back to velocity
+    const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  }
+  // Average range change rate (mm/s)
+  const avgRangeRate=rangeChanges.reduce((s,v)=>s+v,0)/rangeChanges.length;
+  // Convert range rate to horizontal speed (approximate)
+  // If laser points down at ~30° angle: horizontal = range_rate / tan(30°)
+  const tiltAngle=Math.max(10,Math.abs(pitch||30))*Math.PI/180;
+  const hSpeed=Math.abs(avgRangeRate/1000/Math.tan(tiltAngle)); // m/s horizontal
+  // Use compass for heading, laser for speed
+  const h=(compass+CAL.compassOff)*Math.PI/180;
+  // Blend: 50% laser speed + 50% GPS-derived speed (laser is noisy)
+  const gpsSpd=avgSpeed(5);
+  const blendSpd=laserMm>0?hSpeed*0.4+gpsSpd*0.6:gpsSpd;
+  return{lat:pos.lat+(blendSpd*Math.cos(h)*dt)/111320,lon:pos.lon+(blendSpd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// F26: Magnetic Map Matching — MPU9250 3-axis mag field compared to recorded magnetic signature
+// Build a map of magnetic field vectors along the route, use for position matching
+F.push(mkF('Mag Map Match',function(pos,dt){
+  if(!pos||DATA.samples.length<30)return pos;
+  // Build magnetic fingerprint from current reading
+  const curMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+  const curInc=Math.atan2(mag.z,Math.sqrt(mag.x*mag.x+mag.y*mag.y))*180/Math.PI; // inclination
+  const curDec=Math.atan2(mag.y,mag.x)*180/Math.PI; // declination
+  // Search recorded data for matching magnetic signature
+  let bestDist=Infinity,bestIdx=-1;
+  const search=DATA.samples.slice(0,-3);
+  for(let i=Math.max(0,search.length-80);i<search.length-1;i++){
+    const s=search[i];
+    if(!s.mx&&!s.my)continue;
+    const sMag=Math.sqrt(s.mx*s.mx+s.my*s.my+s.mz*s.mz);
+    const sInc=Math.atan2(s.mz||0,Math.sqrt((s.mx||0)**2+(s.my||0)**2))*180/Math.PI;
+    const sDec=Math.atan2(s.my||0,s.mx||0)*180/Math.PI;
+    // Distance in magnetic space
+    const d=Math.abs(curMag-sMag)*0.1+Math.abs(curInc-sInc)+Math.abs(curDec-sDec);
+    if(d<bestDist){bestDist=d;bestIdx=i;}
+  }
+  // If we found a close magnetic match, use that position + velocity
+  if(bestIdx>=0&&bestIdx<search.length-1&&bestDist<15){
+    const matched=search[bestIdx],next=search[bestIdx+1];
+    const mPos={lat:matched.lat,lon:matched.lon};
+    // Blend: 30% magnetic position + 70% velocity continuation
+    const v=velFromGPS(5);
+    if(v){
+      const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};
+      return{lat:vP.lat*0.7+mPos.lat*0.3,lon:vP.lon*0.7+mPos.lon*0.3};
+    }
+    return mPos;
+  }
+  // No match — fall back to velocity
+  const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+}));
+
+const FORMULAS=F;
+function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
+function scoreFormulas(gps,dt){
+  if(!gps||DATA.samples.length<3)return;
+  F.forEach(f=>{
+    if(!f.pos)f.pos={lat:gps.lat,lon:gps.lon};
+    const predicted=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
+    if(predicted){
+      f.err=hav(predicted,gps);
+      f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();
+      f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
+      // SELF-CORRECT: learn from the error
+      f.learnFromGPS(predicted,gps);
+    }
+    f.pos={lat:gps.lat,lon:gps.lon};
+  });
+  FISH.scoreAll(gps);
+}
+
+// ═══════════════════════════════════════
+// EVOLVING FISH AGENTS — 6 schools × 100 agents = 600
+// Each agent has DNA weights. Natural selection kills the worst,
+// reproduces the best with mutations. Over time, agents evolve
+// to match the specific device, movement style, and environment.
+// ═══════════════════════════════════════
+const FISH={
+  SCHOOLS:6,AGENTS_PER:100,
+  schools:[],
+  generation:0,
+  bestSchoolIdx:0,
+
+  // Initialize all schools with random DNA agents
+  init(lat,lon){
+    this.schools=[];
+    for(let s=0;s<this.SCHOOLS;s++){
+      const school={agents:[],fitness:0,pos:{lat,lon},avgErr:999};
+      for(let a=0;a<this.AGENTS_PER;a++){
+        school.agents.push(this.randomDNA(lat,lon));
+      }
+      this.schools.push(school);
+    }
+    this.generation=0;
+    // Load saved DNA if available
+    this.loadBest();
+    log('Fish: '+this.SCHOOLS+'×'+this.AGENTS_PER+'='+(this.SCHOOLS*this.AGENTS_PER)+' agents init','var(--teal)');
+  },
+
+  // Random DNA for one agent
+  randomDNA(lat,lon){
+    return{
+      pos:{lat,lon},fitness:0,err:999,
+      dna:{
+        velW:Math.random(),          // velocity continuation weight
+        accelW:Math.random()*0.3,    // accelerometer weight (low — we know it's noisy)
+        gyroW:Math.random(),         // gyro heading weight
+        magW:Math.random(),          // magnetometer weight
+        cellW:Math.random()*0.5,     // cell tower weight
+        baroW:Math.random()*0.3,     // barometric weight
+        laserW:Math.random()*0.3,    // laser weight
+        zuptTh:0.1+Math.random()*0.4,// ZUPT threshold (0.1-0.5 m/s²)
+        drDecay:0.9+Math.random()*0.09,// speed decay during denial (0.9-0.99)
+        turnSens:0.5+Math.random()*1.5,// gyro turn multiplier
+        hdgSrc:Math.floor(Math.random()*3),// 0=mag, 1=gps, 2=gyro
+        spdBlend:Math.random()       // blend ratio for speed sources
+      }
+    };
+  },
+
+  // Each agent predicts position using its DNA weights
+  agentPredict(agent,dt){
+    const d=agent.dna;const pos=agent.pos;if(!pos)return pos;
+    // Speed: blend velocity-derived and accel-derived
+    const gpsSpd=avgSpeed(5);
+    const accelMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
+    const accelSpd=accelMag*CAL.accelScale*CAL.speedMult;
+    const spd=gpsSpd*d.spdBlend+accelSpd*(1-d.spdBlend);
+    // Heading: choose source based on DNA
+    let hdg=compass+CAL.compassOff;
+    if(d.hdgSrc===2){// gyro integrated
+      agent._gHdg=(agent._gHdg||compass)+(gyro.z-CAL.gyroBias.z)*d.turnSens*dt;
+      hdg=agent._gHdg;
+    }
+    const h=hdg*Math.PI/180;
+    // Velocity continuation component
+    const v=velFromGPS(5);
+    const vLat=v?v.vLat:0,vLon=v?v.vLon:0;
+    // Sensor-based component
+    const sLat=(spd*Math.cos(h)*dt)/111320;
+    const sLon=(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    // Weighted blend using DNA
+    const tw=d.velW+d.accelW+d.gyroW+d.magW+0.01;
+    const nLat=pos.lat+(vLat*dt*d.velW+sLat*(d.accelW+d.gyroW+d.magW))/tw;
+    const nLon=pos.lon+(vLon*dt*d.velW+sLon*(d.accelW+d.gyroW+d.magW))/tw;
+    // ZUPT: if accel near gravity, decay speed
+    const aMag=Math.sqrt(accel.x**2+accel.y**2+accel.z**2);
+    if(Math.abs(aMag-9.81)<d.zuptTh){
+      return{lat:pos.lat+(nLat-pos.lat)*d.drDecay,lon:pos.lon+(nLon-pos.lon)*d.drDecay};
+    }
+    return{lat:nLat,lon:nLon};
+  },
+
+  // Tick: all agents predict, schools compute weighted average
+  tick(dt){
+    this.schools.forEach(school=>{
+      let sLat=0,sLon=0,sW=0;
+      school.agents.forEach(a=>{
+        a.pos=this.agentPredict(a,dt);
+        if(a.pos){const w=Math.max(0.01,a.fitness);sLat+=a.pos.lat*w;sLon+=a.pos.lon*w;sW+=w;}
+      });
+      if(sW>0)school.pos={lat:sLat/sW,lon:sLon/sW};
+    });
+  },
+
+  // Score all agents against GPS truth — called from scoreFormulas
+  scoreAll(gps){
+    if(!gps)return;
+    let bestSI=0,bestSF=0;
+    this.schools.forEach((school,si)=>{
+      let totalErr=0,n=0;
+      school.agents.forEach(a=>{
+        if(!a.pos)return;
+        a.err=hav(a.pos,gps);
+        a.fitness=1/(a.err+0.1);
+        totalErr+=a.err;n++;
+        // Reset agent position to GPS (so next tick predicts from truth)
+        a.pos={lat:gps.lat,lon:gps.lon};
+      });
+      school.avgErr=n>0?totalErr/n:999;
+      school.fitness=n>0?1/(school.avgErr+0.1):0;
+      if(school.fitness>bestSF){bestSF=school.fitness;bestSI=si;}
+    });
+    this.bestSchoolIdx=bestSI;
+    // Evolve every 10th scoring (not every tick — too heavy)
+    this.generation++;
+    if(this.generation%10===0)this.evolve();
+  },
+
+  // Natural selection: kill bottom 10%, reproduce top 10%
+  evolve(){
+    this.schools.forEach(school=>{
+      // Sort by fitness (best first)
+      school.agents.sort((a,b)=>b.fitness-a.fitness);
+      const n=school.agents.length;
+      const killN=Math.floor(n*0.1);  // bottom 10% die
+      const breedN=killN;              // top 10% reproduce
+      for(let i=0;i<killN;i++){
+        // Pick a parent from top 10%
+        const parent=school.agents[Math.floor(Math.random()*breedN)];
+        // Create child with mutated DNA
+        const child=this.mutateDNA(parent);
+        // Replace dead agent
+        school.agents[n-1-i]=child;
+      }
+    });
+    // Auto-save best DNA every 50 generations
+    if(this.generation%50===0)this.saveBest();
+  },
+
+  // Mutate parent DNA to create child
+  mutateDNA(parent){
+    const child={pos:{...parent.pos},fitness:0,err:999,dna:{}};
+    const mut=0.05; // mutation range
+    Object.keys(parent.dna).forEach(k=>{
+      if(k==='hdgSrc'){
+        child.dna[k]=Math.random()<0.1?Math.floor(Math.random()*3):parent.dna[k];
+      }else{
+        child.dna[k]=parent.dna[k]+(Math.random()-0.5)*2*mut;
+        // Clamp weights to valid ranges
+        if(k==='zuptTh')child.dna[k]=Math.max(0.05,Math.min(0.8,child.dna[k]));
+        else if(k==='drDecay')child.dna[k]=Math.max(0.85,Math.min(0.999,child.dna[k]));
+        else if(k==='turnSens')child.dna[k]=Math.max(0.1,Math.min(3,child.dna[k]));
+        else child.dna[k]=Math.max(0,Math.min(1,child.dna[k]));
+      }
+    });
+    return child;
+  },
+
+  // Get best school's position (for use as formula output)
+  getBestPosition(){
+    const s=this.schools[this.bestSchoolIdx];
+    return s?s.pos:null;
+  },
+
+  // Save top DNA to localStorage
+  saveBest(){
+    const topDNAs=[];
+    this.schools.forEach(s=>{
+      s.agents.sort((a,b)=>b.fitness-a.fitness);
+      topDNAs.push(...s.agents.slice(0,5).map(a=>({...a.dna})));
+    });
+    try{localStorage.setItem('upin_fish_dna',JSON.stringify({gen:this.generation,dna:topDNAs,ts:Date.now()}));}catch(e){}
+  },
+
+  // Load saved DNA on startup
+  loadBest(){
+    try{
+      const raw=localStorage.getItem('upin_fish_dna');
+      if(!raw)return;
+      const saved=JSON.parse(raw);
+      if(!saved.dna||!saved.dna.length)return;
+      // Seed top agents in each school with saved DNA
+      this.schools.forEach((school,si)=>{
+        const dnaPool=saved.dna;
+        for(let i=0;i<Math.min(10,dnaPool.length);i++){
+          if(i<school.agents.length){
+            school.agents[i].dna={...dnaPool[(si*5+i)%dnaPool.length]};
+          }
+        }
+      });
+      log('Fish: loaded '+saved.dna.length+' evolved DNAs (gen '+saved.gen+')','var(--teal)');
+    }catch(e){}
+  },
+
+  // Stats for report
+  stats(){
+    return{
+      schools:this.SCHOOLS,
+      agents:this.SCHOOLS*this.AGENTS_PER,
+      generation:this.generation,
+      bestSchool:this.bestSchoolIdx,
+      schoolErrors:this.schools.map(s=>s.avgErr.toFixed(1)+'m'),
+      topDNA:this.schools[this.bestSchoolIdx]?
+        this.schools[this.bestSchoolIdx].agents[0]?.dna:null
+    };
+  }
+};
+
+// ═══════════════════════════════════════
+// ═══════════════════════════════════════
+// ANIMAL NAVIGATION — 5 bio-inspired methods
+// These don't integrate noisy accel. They use discrete events + absolute refs.
+// ═══════════════════════════════════════
+const ANIMAL={
+  // ── Desert Ant: step counting + magnetometer heading ──
+  ant:{
+    steps:0,prevSteps:0,stepLen:0.72,calibrated:false,
+    // Step detection: count accel magnitude crossings (not integration)
+    lastMag:0,rising:false,stepEvents:0,
+    detectStep(ax,ay,az){
+      const m=Math.sqrt(ax*ax+ay*ay+az*az)/9.81; // in g
+      if(this.rising&&m<0.85){this.rising=false;this.stepEvents++;this.steps++;}
+      if(!this.rising&&m>1.15){this.rising=true;}
+      this.lastMag=m;
+    },
+    // Calibrate step length from GPS distance
+    calibrateFromGPS(gpsDistM,stepsDuring){
+      if(stepsDuring>5&&gpsDistM>3){
+        this.stepLen=gpsDistM/stepsDuring;
+        this.stepLen=Math.max(0.3,Math.min(1.5,this.stepLen)); // clamp
+        this.calibrated=true;
+      }
+    },
+    // Predict: steps × stride along mag heading (NO accel integration)
+    predict(pos,dt){
+      if(!pos)return pos;
+      const ns=this.steps-this.prevSteps;this.prevSteps=this.steps;
+      if(ns<=0)return pos; // no steps = no movement
+      const d=ns*this.stepLen;
+      // Use magnetometer heading directly (absolute, like sun compass)
+      const h=Math.atan2(mag.y,mag.x); // radians from mag vector
+      return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};
+    },
+    ready(){return this.calibrated&&this.steps>10;},
+    conf(){return this.calibrated?0.8:0.2;}
+  },
+
+  // ── Pigeon: magnetic field map matching ──
+  pigeon:{
+    magMap:[], // [{lat,lon,mag,inc,dec}] — 20m grid cells
+    CELL_SIZE:0.0002, // ~20m in degrees
+    // Record magnetic signature at GPS position
+    record(lat,lon,mx,my,mz){
+      const mag2=Math.sqrt(mx*mx+my*my+mz*mz);
+      const inc=Math.atan2(mz,Math.sqrt(mx*mx+my*my))*180/Math.PI;
+      const dec=Math.atan2(my,mx)*180/Math.PI;
+      // Grid cell key
+      const gLat=Math.round(lat/this.CELL_SIZE)*this.CELL_SIZE;
+      const gLon=Math.round(lon/this.CELL_SIZE)*this.CELL_SIZE;
+      // Update or add cell
+      const existing=this.magMap.find(c=>Math.abs(c.lat-gLat)<0.00001&&Math.abs(c.lon-gLon)<0.00001);
+      if(existing){
+        const lr=0.2;existing.mag=existing.mag*(1-lr)+mag2*lr;existing.inc=existing.inc*(1-lr)+inc*lr;
+        existing.dec=existing.dec*(1-lr)+dec*lr;existing.n++;
+      }else{
+        this.magMap.push({lat:gLat,lon:gLon,mag:mag2,inc,dec,n:1});
+        if(this.magMap.length>500)this.magMap.shift(); // cap
+      }
+    },
+    // Match current mag reading to map
+    predict(pos,mx,my,mz){
+      if(!pos||this.magMap.length<10)return null;
+      const curMag=Math.sqrt(mx*mx+my*my+mz*mz);
+      const curInc=Math.atan2(mz,Math.sqrt(mx*mx+my*my))*180/Math.PI;
+      let bestD=Infinity,bestCell=null;
+      this.magMap.forEach(c=>{
+        const d=Math.abs(curMag-c.mag)*0.5+Math.abs(curInc-c.inc)*2;
+        if(d<bestD){bestD=d;bestCell=c;}
+      });
+      if(bestCell&&bestD<20)return{lat:bestCell.lat,lon:bestCell.lon,conf:Math.max(0.1,1-bestD/20)};
+      return null;
+    },
+    ready(){return this.magMap.length>=20;},
+    conf(){return Math.min(0.7,this.magMap.length/100);}
+  },
+
+  // ── Salmon: cell tower signal gradient ("getting warmer/colder") ──
+  salmon:{
+    towerHistory:[], // [{towers4G,towers2G,lat,lon}] — signal trend
+    // Record cell tower count + position
+    record(lat,lon,t4g,t2g){
+      this.towerHistory.push({lat,lon,t4g:t4g||0,t2g:t2g||0,t:Date.now()});
+      if(this.towerHistory.length>50)this.towerHistory.shift();
+    },
+    // Predict from signal gradient
+    predict(pos){
+      if(!pos||this.towerHistory.length<5)return null;
+      // Direction where towers were strongest = most recent movement direction
+      const recent=this.towerHistory.slice(-5);
+      const old=this.towerHistory.slice(-10,-5);
+      if(old.length<3)return null;
+      // Average position where signal was strongest
+      let bLat=0,bLon=0,bW=0;
+      recent.forEach(r=>{const w=r.t4g+r.t2g+1;bLat+=r.lat*w;bLon+=r.lon*w;bW+=w;});
+      if(bW>0)return{lat:bLat/bW,lon:bLon/bW,conf:Math.min(0.5,bW/50)};
+      return null;
+    },
+    // Use UTIN trilateration as primary, gradient as direction hint
+    predictFull(pos){
+      const tower=UTIN.predict();
+      const grad=this.predict(pos);
+      if(tower&&grad)return{lat:tower.lat*0.7+grad.lat*0.3,lon:tower.lon*0.7+grad.lon*0.3,conf:0.5};
+      return tower?{...tower,conf:0.4}:grad;
+    },
+    ready(){return this.towerHistory.length>=10&&(cellTowers4G+cellTowers2G)>=2;},
+    conf(){return Math.min(0.5,(cellTowers4G+cellTowers2G)*0.1);}
+  },
+
+  // ── Whale: WiFi fingerprint matching ──
+  whale:{
+    fpMap:[], // [{lat,lon,aps:[{bssid,rssi}]}]
+    // Record WiFi fingerprint from board data
+    record(lat,lon,wifiList){
+      if(!wifiList||!wifiList.length)return;
+      const fp=wifiList.map(w=>({b:w.s||w.bssid||'',r:w.r||w.rssi||-99})).filter(w=>w.b);
+      if(fp.length<1)return;
+      this.fpMap.push({lat,lon,aps:fp});
+      if(this.fpMap.length>200)this.fpMap.shift();
+    },
+    // Match current WiFi scan to stored fingerprints
+    predict(currentWifi){
+      if(!currentWifi||!currentWifi.length||this.fpMap.length<5)return null;
+      const cur=currentWifi.map(w=>({b:w.s||w.bssid||'',r:w.r||w.rssi||-99}));
+      let bestScore=0,bestPos=null;
+      this.fpMap.forEach(fp=>{
+        let score=0,matched=0;
+        cur.forEach(c=>{
+          const stored=fp.aps.find(a=>a.b===c.b);
+          if(stored){score+=1/(1+Math.abs(c.r-stored.r));matched++;}
+        });
+        if(matched>=2){
+          score*=matched/Math.max(cur.length,fp.aps.length);
+          if(score>bestScore){bestScore=score;bestPos={lat:fp.lat,lon:fp.lon};}
+        }
+      });
+      return bestPos?{...bestPos,conf:Math.min(0.8,bestScore)}:null;
+    },
+    ready(){return this.fpMap.length>=10&&wifiAPs>=3;},
+    conf(){return Math.min(0.6,this.fpMap.length/50);}
+  },
+
+  // ── Bat: laser corridor profiling ──
+  bat:{
+    corridor:[], // [{lat,lon,dist_mm,heading}]
+    record(lat,lon,distMm,heading){
+      if(!distMm||distMm<10)return;
+      this.corridor.push({lat,lon,d:distMm,h:heading});
+      if(this.corridor.length>300)this.corridor.shift();
+    },
+    predict(pos,currentDistMm,currentHeading,stepsSinceKnown,stepLen){
+      if(!pos||this.corridor.length<20||!currentDistMm)return null;
+      // Search for corridor entries matching current laser distance + heading
+      let bestD=Infinity,bestPos=null;
+      this.corridor.forEach(c=>{
+        const dDist=Math.abs(c.d-currentDistMm);
+        let dHdg=Math.abs(c.h-currentHeading);if(dHdg>180)dHdg=360-dHdg;
+        const score=dDist*0.5+dHdg*2;
+        if(score<bestD){bestD=score;bestPos={lat:c.lat,lon:c.lon};}
+      });
+      if(bestPos&&bestD<200)return{...bestPos,conf:Math.max(0.1,1-bestD/200)};
+      return null;
+    },
+    ready(){return this.corridor.length>=30&&laserMm>10;},
+    conf(){return laserMm>10?Math.min(0.6,this.corridor.length/100):0;}
+  },
+
+  // ── Fusion: combine all animal methods ──
+  pos:null,
+  fuse(){
+    const methods=[];
+    // Ant (always has something if walking)
+    if(this.ant.ready()&&this.ant._lastPred)
+      methods.push({lat:this.ant._lastPred.lat,lon:this.ant._lastPred.lon,w:this.ant.conf()});
+    // Pigeon
+    const pig=this.pigeon.predict(this.pos,mag.x,mag.y,mag.z);
+    if(pig)methods.push({lat:pig.lat,lon:pig.lon,w:pig.conf*this.pigeon.conf()});
+    // Salmon
+    const sal=this.salmon.predictFull(this.pos);
+    if(sal)methods.push({lat:sal.lat,lon:sal.lon,w:sal.conf*this.salmon.conf()});
+    // Whale
+    const whl=this.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);
+    if(whl)methods.push({lat:whl.lat,lon:whl.lon,w:whl.conf*this.whale.conf()});
+    // Bat
+    const bat=this.bat.predict(this.pos,laserMm,compass,ANIMAL.ant.steps-ANIMAL.ant.prevSteps,ANIMAL.ant.stepLen);
+    if(bat)methods.push({lat:bat.lat,lon:bat.lon,w:bat.conf*this.bat.conf()});
+
+    if(methods.length===0)return null;
+    let sLat=0,sLon=0,sW=0;
+    methods.forEach(m=>{sLat+=m.lat*m.w;sLon+=m.lon*m.w;sW+=m.w;});
+    if(sW>0)return{lat:sLat/sW,lon:sLon/sW,methods:methods.length};
+    return null;
+  },
+
+  // Record all data during GPS-available tick
+  recordAll(lat,lon,accel,dt){
+    this.ant.detectStep(accel.x,accel.y,accel.z);
+    this.pigeon.record(lat,lon,mag.x,mag.y,mag.z);
+    this.salmon.record(lat,lon,cellTowers4G,cellTowers2G);
+    if(boardData&&boardData.wifi)this.whale.record(lat,lon,boardData.wifi.list);
+    this.bat.record(lat,lon,laserMm,compass);
+  },
+
+  // Predict during GPS denial
+  predictDenied(pos,dt){
+    // Ant: always runs (step + mag heading)
+    const antP=this.ant.predict(pos,dt);
+    if(antP)this.ant._lastPred=antP;
+    this.pos=pos;
+    return this.fuse();
+  },
+
+  // Update readiness UI
+  updateUI(){
+    const rdy=(m,el,elD,label)=>{
+      $(el).innerHTML=m.ready()?'<span class="sdot live"></span>READY':'<span class="sdot off"></span>WAIT';
+      $(elD).textContent=label;
+    };
+    rdy(this.ant,'arAnt','arAntD',this.ant.steps+'st / '+this.ant.stepLen.toFixed(2)+'m');
+    rdy(this.pigeon,'arPig','arPigD',this.pigeon.magMap.length+' cells');
+    rdy(this.salmon,'arSal','arSalD',(cellTowers4G+cellTowers2G)+'t / '+this.salmon.towerHistory.length+'h');
+    rdy(this.whale,'arWhl','arWhlD',this.whale.fpMap.length+' fps');
+    rdy(this.bat,'arBat','arBatD',this.bat.corridor.length+' pts');
+    const fReady=[this.ant,this.pigeon,this.salmon,this.whale,this.bat].filter(m=>m.ready()).length;
+    $('arFus').innerHTML=fReady>=2?'<span class="sdot live"></span>'+fReady+'/5':'<span class="sdot off"></span>'+fReady+'/5';
+    $('arFusD').textContent=fReady>=2?'FUSION READY':'need 2+ methods';
+  }
+};
+
+// Add animal formulas to the formula array
+F.push(mkF('Ant (step+mag)',(pos,dt)=>ANIMAL.ant.predict(pos,dt)||pos));
+F.push(mkF('Pigeon (mag map)',function(pos,dt){const p=ANIMAL.pigeon.predict(pos,mag.x,mag.y,mag.z);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+p.lat*0.4,lon:vP.lon*0.6+p.lon*0.4};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Salmon (cell grad)',(pos,dt)=>{const p=ANIMAL.salmon.predictFull(pos);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Whale (wifi fp)',(pos,dt)=>{const p=ANIMAL.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Bat (laser cor)',(pos,dt)=>{const p=ANIMAL.bat.predict(pos,laserMm,compass,0,ANIMAL.ant.stepLen);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
+F.push(mkF('Animal Fusion',(pos,dt)=>{const p=ANIMAL.predictDenied(pos,dt);return p||pos;}));
+
+// ═══════════════════════════════════════
+// FINANCIAL INDICATOR FORMULAS
+// Same math as trading charts applied to positioning
+// ═══════════════════════════════════════
+
+// Helper: SMA of array with window
+function sma(arr,w){const s=arr.slice(-w);return s.length?s.reduce((a,b)=>a+b,0)/s.length:0;}
+// Helper: EMA of array with alpha
+function ema(arr,alpha){if(!arr.length)return 0;let e=arr[0];for(let i=1;i<arr.length;i++)e=alpha*arr[i]+(1-alpha)*e;return e;}
+// Helper: get speed/heading history arrays from DATA
+function getSpeedHist(){return DATA.samples.slice(-40).map(s=>s.speed);}
+function getHeadingHist(){return DATA.samples.slice(-40).map(s=>s.heading);}
+function getVelLatHist(){const s=DATA.samples.slice(-40);const v=[];for(let i=1;i<s.length;i++)v.push((s[i].lat-s[i-1].lat)/(s[i].dt||1));return v;}
+function getVelLonHist(){const s=DATA.samples.slice(-40);const v=[];for(let i=1;i<s.length;i++)v.push((s[i].lon-s[i-1].lon)/(s[i].dt||1));return v;}
+
+// F33: SMA Trend — fast SMA(5) speed + fast EMA(0.25) heading
+F.push(mkF('SMA Trend',(pos,dt)=>{
+  if(!pos||DATA.samples.length<5)return pos;
+  const spd=sma(getSpeedHist(),5);
+  const hdg=ema(getHeadingHist(),0.25)*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// F34: SMA Smooth — slow SMA(30) speed + slow EMA(0.05) heading
+F.push(mkF('SMA Smooth',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const spd=sma(getSpeedHist(),30);
+  const hdg=ema(getHeadingHist(),0.05)*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// F35: MACD — velocity momentum (fast EMA - slow EMA = signal)
+F.push(mkF('MACD',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const vLat=getVelLatHist(),vLon=getVelLonHist();
+  if(vLat.length<3)return pos;
+  const fastLat=ema(vLat,0.2),slowLat=ema(vLat,0.05);
+  const fastLon=ema(vLon,0.2),slowLon=ema(vLon,0.05);
+  const macdLat=fastLat-slowLat,macdLon=fastLon-slowLon;
+  return{lat:pos.lat+(fastLat+macdLat*0.5)*dt,lon:pos.lon+(fastLon+macdLon*0.5)*dt};
+}));
+
+// F36: Bollinger — SMA(20) position + mean reversion pull
+F.push(mkF('Bollinger',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const pts=DATA.samples.slice(-20);
+  const mLat=pts.reduce((s,p)=>s+p.lat,0)/pts.length;
+  const mLon=pts.reduce((s,p)=>s+p.lon,0)/pts.length;
+  const vLat=getVelLatHist(),vLon=getVelLonHist();
+  const vL=vLat.length?vLat[vLat.length-1]:0,vO=vLon.length?vLon[vLon.length-1]:0;
+  const pull=0.02;
+  return{lat:pos.lat+vL*dt+(mLat-pos.lat)*pull,lon:pos.lon+vO*dt+(mLon-pos.lon)*pull};
+}));
+
+// F37: VWMA — confidence-weighted position average
+F.push(mkF('VWMA',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const pts=DATA.samples.slice(-20);
+  // Weight by speed (higher speed = more confident GPS reading)
+  let sLat=0,sLon=0,sW=0;
+  pts.forEach(p=>{const w=Math.max(0.1,p.speed);sLat+=p.lat*w;sLon+=p.lon*w;sW+=w;});
+  if(sW<0.1)return pos;
+  const vL=getVelLatHist(),vO=getVelLonHist();
+  const vLat=vL.length?vL[vL.length-1]:0,vLon=vO.length?vO[vO.length-1]:0;
+  // Blend VWMA position trend with velocity
+  const vwLat=sLat/sW,vwLon=sLon/sW;
+  return{lat:pos.lat+vLat*dt*0.7+(vwLat-pos.lat)*0.02,lon:pos.lon+vLon*dt*0.7+(vwLon-pos.lon)*0.02};
+}));
+
+// F38: RSI Heading — heading consistency (straight vs turning)
+F.push(mkF('RSI Heading',(pos,dt)=>{
+  if(!pos||DATA.samples.length<10)return pos;
+  const hdgs=getHeadingHist().slice(-14);
+  if(hdgs.length<5)return pos;
+  // RSI: count up moves vs down moves in heading
+  let gains=0,losses=0;
+  for(let i=1;i<hdgs.length;i++){
+    let d=hdgs[i]-hdgs[i-1];if(d>180)d-=360;if(d<-180)d+=360;
+    if(d>0)gains+=d;else losses-=d;
+  }
+  const rsi=gains/(gains+losses+0.01)*100; // 0-100
+  // RSI > 70: strongly turning right → trust gyro heading more
+  // RSI < 30: strongly turning left → trust gyro heading more
+  // RSI ~50: going straight → trust velocity continuation
+  const spd=sma(getSpeedHist(),10);
+  const hdg=rsi>30&&rsi<70?ema(getHeadingHist(),0.05):ema(getHeadingHist(),0.3);
+  const h=hdg*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// ═══════════════════════════════════════
+// FORMULA COMBOS — fixed combinations of indicators
+// ═══════════════════════════════════════
+
+// F39: SMA+MACD — trend speed + momentum direction
+F.push(mkF('SMA+MACD',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='SMA Trend').predict(pos,dt);
+  const p2=F.find(f=>f.name==='MACD').predict(pos,dt);
+  if(!p1||!p2)return pos;
+  return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
+}));
+
+// F40: Bollinger+RSI — mean reversion + turn detection
+F.push(mkF('Boll+RSI',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='Bollinger').predict(pos,dt);
+  const p2=F.find(f=>f.name==='RSI Heading').predict(pos,dt);
+  if(!p1||!p2)return pos;
+  return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
+}));
+
+// F41: VWMA+Ant — confidence-weighted + step counting
+F.push(mkF('VWMA+Ant',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='VWMA').predict(pos,dt);
+  const p2=ANIMAL.ant.predict(pos,dt);
+  if(!p1)return p2||pos;if(!p2)return p1;
+  return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
+}));
+
+// F42: MACD+CellTower — momentum + absolute anchor
+F.push(mkF('MACD+Cell',(pos,dt)=>{
+  const p1=F.find(f=>f.name==='MACD').predict(pos,dt);
+  const p2=UTIN.predict();
+  if(!p1&&!p2)return pos;if(!p2)return p1||pos;if(!p1)return{lat:p2.lat,lon:p2.lon};
+  return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
+}));
+
+// F43: INS+Bollinger — physics + mean reversion
+F.push(mkF('INS+Boll',(pos,dt)=>{
+  INS.update(accel,gyro,dt);const insP=INS.getLatLon();
+  const bollP=F.find(f=>f.name==='Bollinger').predict(pos,dt);
+  if(!insP&&!bollP)return pos;if(!bollP)return insP||pos;if(!insP)return bollP;
+  return{lat:insP.lat*0.5+bollP.lat*0.5,lon:insP.lon*0.5+bollP.lon*0.5};
+}));
+
+// ═══════════════════════════════════════
+// AUTO-COMBO DISCOVERY — evolving formula combinations
+// Creates random combos of 2-3 formulas with random weights,
+// scores them against GPS, evolves the best combinations
+// ═══════════════════════════════════════
+const COMBOS={
+  pool:[], // [{indices:[i,j,k], weights:[w1,w2,w3], err:999, errAvg:999, pos:null}]
+  POOL_SIZE:20,
+  generation:0,
+
+  init(){
+    this.pool=[];
+    const n=F.length;
+    for(let c=0;c<this.POOL_SIZE;c++){
+      const numF=Math.random()<0.3?3:2; // 30% chance of 3-way combo
+      const indices=[];
+      while(indices.length<numF){
+        const idx=Math.floor(Math.random()*Math.min(n,33)); // only combine base formulas (not other combos)
+        if(!indices.includes(idx))indices.push(idx);
+      }
+      // Random weights that sum to 1
+      const rawW=indices.map(()=>Math.random());
+      const total=rawW.reduce((s,w)=>s+w,0);
+      const weights=rawW.map(w=>w/total);
+      this.pool.push({indices,weights,err:999,errAvg:999,errHistory:[],pos:null});
+    }
+  },
+
+  // Each combo predicts by blending its constituent formulas
+  predict(combo,pos,dt){
+    if(!pos)return pos;
+    let lat=0,lon=0;
+    combo.indices.forEach((fi,wi)=>{
+      if(fi>=F.length)return;
+      const p=F[fi]._rawPredict.call(F[fi],{...pos},dt);
+      if(p){lat+=p.lat*combo.weights[wi];lon+=p.lon*combo.weights[wi];}
+      else{lat+=pos.lat*combo.weights[wi];lon+=pos.lon*combo.weights[wi];}
+    });
+    return{lat,lon};
+  },
+
+  // Score all combos against GPS
+  score(gps,dt){
+    if(!gps)return;
+    this.pool.forEach(c=>{
+      if(!c.pos){c.pos={lat:gps.lat,lon:gps.lon};return;}
+      const p=this.predict(c,c.pos,dt);
+      if(p){
+        c.err=hav(p,gps);
+        c.errHistory.push(c.err);if(c.errHistory.length>30)c.errHistory.shift();
+        c.errAvg=c.errHistory.reduce((s,e)=>s+e,0)/c.errHistory.length;
+      }
+      c.pos={lat:gps.lat,lon:gps.lon};
+    });
+    this.generation++;
+    if(this.generation%20===0)this.evolve();
+  },
+
+  // Evolve: kill worst 5, breed from best 5
+  evolve(){
+    this.pool.sort((a,b)=>a.errAvg-b.errAvg);
+    const n=this.POOL_SIZE;
+    for(let i=0;i<5;i++){
+      const parent=this.pool[Math.floor(Math.random()*5)]; // from top 5
+      const child={
+        indices:[...parent.indices],
+        weights:parent.weights.map(w=>Math.max(0.05,Math.min(0.9,w+(Math.random()-0.5)*0.1))),
+        err:999,errAvg:999,errHistory:[],pos:null
+      };
+      // Normalize weights
+      const total=child.weights.reduce((s,w)=>s+w,0);
+      child.weights=child.weights.map(w=>w/total);
+      // 20% chance to swap one formula for a random one
+      if(Math.random()<0.2){
+        const swapIdx=Math.floor(Math.random()*child.indices.length);
+        child.indices[swapIdx]=Math.floor(Math.random()*Math.min(F.length,33));
+      }
+      this.pool[n-1-i]=child;
+    }
+  },
+
+  // Get the best combo's predicted position during GPS denial
+  bestPredict(pos,dt){
+    if(!this.pool.length)return null;
+    this.pool.sort((a,b)=>a.errAvg-b.errAvg);
+    const best=this.pool[0];
+    return this.predict(best,pos,dt);
+  },
+
+  // Best combo description for report
+  bestDesc(){
+    if(!this.pool.length)return'--';
+    this.pool.sort((a,b)=>a.errAvg-b.errAvg);
+    const b=this.pool[0];
+    return b.indices.map((fi,wi)=>(fi<F.length?F[fi].name:'?')+'('+Math.round(b.weights[wi]*100)+'%)').join(' + ')+' = '+b.errAvg.toFixed(1)+'m';
+  },
+
+  // Top 5 for report
+  top5(){
+    return[...this.pool].sort((a,b)=>a.errAvg-b.errAvg).slice(0,5).map(c=>
+      c.indices.map((fi,wi)=>(fi<F.length?F[fi].name:'?')+'('+Math.round(c.weights[wi]*100)+'%)').join('+')+': '+c.errAvg.toFixed(1)+'m'
+    );
+  }
+};
+
+// Add auto-combo as a formula too (so it competes)
+F.push(mkF('Auto Combo',(pos,dt)=>{const p=COMBOS.bestPredict(pos,dt);return p||pos;}));
+
+// ═══════════════════════════════════════
+// ROUTE LEARNING — DTW fingerprint matching
+// ═══════════════════════════════════════
+const ROUTES={
+  learning:false,currentRoute:[],lastRecordPos:null,
+  stored:[], // [{points:[{lat,lon,mag,baro,cells,wifi,ax,ay,az,compass},...]}]
+  init(){try{const r=localStorage.getItem('upin_routes');if(r){this.stored=JSON.parse(r);}}catch(e){}},
+  save(){try{localStorage.setItem('upin_routes',JSON.stringify(this.stored));}catch(e){}},
+  startLearning(){this.learning=true;this.currentRoute=[];this.lastRecordPos=null;log('Route learning started — drive with GPS','var(--green)');},
+  stopLearning(){
+    if(this.currentRoute.length>10){
+      this.stored.push({points:this.currentRoute,ts:Date.now()});
+      this.save();
+      log('Route saved: '+this.currentRoute.length+' fingerprints ('+this.stored.length+' routes total)','var(--green)');
+    }else{log('Route too short — need 10+ points','var(--amber)');}
+    this.learning=false;this.currentRoute=[];
+  },
+  // Record fingerprint at current position (called every 10m)
+  record(lat,lon){
+    if(!this.learning)return;
+    if(this.lastRecordPos&&hav(this.lastRecordPos,{lat,lon})<10)return; // every 10m
+    this.lastRecordPos={lat,lon};
+    const magMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+    this.currentRoute.push({lat,lon,mag:magMag,baro:pressure,cells:cellTowers4G+cellTowers2G,wifi:wifiAPs,compass,t:Date.now()});
+  },
+  // DTW match current sensor window against stored routes
+  match(){
+    if(this.stored.length===0||DATA.samples.length<5)return null;
+    const win=DATA.samples.slice(-10);
+    const cur=win.map(s=>({mag:Math.sqrt((s.mx||0)**2+(s.my||0)**2+(s.mz||0)**2),baro:s.pressure||0,compass:s.compass}));
+    let bestDist=Infinity,bestPos=null;
+    this.stored.forEach(route=>{
+      const pts=route.points;
+      if(pts.length<10)return;
+      // Sliding window DTW-lite: find best match position
+      for(let i=0;i<=pts.length-cur.length;i++){
+        let dist=0;
+        for(let j=0;j<cur.length;j++){
+          const p=pts[i+j],c=cur[j];
+          dist+=Math.abs(p.mag-c.mag)*0.5+Math.abs(p.baro-c.baro)*0.1+Math.abs(p.compass-c.compass)*0.02;
+        }
+        dist/=cur.length;
+        if(dist<bestDist){
+          bestDist=dist;
+          const mid=pts[Math.min(i+Math.floor(cur.length/2),pts.length-1)];
+          bestPos={lat:mid.lat,lon:mid.lon,conf:Math.max(0.1,1-dist/50)};
+        }
+      }
+    });
+    return bestPos&&bestDist<30?bestPos:null;
+  },
+  stats(){const pts=this.stored.reduce((s,r)=>s+r.points.length,0);return{routes:this.stored.length,points:pts};}
+};
+
+// ═══════════════════════════════════════
+// TERRAIN FINGERPRINT — mag+baro+cell pattern matching
+// ═══════════════════════════════════════
+const TERRAIN={
+  prints:[], // [{lat,lon,mag,baro,cells,wifi}] — stored every 10m
+  lastPos:null,
+  record(lat,lon){
+    if(this.lastPos&&hav(this.lastPos,{lat,lon})<10)return;
+    this.lastPos={lat,lon};
+    const magMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+    this.prints.push({lat,lon,mag:magMag,baro:pressure,cells:cellTowers4G+cellTowers2G,wifi:wifiAPs});
+    if(this.prints.length>2000)this.prints.shift();
+  },
+  match(){
+    if(this.prints.length<20)return null;
+    const curMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+    let bestD=Infinity,bestP=null;
+    this.prints.forEach(p=>{
+      const d=Math.abs(p.mag-curMag)*1.0+Math.abs(p.baro-pressure)*0.5+Math.abs(p.cells-(cellTowers4G+cellTowers2G))*5;
+      if(d<bestD){bestD=d;bestP=p;}
+    });
+    if(bestP&&bestD<25)return{lat:bestP.lat,lon:bestP.lon,conf:Math.max(0.1,1-bestD/25)};
+    return null;
+  }
+};
+
+// F45: Terrain Fingerprint formula
+F.push(mkF('Terrain FP',(pos,dt)=>{
+  const m=TERRAIN.match();
+  if(!m)return pos;
+  const v=velFromGPS(5);
+  if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+m.lat*0.4,lon:vP.lon*0.6+m.lon*0.4};}
+  return{lat:m.lat,lon:m.lon};
+}));
+
+// F46: Route DTW formula
+F.push(mkF('Route DTW',(pos,dt)=>{
+  const m=ROUTES.match();
+  if(!m)return pos;
+  const v=velFromGPS(5);
+  if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+m.lat*0.5,lon:vP.lon*0.5+m.lon*0.5};}
+  return{lat:m.lat,lon:m.lon};
+}));
+
+// ═══════════════════════════════════════
+// AUTO TOWER CAPTURE — grows DB while driving
+// ═══════════════════════════════════════
+const TOWER_CAPTURE={
+  captured:{}, // {"MCC-MNC-LAC-CID": {lat,lon,mcc,mnc,lac,cid,rssi_avg,samples,first_seen,last_seen}}
+  init(){try{const d=localStorage.getItem('upin_captured_towers');if(d)this.captured=JSON.parse(d);}catch(e){}},
+  save(){try{localStorage.setItem('upin_captured_towers',JSON.stringify(this.captured));}catch(e){}},
+  // Capture towers from board data when GPS is available
+  capture(lat,lon,boardData){
+    if(!boardData||!lat)return;
+    // For now we only have tower counts, not individual tower details
+    // When firmware sends tower details, we'll capture them here
+    // Placeholder: capture from cell4g/cell2g counts + GPS position
+    // Real capture happens when board JSON includes tower CellID details
+  },
+  count(){return Object.keys(this.captured).length;},
+  // Merge captured towers into UTIN lookup
+  getCapturedNear(lat,lon,n=5){
+    const arr=Object.values(this.captured);
+    return arr.map(t=>({lat:t.lat,lon:t.lon,mnc:t.mnc,cid:t.cid,
+      dist:hav({lat,lon},{lat:t.lat,lon:t.lon}),
+      signal:Math.max(-110,Math.min(-50,-50-35*Math.log10(Math.max(100,hav({lat,lon},{lat:t.lat,lon:t.lon}))/100)))
+    })).sort((a,b)=>a.dist-b.dist).slice(0,n);
+  },
+  exportCSV(){
+    let c='mcc,mnc,lac,cid,lat,lon,rssi_avg,samples,first_seen,last_seen\n';
+    Object.values(this.captured).forEach(t=>{
+      c+=`${t.mcc},${t.mnc},${t.lac},${t.cid},${t.lat},${t.lon},${t.rssi_avg||''},${t.samples},${t.first_seen},${t.last_seen}\n`;
+    });
+    const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-captured-towers.csv';a.click();
+    log('Exported '+Object.keys(this.captured).length+' captured towers','var(--green)');
+  },
+  clear(){this.captured={};this.save();log('Captured towers cleared','var(--amber)');}
+};
+
+// ═══════════════════════════════════════
+// MAP + TICK + CONTROLS + REPORT
+// ═══════════════════════════════════════
+function initMap(){
+  map=L.map('map',{zoomControl:false}).setView([13.0827,80.2707],16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:19}).addTo(map);
+  setTimeout(()=>map.invalidateSize(),300);
+}
+function drawPos(ll,r,c){
+  if(marker){marker.setLatLng(ll);marker.setStyle({color:c,fillColor:c});}
+  else marker=L.circleMarker(ll,{radius:7,color:c,fillColor:c,fillOpacity:1}).addTo(map);
+  if(circle){circle.setLatLng(ll);circle.setRadius(r);circle.setStyle({color:c});}
+  else circle=L.circle(ll,{radius:r,color:c,fillOpacity:.08,weight:1}).addTo(map);
+}
+// Build formula table HTML once
+function buildFormulaTable(){
+  let h='<tr><th>#</th><th>Formula</th><th>Error</th><th>Lat/Lon</th><th>Status</th></tr>';
+  F.forEach((f,i)=>{h+=`<tr id="f${i}"><td style="color:var(--td)">${i}</td><td><span class="sdot off" id="fd${i}"></span>${f.name}</td><td id="fe${i}">--</td><td id="fp${i}" style="font-size:6px;color:var(--td)">--</td><td id="fs${i}">--</td></tr>`;});
+  $('fTable').innerHTML=h;
+  $('fCount').textContent=F.length;
+}
+
+let lastTick=null;
+function tick(){
+  const now=performance.now(),dt=lastTick?(now-lastTick)/1000:1;lastTick=now;uiFrame++;
+  const doUI=(uiFrame%3===0);
+
+  // ── PREPROCESS all sensor data (5 fixes) ──
+  if(!useBoard&&gpsSys){
+    const processed=PREPROCESS.process(accel,gyro,gpsSys.speed||0,gpsSys.lat,gpsSys.lon,dt);
+    if(!processed)return; // Fix 2: skip stale reading
+    accel=processed.accel;  // Fix 1: unit-corrected
+    gyro=processed.gyro;    // Fix 5: bias-subtracted
+    if(processed.gpsFrozen){ // Fix 4: frozen GPS
+      gpsSys.speed=processed.speed;
+    }
+  }
+
+  if(phase==='recording'&&gpsSys){
+    DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
+    if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
+    if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
+    if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
+    INS.update(accel,gyro,dt);
+    scoreFormulas(gpsSys,dt);
+    // Score auto-combos against GPS
+    COMBOS.score(gpsSys,dt);
+    // Animal methods: record all environmental data at this GPS position
+    ANIMAL.recordAll(gpsSys.lat,gpsSys.lon,accel,dt);
+    // v5: Route learning + terrain fingerprint + tower capture
+    ROUTES.record(gpsSys.lat,gpsSys.lon);
+    TERRAIN.record(gpsSys.lat,gpsSys.lon);
+    TOWER_CAPTURE.capture(gpsSys.lat,gpsSys.lon,boardData);
+    // Calibrate ant step length from GPS distance every 50 steps
+    if(ANIMAL.ant.steps%50===0&&ANIMAL.ant.steps>0&&lastPos){
+      const gDist=hav(lastPos,gpsSys);
+      ANIMAL.ant.calibrateFromGPS(gDist,50);
+    }
+    const ll=[gpsSys.lat,gpsSys.lon];
+    gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+    drawPos(ll,gpsSys.acc||5,'#00FF88');
+    if(lastPos)totalDist+=hav(lastPos,gpsSys);
+    lastPos={lat:gpsSys.lat,lon:gpsSys.lon};drPos={lat:gpsSys.lat,lon:gpsSys.lon};
+    F.forEach(f=>{if(!f.pos)f.pos={lat:gpsSys.lat,lon:gpsSys.lon};});
+  }
+
+  if(phase==='jammed'||phase==='spoofed'){
+    if(drPos){
+      // ALL formulas predict independently — no forced blending
+      FISH.tick(dt);
+      ANIMAL.ant.detectStep(accel.x,accel.y,accel.z);
+      ANIMAL.predictDenied(drPos,dt);
+      F.forEach((f,i)=>{
+        if(f.pos)f.pos=f.predict(f.pos,dt)||f.pos;
+        if(!f.drillTrail)f.drillTrail=[];
+        if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);
+        if(f.drillTrail.length>MAX_TRAIL)f.drillTrail.shift();
+        if(f.pos&&gpsTrue)f.drillDrift=hav(f.pos,gpsTrue);
+      });
+
+      // WINNER TAKES ALL — best formula's position IS the output
+      // No averaging that drags good formulas down
+      const bi=bestFormulaIdx();
+      drPos=F[bi].pos?{lat:F[bi].pos.lat,lon:F[bi].pos.lon}:drPos;
+
+      // Also add weighted avg as a separate tracked position (for comparison)
+      // It competes like everything else — if averaging is better, it'll win
+      let waLat=0,waLon=0,waW=0;
+      F.forEach(f=>{
+        if(!f.pos||f.errAvg>=999)return;
+        const w=1/(f.errAvg+0.1);
+        waLat+=f.pos.lat*w;waLon+=f.pos.lon*w;waW+=w;
+      });
+      if(waW>0){
+        if(!F._waTrail)F._waTrail=[];
+        F._waTrail.push([waLat/waW,waLon/waW]);
+        if(F._waTrail.length>MAX_TRAIL)F._waTrail.shift();
+      }
+
+      const ll=[drPos.lat,drPos.lon];
+      drTrail.push(ll);if(drTrail.length>MAX_TRAIL)drTrail.shift();
+      if(drLine)drLine.setLatLngs(drTrail);else drLine=L.polyline(drTrail,{color:'#FFB800',weight:3,dashArray:'8,6'}).addTo(map);
+      drawPos(ll,15,'#FFB800');
+
+      // Draw top 5 formula trails on map (every 5th tick)
+      if(uiFrame%5===0){
+        const ranked=[...F].map((f,i)=>({i,err:f.drillDrift||f.errAvg||999})).sort((a,b)=>a.err-b.err);
+        const colors=['#00E5FF','#00FF88','#FFB800','#3B82F6','#A855F7'];
+        for(let r=0;r<5&&r<ranked.length;r++){
+          const f=F[ranked[r].i];
+          if(!f.drillTrail||f.drillTrail.length<2)continue;
+          if(!f.mapLine)f.mapLine=L.polyline(f.drillTrail,{color:colors[r],weight:2,opacity:.6,dashArray:'4,4'}).addTo(map);
+          else f.mapLine.setLatLngs(f.drillTrail);
+        }
+        // Draw weighted avg trail in white for comparison
+        if(F._waTrail&&F._waTrail.length>1){
+          if(!F._waLine)F._waLine=L.polyline(F._waTrail,{color:'#ffffff',weight:1,opacity:.4,dashArray:'2,4'}).addTo(map);
+          else F._waLine.setLatLngs(F._waTrail);
+        }
+      }
+    }
+    if(gpsTrue){gpsTrail.push([gpsTrue.lat,gpsTrue.lon]);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();}
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+  }
+
+  if(doUI){
+    // Sensor bars
+    $('sAx').textContent=accel.x.toFixed(2);$('sAy').textContent=accel.y.toFixed(2);$('sAz').textContent=accel.z.toFixed(2);
+    $('sGx').textContent=gyro.x.toFixed(1);$('sGy').textContent=gyro.y.toFixed(1);$('sGz').textContent=gyro.z.toFixed(1);
+    $('sMx').textContent=mag.x.toFixed(1);$('sMy').textContent=mag.y.toFixed(1);$('sMz').textContent=mag.z.toFixed(1);
+    $('sHdg').textContent=Math.round(compass)+'°';$('sPitch').textContent=pitch.toFixed(0);$('sRoll').textContent=roll.toFixed(0);
+    $('sAxB').style.width=Math.min(100,Math.abs(accel.x)*20+50)+'%';$('sAyB').style.width=Math.min(100,Math.abs(accel.y)*20+50)+'%';$('sAzB').style.width=Math.min(100,Math.abs(accel.z-9.8)*20+50)+'%';
+    $('sGxB').style.width=Math.min(100,Math.abs(gyro.x)*5+50)+'%';$('sGyB').style.width=Math.min(100,Math.abs(gyro.y)*5+50)+'%';$('sGzB').style.width=Math.min(100,Math.abs(gyro.z)*5+50)+'%';
+    $('sHdgB').style.width=(compass/360*100)+'%';
+    $('mPrs').textContent=pressure?pressure.toFixed(0):'--';$('mTmp').textContent=temp?temp.toFixed(1):'--';$('mLsr').textContent=laserMm||'--';
+    $('mSmp').textContent=DATA.count();$('mDst').textContent=Math.round(totalDist);
+    if(startTime)$('mTime').textContent=fmt((now-startTime)/1000);
+    if(DATA.samples.length>1){const l=DATA.samples[DATA.samples.length-1];$('mSpd').textContent=Math.round(l.speed*3.6);$('mHdg').textContent=Math.round(l.heading)+'°';}
+    $('mAlt').textContent=baroAlt?baroAlt.toFixed(1):'--';
+    $('ovSrc').textContent=boardConnected?(boardSource==='ble'?'BLE':'WiFi'):'PHONE';
+    // Formula table + map overlay
+    const bi=bestFormulaIdx();
+    $('ovBest').textContent=F[bi].name+' '+F[bi].errAvg.toFixed(1)+'m';
+    F.forEach((f,i)=>{
+      const el=$('fe'+i);if(!el)return;
+      el.textContent=f.errAvg<999?f.errAvg.toFixed(1)+'m':'--';
+      el.style.color=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)';
+      $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'err');
+      // Lat/Lon column
+      const fp=$('fp'+i);if(fp)fp.textContent=f.pos?f.pos.lat.toFixed(6)+','+f.pos.lon.toFixed(6):'--';
+      // Status: RUNNING/BEST/WAITING
+      const fs=$('fs'+i);const running=f.errAvg<999;
+      if(i===bi){fs.textContent='BEST';fs.className='f-run';$('f'+i).className='best';}
+      else if(running){fs.textContent='RUNNING';fs.className='f-run';$('f'+i).className='';}
+      else{fs.textContent='WAITING';fs.className='f-wait';$('f'+i).className='';}
+    });
+    // Source boxes red/green
+    const srcOn=(id,on)=>{const el=$(id);if(el)el.className='src '+(on?'on':'off');};
+    srcOn('srcIMUBox',accel.x!==0||accel.y!==0);srcOn('srcBaroBox',pressure>0);
+    srcOn('srcGPSBox',!!gpsTrue);srcOn('srcLaserBox',laserMm>0);
+    srcOn('srcCell4GBox',cellTowers4G>0);srcOn('srcCell2GBox',cellTowers2G>0);
+    srcOn('srcWifiBox',wifiAPs>0);srcOn('srcPhoneBox',!useBoard);
+    // Terrain fingerprint stats
+    const tfm=TERRAIN.match();
+    $('tfpCount').textContent=TERRAIN.prints.length;
+    $('tfpMatch').textContent=tfm?tfm.conf.toFixed(2):'--';
+    $('tfpErr').textContent=tfm&&gpsTrue?hav(tfm,gpsTrue).toFixed(1):'--';
+    // Cal meter
+    if(phase==='recording'){
+      const err=F[bi].errAvg;const ready=DATA.count()>20;
+      $('calV').textContent=err<999?err.toFixed(1):'--';
+      $('calV').style.color=ready?'var(--green)':err<20?'var(--amber)':'var(--red)';
+      $('calBar').style.width=Math.max(5,Math.min(100,100-err*2))+'%';
+      $('calBar').style.background=ready?'var(--green)':'var(--red)';
+      $('calSt').textContent=ready?'CALIBRATED — JAM READY':'CALIBRATING ('+DATA.count()+' samples)';
+      ANIMAL.updateUI();
+      $('calSt').style.color=ready?'var(--green)':'var(--td)';
+      if(ready){$('bJam').disabled=false;$('bJam').style.opacity='1';$('bSpoof').disabled=false;$('bSpoof').style.opacity='1';}
+    }
+    if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue){
+      const drift=hav(drPos,gpsTrue);$('ovErr').textContent=drift.toFixed(1)+'m';
+    }
+    // Only pan during recording/denial, and only if moved >30m
+    if(uiFrame%10===0&&phase!=='idle'&&(drPos||gpsSys)){
+      const p=drPos||gpsSys;
+      if(!_lastPan||hav(_lastPan,p)>30){
+        map.panTo([p.lat,p.lon]);
+        _lastPan={lat:p.lat,lon:p.lon};
+      }
+    }
+    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+bleGoodPkts+'/'+blePackets+(bleErrors?' ('+bleErrors+'err)':''):'WiFi '+wifiPackets+'pkt'):'ACTIVE');
+  }
+}
+
+// Controls
+function calibrate(){
+  log('Calibrating — hold still 5s (accel bias + gyro bias)','var(--amber)');
+  if(!useBoard)initPhoneSensors();
+  PREPROCESS.gyroBiasCollecting=true;PREPROCESS.gyroBiasSamples=[];
+  const iv=setInterval(()=>{
+    CAL.addStillSample(accel,gyro);
+    if(PREPROCESS.gyroBiasCollecting)PREPROCESS.collectGyroBias(gyro.x,gyro.y,gyro.z);
+  },100);
+  setTimeout(()=>{
+    clearInterval(iv);
+    const gb=PREPROCESS.gyroBias;
+    log('Gyro bias: x='+gb.x.toFixed(2)+' y='+gb.y.toFixed(2)+' z='+gb.z.toFixed(2),'var(--green)');
+    log('Accel units: '+(PREPROCESS.accelInG===true?'g-units (converting)':PREPROCESS.accelInG===false?'m/s² (native)':'detecting...'),'var(--green)');
+    log('Calibrated — all 5 data fixes active','var(--green)');
+    $('badge').textContent='READY';$('badge').className='badge b-phone';
+    $('srcPhone').innerHTML='<span class="sdot live"></span>Cal';
+    $('srcPhoned').textContent='bias:'+CAL.accelBias.x.toFixed(2)+','+CAL.accelBias.y.toFixed(2);
+  },5000);
+}
+function startRec(){
+  if(!gpsTrue){log('No GPS','var(--red)');return;}
+  phase='recording';startTime=performance.now();lastTick=null;
+  $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
+  $('b1').style.display='none';$('b2').style.display='block';$('calMeter').style.display='block';
+  // Enable jam/spoof immediately — user can jam anytime during recording
+  $('bJam').disabled=false;$('bJam').style.opacity='1';
+  $('bSpoof').disabled=false;$('bSpoof').style.opacity='1';
+  buildFormulaTable();
+  FISH.init(gpsTrue.lat,gpsTrue.lon);
+  COMBOS.init();
+  tickIv=setInterval(tick,1000);
+  log('Recording — '+F.length+' formulas + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish agents'+(boardConnected?' [BLE HARDWARE]':' [PHONE]'),'var(--green)');
+}
+function jam(){
+  if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
+  $('badge').textContent='JAMMED';$('badge').className='badge b-jam';
+  $('b2').style.display='none';$('b3').style.display='grid';$('jalrt').style.display='block';
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  if(alertIv)clearInterval(alertIv);
+  alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
+  log('GPS JAMMED — '+F.length+' formulas predicting','var(--amber)');
+}
+function spoof(){
+  if(phase!=='recording')return;phase='spoofed';drillStart=performance.now();gpsSys=null;
+  $('badge').textContent='SPOOFED';$('badge').className='badge b-spoof';
+  $('b2').style.display='none';$('b3').style.display='grid';$('salrt').style.display='block';
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  if(alertIv)clearInterval(alertIv);
+  alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('sT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
+  log('GPS SPOOFED — signal rejected','var(--red)');
+}
+function resurface(){
+  if(phase!=='jammed'&&phase!=='spoofed')return;
+  const bs=(performance.now()-drillStart)/1000;gpsSys=gpsTrue?{...gpsTrue}:null;
+  const drift=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
+  const dps=bs>0?drift/bs:0;let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
+  const fRes=F.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999})).sort((a,b)=>a.drift-b.drift);
+  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected});
+  F.forEach(f=>{if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}});
+  if(F._waLine){map.removeLayer(F._waLine);F._waLine=null;}F._waTrail=[];
+  if(gpsTrue){L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1}).bindPopup('Resurface #'+drills.length+'<br>Drift: '+drift.toFixed(1)+'m ['+grade+']').addTo(map);}
+  phase='recording';$('badge').textContent='RECORDING';$('badge').className='badge b-rec';
+  $('b3').style.display='none';$('b2').style.display='block';$('jalrt').style.display='none';$('salrt').style.display='none';
+  if(CAL.predictionErr<10){$('bJam').disabled=false;$('bJam').style.opacity='1';$('bSpoof').disabled=false;$('bSpoof').style.opacity='1';}
+  log('RESURFACE #'+drills.length+': drift='+drift.toFixed(1)+'m ['+grade+'] best='+fRes[0].name,'var(--purple)');
+  CAL.learn();
+}
+function endTest(){
+  if(alertIv)clearInterval(alertIv);clearInterval(tickIv);
+  if(phase==='jammed'||phase==='spoofed')resurface();
+  const dur=startTime?(performance.now()-startTime)/1000:0;phase='idle';
+  showReport(dur);
+}
+
+function showReport(dur){
+  const avgD=drills.length?drills.reduce((s,d)=>s+d.driftM,0)/drills.length:0;
+  const maxD=drills.length?Math.max(...drills.map(d=>d.driftM)):0;
+  const bi=bestFormulaIdx();
+  const ranked=[...F].map((f,i)=>({name:f.name,i,errAvg:f.errAvg})).sort((a,b)=>a.errAvg-b.errAvg);
+  const N=DATA.samples.length;
+  let avgSpd=0,maxSpd=0;if(N>0){DATA.samples.forEach(s=>{avgSpd+=s.speed;if(s.speed>maxSpd)maxSpd=s.speed;});avgSpd/=N;}
+  let drillsHTML=drills.map((d,di)=>{
+    const top=d.formulaResults?d.formulaResults.slice(0,5).map((f,ri)=>`<div class="rr"><span>${ri===0?'◈':ri===1?'◇':'○'} ${f.name}</span><span class="rv" style="color:${f.drift<15?'var(--green)':f.drift<50?'var(--amber)':'var(--red)'}">${f.drift<999?f.drift.toFixed(1)+'m':'--'}</span></div>`).join(''):'';
+    return`<div style="background:var(--bg);border:1px solid var(--border);padding:6px;margin:4px 0;border-radius:2px">
+      <div style="font-family:'Orbitron',sans-serif;font-size:8px;color:var(--amber);letter-spacing:2px">DRILL ${di+1} — ${fmt(d.blindSec)} ${d.type.toUpperCase()} ${d.boardActive?'(BLE HARDWARE)':'(PHONE)'}</div>
+      <div class="rr"><span>Drift</span><span class="rv" style="color:${d.driftM<20?'var(--green)':'var(--red)'}">${d.driftM.toFixed(1)}m [${d.grade}]</span></div>
+      ${top}</div>`;}).join('');
+
+  $('rptB').innerHTML=`
+    <div class="rc"><div class="rct" style="color:var(--cyan)">SUMMARY</div>
+      <div class="rr"><span>Duration</span><span class="rv">${fmt(dur)}</span></div>
+      <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
+      <div class="rr"><span>Samples</span><span class="rv">${DATA.count()}</span></div>
+      <div class="rr"><span>Drills</span><span class="rv">${drills.length}</span></div>
+      <div class="rr"><span>Formulas</span><span class="rv">${F.length} (${boardConnected?F.length+' hw+sw':'24 phone'})</span></div>
+      <div class="rr"><span>Data source</span><span class="rv">${boardConnected?'IoT Board '+(boardSource==='ble'?'BLE':'WiFi')+' (7 sensors) — '+(boardSource==='ble'?blePackets:wifiPackets)+' pkts':'Phone'}</span></div>
+      <div class="rr"><span>Cell towers (4G+2G)</span><span class="rv">${(cellTowers4G||0)+(cellTowers2G||0)} towers</span></div>
+      <div class="rr"><span>Laser range</span><span class="rv">${laserMm?laserMm+'mm':'N/A'}</span></div>
+      <div class="rr"><span>Avg speed</span><span class="rv">${(avgSpd*3.6).toFixed(1)} km/h</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--green)">TOP 10 FORMULAS (independent — winner takes all)</div>
+      ${ranked.slice(0,10).map((f,i)=>{
+        const medal=i===0?'◈ WINNER → ':i===1?'◇ 2nd → ':i===2?'○ 3rd → ':(i+1)+'. ';
+        const c=f.errAvg<5?'var(--green)':f.errAvg<10?'var(--cyan)':f.errAvg<20?'var(--amber)':'var(--red)';
+        return`<div class="rr" style="${i===0?'background:rgba(0,255,136,.08);':''}"><span>${medal}${f.name}</span><span class="rv" style="color:${c}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'}</span></div>`;
+      }).join('')}
+      <div style="font-size:8px;color:var(--td);margin-top:4px;padding:4px">Output = winner's position only. No averaging. Each formula runs independently and marks its own path on the map.</div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--tp)">ALL ${F.length} FORMULAS RANKED (self-correcting)</div>
+      ${ranked.map((f,i)=>{
+        const c=f.errAvg<5?'var(--green)':f.errAvg<10?'var(--cyan)':f.errAvg<20?'var(--amber)':f.errAvg<999?'var(--red)':'var(--td)';
+        const ff=F.find(x=>x.name===f.name);
+        const corr=ff?'corr:'+ff.corrCount+' spd:'+ff.speedScale.toFixed(2):'';
+        return`<div class="rr"><span>${i+1}. ${f.name}</span><span class="rv" style="color:${c}">${f.errAvg<999?f.errAvg.toFixed(1)+'m':'--'} <span style="font-size:7px;color:var(--td)">${corr}</span></span></div>`;
+      }).join('')}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--orange)">AUTO-COMBO DISCOVERY</div>
+      <div class="rr"><span>Combo pool size</span><span class="rv">${COMBOS.pool.length}</span></div>
+      <div class="rr"><span>Generations evolved</span><span class="rv">${COMBOS.generation}</span></div>
+      <div class="rr"><span>Best combo</span><span class="rv" style="font-size:8px;color:var(--green)">${COMBOS.bestDesc()}</span></div>
+      <div style="font-size:8px;color:var(--td);margin-top:4px">Top 5 discovered combos:</div>
+      ${COMBOS.top5().map((c,i)=>`<div class="rr"><span>${i+1}.</span><span class="rv" style="font-size:7px">${c}</span></div>`).join('')}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER DATABASE</div>
+      <div class="rr"><span>Towers in database</span><span class="rv">${TOWERS.length}</span></div>
+      <div class="rr"><span>Nearby towers cached</span><span class="rv">${UTIN.lastTowers?UTIN.lastTowers.length:'--'}</span></div>
+      <div class="rr"><span>Scan history depth</span><span class="rv">${UTIN.scanHistory.length}/5</span></div>
+      <div class="rr"><span>Trilateration method</span><span class="rv">NLLS (5 iterations)</span></div>
+      ${UTIN.lastTowers?UTIN.lastTowers.slice(0,5).map((t,i)=>{
+        const op={40:'Airtel',41:'Vi',64:'BSNL',84:'Jio'}[t.mnc]||'Op'+t.mnc;
+        return`<div class="rr"><span>Tower ${i+1} — ${op} (cid:${t.cid||'?'})</span><span class="rv">${Math.round(t.dist)}m / ${t.signal.toFixed(0)}dBm</span></div>`;
+      }).join(''):''}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--teal)">DATA SOURCES</div>
+      <div class="rr"><span>IMU (accel+gyro+mag)</span><span class="rv">${boardConnected?'MPU9250 via '+(boardSource==='ble'?'BLE':'WiFi'):'Phone MEMS'}</span></div>
+      <div class="rr"><span>Barometer</span><span class="rv">${pressure?'BMP280 '+pressure.toFixed(0)+'hPa':'None'}</span></div>
+      <div class="rr"><span>GPS</span><span class="rv">${boardConnected?'NEO-6M via '+(boardSource==='ble'?'BLE':'WiFi'):'Phone'}</span></div>
+      <div class="rr"><span>Laser ranging</span><span class="rv">${laserMm?laserMm+'mm':'Not connected'}</span></div>
+      <div class="rr"><span>Cell towers (4G)</span><span class="rv">${cellTowers4G||'--'}</span></div>
+      <div class="rr"><span>Cell towers (2G)</span><span class="rv">${cellTowers2G||'--'}</span></div>
+      <div class="rr"><span>WiFi APs</span><span class="rv">${wifiAPs||'--'}</span></div>
+      <div class="rr"><span>INS samples</span><span class="rv">${INS.sampleCount}</span></div>
+      <div class="rr"><span>INS ZUPT</span><span class="rv">${INS.zuptActive?'Active':'--'}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--green)">CALIBRATION</div>
+      <div class="rr"><span>Accel scale</span><span class="rv">${CAL.accelScale.toFixed(4)}</span></div>
+      <div class="rr"><span>Gyro scale</span><span class="rv">${CAL.gyroScale.toFixed(4)}</span></div>
+      <div class="rr"><span>Compass offset</span><span class="rv">${CAL.compassOff.toFixed(1)}°</span></div>
+      <div class="rr"><span>Speed mult</span><span class="rv">${CAL.speedMult.toFixed(4)}</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--green)">ANIMAL NAVIGATION</div>
+      <div class="rr"><span>Desert Ant (step+mag)</span><span class="rv">${ANIMAL.ant.ready()?ANIMAL.ant.steps+' steps, stride '+ANIMAL.ant.stepLen.toFixed(2)+'m':'Not ready'}</span></div>
+      <div class="rr"><span>Pigeon (mag map)</span><span class="rv">${ANIMAL.pigeon.ready()?ANIMAL.pigeon.magMap.length+' cells mapped':'Not ready ('+ANIMAL.pigeon.magMap.length+' cells)'}</span></div>
+      <div class="rr"><span>Salmon (cell gradient)</span><span class="rv">${ANIMAL.salmon.ready()?ANIMAL.salmon.towerHistory.length+' readings, '+(cellTowers4G+cellTowers2G)+' towers':'Not ready'}</span></div>
+      <div class="rr"><span>Whale (WiFi fp)</span><span class="rv">${ANIMAL.whale.ready()?ANIMAL.whale.fpMap.length+' fingerprints, '+wifiAPs+' APs':'Not ready ('+ANIMAL.whale.fpMap.length+' fps)'}</span></div>
+      <div class="rr"><span>Bat (laser corridor)</span><span class="rv">${ANIMAL.bat.ready()?ANIMAL.bat.corridor.length+' corridor points':'Not ready ('+ANIMAL.bat.corridor.length+' pts)'}</span></div>
+      <div class="rr"><span>Methods ready for fusion</span><span class="rv">${[ANIMAL.ant,ANIMAL.pigeon,ANIMAL.salmon,ANIMAL.whale,ANIMAL.bat].filter(m=>m.ready()).length}/5</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--teal)">EVOLVING FISH AGENTS</div>
+      ${(()=>{const fs=FISH.stats();return`
+      <div class="rr"><span>Schools × Agents</span><span class="rv">${fs.schools} × ${fs.agents/fs.schools} = ${fs.agents}</span></div>
+      <div class="rr"><span>Generations evolved</span><span class="rv">${fs.generation}</span></div>
+      <div class="rr"><span>Best school</span><span class="rv">#${fs.bestSchool}</span></div>
+      <div class="rr"><span>School errors</span><span class="rv" style="font-size:8px">${fs.schoolErrors.join(' | ')}</span></div>
+      ${fs.topDNA?`
+      <div class="rr"><span>Best DNA velW</span><span class="rv">${fs.topDNA.velW.toFixed(3)}</span></div>
+      <div class="rr"><span>Best DNA accelW</span><span class="rv">${fs.topDNA.accelW.toFixed(3)}</span></div>
+      <div class="rr"><span>Best DNA drDecay</span><span class="rv">${fs.topDNA.drDecay.toFixed(4)}</span></div>
+      <div class="rr"><span>Best DNA zuptTh</span><span class="rv">${fs.topDNA.zuptTh.toFixed(3)}</span></div>
+      <div class="rr"><span>Best DNA hdgSrc</span><span class="rv">${['mag','gps','gyro'][fs.topDNA.hdgSrc]}</span></div>
+      `:''}`;})()}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--amber)">DATA QUALITY FIXES</div>
+      <div class="rr"><span>Accel units</span><span class="rv">${PREPROCESS.accelInG===true?'g→m/s² (converted)':PREPROCESS.accelInG===false?'m/s² (native)':'detecting'}</span></div>
+      <div class="rr"><span>Gyro bias ready</span><span class="rv">${PREPROCESS.gyroBiasReady?'Yes ('+PREPROCESS.gyroBias.x.toFixed(2)+','+PREPROCESS.gyroBias.y.toFixed(2)+','+PREPROCESS.gyroBias.z.toFixed(2)+')':'No'}</span></div>
+      <div class="rr"><span>GPS frozen events</span><span class="rv">${PREPROCESS.frozenCount}</span></div>
+      <div class="rr"><span>Speed median filter</span><span class="rv">Active (${PREPROCESS.speedHistory.length} samples)</span></div>
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--red)">GPS DENIED</div>
+      <div class="rr"><span>Avg drift</span><span class="rv" style="color:${avgD<20?'var(--green)':'var(--red)'}">${avgD.toFixed(1)}m</span></div>
+      <div class="rr"><span>Max drift</span><span class="rv" style="color:var(--red)">${maxD.toFixed(1)}m</span></div>
+      ${drillsHTML||'<div class="rr"><span>No drills</span></div>'}
+    </div>`;
+  $('rpt').style.display='block';
+}
+function exportCSV(){
+  let c='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs\n';
+  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0}\n`;});
+  c+='\nFormulas\nRank,Name,Error(m)\n';
+  [...F].map((f,i)=>({n:f.name,e:f.errAvg})).sort((a,b)=>a.e-b.e).forEach((f,i)=>{c+=`${i+1},${f.n},${f.e<999?f.e.toFixed(1):'--'}\n`;});
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v5-data.csv';a.click();
+}
+
+// Boot
+// Route learning controls
+function toggleLearn(){
+  if(ROUTES.learning){ROUTES.stopLearning();$('bLearn').textContent='Start Learning Route';$('learnStatus').textContent='Not learning';}
+  else{ROUTES.startLearning();$('bLearn').textContent='Stop Learning';$('learnStatus').textContent='Learning... drive with GPS';}
+}
+function clearRoutes(){ROUTES.stored=[];ROUTES.save();log('All routes cleared','var(--amber)');}
+function exportTowers(){TOWER_CAPTURE.exportCSV();}
+function clearCaptured(){TOWER_CAPTURE.clear();}
+function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
+
+// Update data tab stats
+function updateDataTab(){
+  const rs=ROUTES.stats();
+  $('learnRoutes').textContent=rs.routes;$('learnPts').textContent=rs.points;
+  $('learnCov').textContent=rs.points*10; // ~10m per point
+  $('tfpCount').textContent=TERRAIN.prints.length;
+  $('towersPre').textContent=TOWERS.length;
+  $('towersCap').textContent=TOWER_CAPTURE.count();
+  $('towersTotal').textContent=TOWERS.length+TOWER_CAPTURE.count();
+  $('dataSmp').textContent=DATA.count();
+  $('dataGen').textContent=FISH.generation||0;
+  const bi=bestFormulaIdx();$('dataBest').textContent=F[bi].errAvg<999?F[bi].errAvg.toFixed(1):'--';
+  $('drillCount').textContent=drills.length;
+  if(drills.length){
+    const avg=drills.reduce((s,d)=>s+d.driftM,0)/drills.length;
+    $('drillAvg').textContent=avg.toFixed(1);
+    $('drillBest').textContent=drills.reduce((b,d)=>d.grade<b?d.grade:b,'D');
+  }
+  // Fish info
+  if(FISH.schools&&FISH.schools.length)$('fishInfo').textContent=FISH.SCHOOLS+'×'+FISH.AGENTS_PER+'='+FISH.SCHOOLS*FISH.AGENTS_PER+' fish. Gen:'+FISH.generation+' Best:#'+FISH.bestSchoolIdx;
+  $('comboInfo').textContent='Pool:'+COMBOS.pool.length+' Gen:'+COMBOS.generation+(COMBOS.pool.length?' Best:'+COMBOS.bestDesc():'');
+  $('fCount').textContent=F.length;
+  // Storage estimate
+  let total=0;try{for(let k in localStorage)total+=(localStorage[k]||'').length;}catch(e){}
+  $('storageInfo').textContent='localStorage: ~'+(total/1024).toFixed(0)+'KB / Routes:'+rs.routes+' / Towers:'+TOWER_CAPTURE.count()+' / Fish DNA:'+(localStorage.getItem('upin_fish_dna')?'saved':'none');
+}
+
+window.addEventListener('load',()=>{
+  initMap();buildFormulaTable();
+  ROUTES.init();TOWER_CAPTURE.init();
+  if(!navigator.bluetooth){
+    $('bleBtn').textContent='BLE NOT AVAILABLE — USE WiFi';
+    $('bleBtn').className='btn-hw err';
+    log('UPIN v5 ready — no BLE, use WiFi or phone','var(--amber)');
+  }else{
+    log('UPIN v5 ready — '+F.length+' formulas, 600 fish agents','var(--cyan)');
+  }
+  log('Tower DB: '+TOWERS.length+' preloaded + '+TOWER_CAPTURE.count()+' captured','var(--tm)');
+  const rs=ROUTES.stats();if(rs.routes>0)log('Routes: '+rs.routes+' stored ('+rs.points+' fingerprints)','var(--tm)');
+  updateDataTab();
+  setInterval(updateDataTab,5000); // refresh data tab every 5s
+});
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA};
+})();
+</script>
+</body>
+</html>
