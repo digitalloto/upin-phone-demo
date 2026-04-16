@@ -346,6 +346,10 @@ const MAX_TRAIL=200;
 let gpsTrail=[],drTrail=[];
 let gpsTrue=null,gpsSys=null,drPos=null;
 let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},mag={x:0,y:0,z:0};
+// Raw sensor values — sensor events write here, preprocessor reads from here
+// This prevents bias correction from stacking on already-corrected values
+let rawAccel={x:0,y:0,z:9.8},rawGyro={x:0,y:0,z:0};
+let lastSensorTime=0; // detect stale sensor readings
 let compass=0,pitch=0,roll=0,gravity={x:0,y:0,z:9.8};
 let pressure=0,temp=0,baroAlt=0,laserMm=0;
 let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
@@ -755,8 +759,13 @@ function initPhoneSensors(){
   $('srcPhone').innerHTML='<span class="sdot live"></span>Active';$('srcPhoned').textContent='accel+gyro';
   const sM=()=>window.addEventListener('devicemotion',e=>{
     const a=e.acceleration||{},r=e.rotationRate||{},g=e.accelerationIncludingGravity||{};
-    accel={x:a.x||0,y:a.y||0,z:a.z||9.8};gyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+    // Write to RAW variables — preprocessor will correct these into accel/gyro
+    rawAccel={x:a.x||0,y:a.y||0,z:a.z||9.8};
+    rawGyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
+    // Also set accel directly for immediate use (before first preprocess tick)
+    accel=rawAccel;gyro=rawGyro;
     gravity={x:(g.x||0)-(a.x||0),y:(g.y||0)-(a.y||0),z:(g.z||9.8)-(a.z||0)};
+    lastSensorTime=performance.now();
   });
   const sO=()=>window.addEventListener('deviceorientation',e=>{
       compass=e.alpha||0;pitch=e.beta||0;roll=e.gamma||0;
@@ -781,7 +790,9 @@ const DATA={
     if(!lat)return;let speed=0,heading=0;
     if(this.samples.length>0){const p=this.samples[this.samples.length-1];
       const dLa=(lat-p.lat)*111320,dLo=(lon-p.lon)*111320*Math.cos(lat*Math.PI/180);
-      speed=Math.sqrt(dLa*dLa+dLo*dLo)/Math.max(dt,0.1);heading=Math.atan2(dLo,dLa)*180/Math.PI;if(heading<0)heading+=360;}
+      speed=Math.sqrt(dLa*dLa+dLo*dLo)/Math.max(dt,0.1);heading=Math.atan2(dLo,dLa)*180/Math.PI;if(heading<0)heading+=360;
+      // Cap impossible speeds: >50 m/s (180km/h) = GPS jump, use last valid
+      if(speed>50){speed=this.samples.length>1?this.samples[this.samples.length-1].speed:0;}}
     this.samples.push({t:performance.now(),ax:ac.x,ay:ac.y,az:ac.z,gx:gy.x,gy:gy.y,gz:gy.z,
       compass:cmp,lat,lon,speed,heading,dt,mx:mag.x,my:mag.y,mz:mag.z,
       pressure,baroAlt,laserMm,cellTowers4G,cellTowers2G,wifiAPs,...(extra||{})});
@@ -2047,15 +2058,20 @@ function tick(){
   const now=performance.now(),dt=lastTick?(now-lastTick)/1000:1;lastTick=now;uiFrame++;
   const doUI=(uiFrame%3===0);
 
-  // ── PREPROCESS all sensor data (5 fixes) ──
+  // ── PREPROCESS all sensor data (6 fixes) ──
   if(!useBoard&&gpsSys){
-    const processed=PREPROCESS.process(accel,gyro,gpsSys.speed||0,gpsSys.lat,gpsSys.lon,dt);
-    if(!processed)return; // Fix 2: skip stale reading
-    accel=processed.accel;  // Fix 1: unit-corrected
-    gyro=processed.gyro;    // Fix 5: bias-subtracted
-    if(processed.gpsFrozen){ // Fix 4: frozen GPS
-      gpsSys.speed=processed.speed;
+    // FIX: Read from RAW sensor values, not already-corrected globals
+    // This prevents bias correction from stacking each tick
+    const processed=PREPROCESS.process(rawAccel,rawGyro,gpsSys.speed||0,gpsSys.lat,gpsSys.lon,dt);
+    if(!processed)return;
+    accel=processed.accel;
+    gyro=processed.gyro;
+    // Fix 6: Detect stale sensors (no DeviceMotionEvent for >2s)
+    if(performance.now()-lastSensorTime>2000&&lastSensorTime>0){
+      // Sensor is stale — don't trust accel/gyro, zero out derivatives
+      gyro={x:0,y:0,z:0};
     }
+    if(processed.gpsFrozen){gpsSys.speed=processed.speed;}
   }
 
   if(phase==='recording'&&gpsSys){
