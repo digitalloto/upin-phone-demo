@@ -239,6 +239,16 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <div class="card-title">AUTO-COMBO DISCOVERY</div>
     <div id="comboInfo" style="font-size:8px;color:var(--tm)">Pool: 20 combos, Gen: 0</div>
   </div>
+  <!-- Layer scores -->
+  <div class="card" style="margin-top:6px">
+    <div class="card-title">LAYER SCORES (lifetime)</div>
+    <div id="layerScores" style="font-size:9px;color:var(--tm)">No data yet</div>
+  </div>
+  <!-- Score summary -->
+  <div class="card" style="margin-top:6px">
+    <div class="card-title">IMPROVEMENT TRACKING</div>
+    <div id="scoreSummary" style="font-size:9px;color:var(--tm)">Run a test to start tracking</div>
+  </div>
 </div>
 
 <!-- ═══ TAB 2: LEARN ═══ -->
@@ -1865,6 +1875,109 @@ const ROUTES={
 };
 
 // ═══════════════════════════════════════
+// SCORING ENGINE — tracks every layer + formula improvement over time
+// Persists to localStorage. Shows trends. Never resets unless asked.
+// ═══════════════════════════════════════
+const SCORE={
+  // Per-formula lifetime stats
+  formulas:{},  // {name: {totalSamples, totalErr, bestErr, worstErr, recentErr[], sessions, firstSeen, lastSeen, improved}}
+  // Per-layer lifetime stats
+  layers:{},    // {name: {totalSamples, totalErr, bestErr, recentErr[], sessions, description}}
+  // Session stats (current run only)
+  session:{startTime:0,samples:0,formulas:{},layers:{}},
+
+  LAYER_DEFS:[
+    {id:'pue',name:'Smart Constraint (PUE)',desc:'Physics + sensor shrinking radius'},
+    {id:'cell',name:'Cell Tower Triangulation',desc:'44,279 real tower positions'},
+    {id:'fish',name:'Fish Schooling AI',desc:'600 evolving sensor blenders'},
+    {id:'fagent',name:'Formula Agents',desc:'470 parameter optimizers (10 per formula)'},
+    {id:'combo',name:'Auto-Combo Discovery',desc:'20 evolving formula combinations'},
+    {id:'animal',name:'Animal Navigation',desc:'5 bio-inspired methods + fusion'},
+    {id:'terrain',name:'Terrain Fingerprint',desc:'Mag+baro+cell pattern matching'},
+    {id:'route',name:'Route DTW Learning',desc:'Stored route sensor matching'},
+  ],
+
+  init(){
+    try{
+      const d=localStorage.getItem('upin_scores');
+      if(d){const p=JSON.parse(d);this.formulas=p.formulas||{};this.layers=p.layers||{};}
+    }catch(e){}
+    this.session={startTime:performance.now(),samples:0,formulas:{},layers:{}};
+  },
+
+  save(){
+    try{localStorage.setItem('upin_scores',JSON.stringify({formulas:this.formulas,layers:this.layers}));}catch(e){}
+  },
+
+  // Record a formula's error against GPS (called every tick during recording)
+  scoreFormula(name,err){
+    if(err>=999||!isFinite(err))return;
+    // Lifetime
+    if(!this.formulas[name])this.formulas[name]={totalSamples:0,totalErr:0,bestErr:999,worstErr:0,recentErr:[],sessions:0,firstSeen:Date.now(),lastSeen:Date.now(),improved:0};
+    const f=this.formulas[name];
+    f.totalSamples++;f.totalErr+=err;f.lastSeen=Date.now();
+    if(err<f.bestErr){f.bestErr=err;f.improved++;}
+    if(err>f.worstErr)f.worstErr=err;
+    f.recentErr.push(err);if(f.recentErr.length>100)f.recentErr.shift();
+    // Session
+    if(!this.session.formulas[name])this.session.formulas[name]={samples:0,totalErr:0,bestErr:999};
+    const sf=this.session.formulas[name];
+    sf.samples++;sf.totalErr+=err;if(err<sf.bestErr)sf.bestErr=err;
+  },
+
+  // Record a layer's accuracy (called periodically)
+  scoreLayer(id,err){
+    if(err>=999||!isFinite(err))return;
+    if(!this.layers[id])this.layers[id]={totalSamples:0,totalErr:0,bestErr:999,recentErr:[],sessions:0};
+    const l=this.layers[id];
+    l.totalSamples++;l.totalErr+=err;
+    if(err<l.bestErr)l.bestErr=err;
+    l.recentErr.push(err);if(l.recentErr.length>50)l.recentErr.shift();
+  },
+
+  // Get improvement trend for a formula (negative = getting better)
+  trend(name){
+    const f=this.formulas[name];
+    if(!f||f.recentErr.length<10)return 0;
+    const first10=f.recentErr.slice(0,10).reduce((s,e)=>s+e,0)/10;
+    const last10=f.recentErr.slice(-10).reduce((s,e)=>s+e,0)/10;
+    return last10-first10; // negative = improving
+  },
+
+  // Get formula ranking by lifetime average error
+  ranking(){
+    return Object.entries(this.formulas)
+      .map(([name,f])=>({name,avg:f.totalSamples>0?f.totalErr/f.totalSamples:999,best:f.bestErr,samples:f.totalSamples,trend:this.trend(name),improved:f.improved}))
+      .sort((a,b)=>a.avg-b.avg);
+  },
+
+  // Get layer stats
+  layerStats(){
+    return this.LAYER_DEFS.map(def=>{
+      const l=this.layers[def.id]||{totalSamples:0,totalErr:0,bestErr:999,recentErr:[]};
+      const recentAvg=l.recentErr.length>0?l.recentErr.reduce((s,e)=>s+e,0)/l.recentErr.length:0;
+      return{...def,avg:l.totalSamples>0?l.totalErr/l.totalSamples:0,best:l.bestErr,samples:l.totalSamples,recentAvg};
+    });
+  },
+
+  // Summary for display
+  summary(){
+    const r=this.ranking();
+    const totalSamples=Object.values(this.formulas).reduce((s,f)=>s+f.totalSamples,0);
+    const improving=r.filter(f=>f.trend<-0.5).length;
+    const degrading=r.filter(f=>f.trend>0.5).length;
+    return{totalFormulas:r.length,totalSamples,improving,degrading,stable:r.length-improving-degrading,topFormula:r[0]||null};
+  },
+
+  // Mark new session
+  newSession(){
+    Object.values(this.formulas).forEach(f=>f.sessions++);
+    Object.values(this.layers).forEach(l=>l.sessions++);
+    this.save();
+  }
+};
+
+// ═══════════════════════════════════════
 // FORMULA AGENTS — 10 agents per formula, each with different
 // sensor parameter tweaks. Natural selection finds optimal
 // parameters for EACH formula on THIS specific device.
@@ -2290,6 +2403,13 @@ function tick(){
     if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
     INS.update(accel,gyro,dt);
     scoreFormulas(gpsSys,dt);
+    // Score every formula and layer for the scoring engine
+    F.forEach(f=>{if(f.errAvg<999)SCORE.scoreFormula(f.name,f.errAvg);});
+    if(FISH.schools&&FISH.schools.length){const bs=FISH.schools[FISH.bestSchoolIdx];if(bs&&bs.avgErr<999)SCORE.scoreLayer('fish',bs.avgErr);}
+    if(FAGENTS.initialized){const s=FAGENTS.stats();if(s.improved>0)SCORE.scoreLayer('fagent',F[bestFormulaIdx()].errAvg);}
+    const cellP=UTIN.predict();if(cellP&&gpsSys)SCORE.scoreLayer('cell',hav(cellP,gpsSys));
+    if(TERRAIN.prints.length>20){const tm=TERRAIN.match();if(tm&&gpsSys)SCORE.scoreLayer('terrain',hav(tm,gpsSys));}
+    if(uiFrame%30===0)SCORE.save(); // save every 30 ticks
     // Score auto-combos against GPS
     COMBOS.score(gpsSys,dt);
     FAGENTS.score(gpsSys,dt);
@@ -2515,7 +2635,7 @@ function startRec(){
   buildFormulaTable();
   FISH.init(gpsTrue.lat,gpsTrue.lon);
   COMBOS.init();
-  FAGENTS.init();
+  FAGENTS.init();SCORE.newSession();
   tickIv=setInterval(tick,1000);
   log('Recording — '+F.length+' formulas × '+FAGENTS.N+' agents = '+F.length*FAGENTS.N+' parameter variants + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish'+(boardConnected?' [BLE]':' [PHONE]'),'var(--green)');
 }
@@ -2726,20 +2846,47 @@ function updateDataTab(){
   if(FISH.schools&&FISH.schools.length)$('fishInfo').textContent=FISH.SCHOOLS+'×'+FISH.AGENTS_PER+'='+FISH.SCHOOLS*FISH.AGENTS_PER+' fish Gen:'+FISH.generation+' | Formula Agents: '+F.length+'×'+FAGENTS.N+'='+F.length*FAGENTS.N+' Gen:'+FAGENTS.generation+(FAGENTS.initialized?' ('+FAGENTS.stats().improved+' formulas improved)':'');
   $('comboInfo').textContent='Pool:'+COMBOS.pool.length+' Gen:'+COMBOS.generation+(COMBOS.pool.length?' Best:'+COMBOS.bestDesc():'');
   $('fCount').textContent=F.length;
+
+  // Layer scores display
+  const ls=SCORE.layerStats();
+  $('layerScores').innerHTML=ls.map(l=>{
+    const c=l.avg<10?'var(--green)':l.avg<50?'var(--amber)':l.avg>0?'var(--red)':'var(--td)';
+    return'<div class="rr"><span>'+l.name+'</span><span class="rv" style="color:'+c+'">'+(l.samples>0?l.avg.toFixed(1)+'m avg / '+l.best.toFixed(1)+'m best / '+l.samples+' samples':'no data')+'</span></div>';
+  }).join('');
+
+  // Score summary + improvement tracking
+  const ss=SCORE.summary();
+  const rank=SCORE.ranking().slice(0,10);
+  let scoreHTML='<div class="rr"><span>Total lifetime samples</span><span class="rv">'+ss.totalSamples+'</span></div>';
+  scoreHTML+='<div class="rr"><span>Formulas tracked</span><span class="rv">'+ss.totalFormulas+'</span></div>';
+  scoreHTML+='<div class="rr"><span style="color:var(--green)">Improving</span><span class="rv" style="color:var(--green)">'+ss.improving+' formulas</span></div>';
+  scoreHTML+='<div class="rr"><span style="color:var(--red)">Degrading</span><span class="rv" style="color:var(--red)">'+ss.degrading+' formulas</span></div>';
+  scoreHTML+='<div class="rr"><span>Stable</span><span class="rv">'+ss.stable+' formulas</span></div>';
+  if(rank.length>0){
+    scoreHTML+='<div style="font-size:8px;color:var(--cyan);margin-top:6px;font-weight:700">LIFETIME TOP 10</div>';
+    rank.forEach((f,i)=>{
+      const trendIcon=f.trend<-0.5?'↑':f.trend>0.5?'↓':'=';
+      const trendColor=f.trend<-0.5?'var(--green)':f.trend>0.5?'var(--red)':'var(--td)';
+      scoreHTML+='<div class="rr"><span>'+(i+1)+'. '+f.name+'</span><span class="rv">'+f.avg.toFixed(1)+'m <span style="color:'+trendColor+'">'+trendIcon+'</span> best:'+f.best.toFixed(1)+'m ('+f.samples+' samples, '+f.improved+' improvements)</span></div>';
+    });
+  }
+  $('scoreSummary').innerHTML=scoreHTML;
+
   // Storage estimate
   let total=0;try{for(let k in localStorage)total+=(localStorage[k]||'').length;}catch(e){}
-  $('storageInfo').textContent='localStorage: ~'+(total/1024).toFixed(0)+'KB / Routes:'+rs.routes+' / Towers:'+TOWER_CAPTURE.count()+' / Fish DNA:'+(localStorage.getItem('upin_fish_dna')?'saved':'none');
+  $('storageInfo').textContent='localStorage: ~'+(total/1024).toFixed(0)+'KB / Routes:'+rs.routes+' / Towers:'+TOWER_CAPTURE.count()+' / Scores:'+(localStorage.getItem('upin_scores')?'saved':'none');
 }
 
 window.addEventListener('load',()=>{
   initMap();buildFormulaTable();
-  ROUTES.init();TOWER_CAPTURE.init();
+  ROUTES.init();TOWER_CAPTURE.init();SCORE.init();
   if(!navigator.bluetooth){
     $('bleBtn').textContent='BLE NOT AVAILABLE — USE WiFi';
     $('bleBtn').className='btn-hw err';
     log('UPIN v5 ready — no BLE, use WiFi or phone','var(--amber)');
   }else{
-    log('UPIN v5 ready — '+F.length+' formulas, 600 fish agents','var(--cyan)');
+    const ss=SCORE.summary();
+    log('UPIN v5 ready — '+F.length+' formulas, 470 agents, 600 fish'+(ss.totalSamples>0?' | Lifetime: '+ss.totalSamples+' samples, '+ss.improving+' improving':''),'var(--cyan)');
   }
   log('Tower DB: '+TOWERS.length+' preloaded + '+TOWER_CAPTURE.count()+' captured','var(--tm)');
   const rs=ROUTES.stats();if(rs.routes>0)log('Routes: '+rs.routes+' stored ('+rs.points+' fingerprints)','var(--tm)');
