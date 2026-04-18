@@ -2051,55 +2051,118 @@ F.push(mkF('Route DTW',(pos,dt)=>{
 // Also merges with cell tower triangulation for tighter bounds.
 // ═══════════════════════════════════════
 const PUE={
-  lastGoodPos:null,   // last known GPS position
-  lastGoodSpeed:0,    // m/s at moment of GPS loss
-  lastGoodTime:0,     // timestamp of GPS loss
-  maxAccel:3.0,       // max possible acceleration m/s² (car ~3, person ~2)
-  active:false,
-  enforced:0,         // count of times a formula was pulled back
-  total:0,            // total formula predictions checked
+  lastGoodPos:null,lastGoodSpeed:0,lastGoodTime:0,lastGoodHeading:0,
+  maxAccel:3.0,active:false,enforced:0,total:0,_circle:null,_cone:null,
 
-  // Called when GPS is available — update reference
+  // Tracking sensor state during denial for smart shrinking
+  headingHistory:[],  // track heading changes from gyro/compass
+  speedHistory:[],    // track speed changes from accel
+  accelEnergy:[],     // track if moving or stopped
+  turnDetected:false, // did we detect a significant turn?
+  stopped:false,      // are we stopped (ZUPT)?
+
   updateFromGPS(pos,speed){
     this.lastGoodPos={lat:pos.lat,lon:pos.lon};
     this.lastGoodSpeed=speed||0;
+    this.lastGoodHeading=compass;
     this.lastGoodTime=performance.now();
     this.active=false;
   },
 
-  // Called when GPS is denied — activate the envelope
   activate(){
-    this.active=true;
-    this.enforced=0;this.total=0;
+    this.active=true;this.enforced=0;this.total=0;
+    this.headingHistory=[];this.speedHistory=[];this.accelEnergy=[];
+    this.turnDetected=false;this.stopped=false;
   },
 
-  // Calculate maximum possible radius at current time
+  // Called every tick during denial — update sensor tracking
+  updateSensors(){
+    if(!this.active)return;
+    // Track heading from compass/gyro
+    this.headingHistory.push(compass);
+    if(this.headingHistory.length>60)this.headingHistory.shift();
+
+    // Track accel energy (detect movement vs stopped)
+    const energy=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z)-9.81;
+    this.accelEnergy.push(Math.abs(energy));
+    if(this.accelEnergy.length>30)this.accelEnergy.shift();
+
+    // ZUPT: if accel energy < 0.3 for 3+ seconds → stopped
+    const recentEnergy=this.accelEnergy.slice(-3);
+    this.stopped=recentEnergy.length>=3&&recentEnergy.every(e=>e<0.3);
+
+    // Track estimated speed (decays if stopped, maintains if moving)
+    const curSpeed=this.stopped?0:this.lastGoodSpeed*(this.accelEnergy.length>0?Math.min(1.2,0.5+this.accelEnergy[this.accelEnergy.length-1]):0.95);
+    this.speedHistory.push(curSpeed);
+    if(this.speedHistory.length>60)this.speedHistory.shift();
+
+    // Detect significant turn (heading change > 20° from initial)
+    if(this.headingHistory.length>3){
+      let dH=this.headingHistory[this.headingHistory.length-1]-this.lastGoodHeading;
+      if(dH>180)dH-=360;if(dH<-180)dH+=360;
+      this.turnDetected=Math.abs(dH)>20;
+    }
+  },
+
+  // ═══ SMART RADIUS: uses sensor data to SHRINK the circle ═══
   getRadius(){
     if(!this.active||!this.lastGoodPos)return Infinity;
-    const elapsed=(performance.now()-this.lastGoodTime)/1000; // seconds blind
-    // Max distance = speed × time + 0.5 × maxAccel × time²
-    // (accounts for possible acceleration after GPS loss)
-    const maxDist=this.lastGoodSpeed*elapsed+0.5*this.maxAccel*elapsed*elapsed;
-    // Cap at reasonable maximum (100km — beyond this, everything is uncertain)
-    return Math.min(maxDist,100000);
+    const elapsed=(performance.now()-this.lastGoodTime)/1000;
+
+    // Layer 1: Physics maximum (speed × time + acceleration margin)
+    const physicsMax=this.lastGoodSpeed*elapsed+0.5*this.maxAccel*elapsed*elapsed;
+
+    // Layer 2: Speed decay — if sensors show no acceleration, speed is decaying
+    let estimatedDist=0;
+    if(this.speedHistory.length>0){
+      // Integrate estimated speed over time
+      for(let i=0;i<this.speedHistory.length;i++)estimatedDist+=this.speedHistory[i];
+    }else{
+      estimatedDist=physicsMax;
+    }
+    // Estimated distance traveled is tighter than physics max
+    const speedBound=Math.max(estimatedDist*1.3,50); // 30% margin + 50m minimum
+
+    // Layer 3: If stopped (ZUPT detected) — freeze radius
+    const zuptBound=this.stopped?Math.max(estimatedDist+20,50):Infinity;
+
+    // Layer 4: Cell tower constraint
+    let cellBound=Infinity;
+    const cellPos=UTIN.predict();
+    if(cellPos&&cellPos.acc)cellBound=cellPos.acc*2; // 2× cell accuracy
+
+    // Take the SMALLEST of all bounds (constraint intersection)
+    const smartRadius=Math.min(physicsMax,speedBound,zuptBound,cellBound);
+    return Math.min(smartRadius,100000);
   },
 
-  // Get the constraint center — blend last GPS with cell triangulation
+  // ═══ SMART CENTER: predicted position along heading ═══
   getCenter(){
     if(!this.lastGoodPos)return null;
-    // Try cell tower triangulation for a tighter center
+    const elapsed=(performance.now()-this.lastGoodTime)/1000;
+
+    // Start with last GPS position
+    let cLat=this.lastGoodPos.lat,cLon=this.lastGoodPos.lon;
+
+    // Project forward along heading by estimated distance
+    if(!this.stopped&&this.speedHistory.length>0){
+      let dist=0;
+      for(let i=0;i<this.speedHistory.length;i++)dist+=this.speedHistory[i];
+      // Use current heading (tracked by compass/gyro)
+      const hdg=(this.headingHistory.length>0?this.headingHistory[this.headingHistory.length-1]:this.lastGoodHeading)*Math.PI/180;
+      cLat+=dist*Math.cos(hdg)/111320;
+      cLon+=dist*Math.sin(hdg)/(111320*Math.cos(cLat*Math.PI/180));
+    }
+
+    // Blend with cell tower triangulation if available
     const cellPos=UTIN.predict();
     if(cellPos){
-      // Blend: 50% last GPS + 50% current cell triangulation
-      // Cell gives us a more recent position estimate
-      return{lat:this.lastGoodPos.lat*0.5+cellPos.lat*0.5,
-             lon:this.lastGoodPos.lon*0.5+cellPos.lon*0.5};
+      cLat=cLat*0.6+cellPos.lat*0.4;
+      cLon=cLon*0.6+cellPos.lon*0.4;
     }
-    return this.lastGoodPos;
+    return{lat:cLat,lon:cLon};
   },
 
-  // CONSTRAIN a formula's prediction to stay within the envelope
-  // Returns the constrained position (may be unchanged if already inside)
   constrain(predicted){
     if(!this.active||!this.lastGoodPos||!predicted)return predicted;
     this.total++;
@@ -2107,11 +2170,9 @@ const PUE={
     const radius=this.getRadius();
     const dist=hav(predicted,center);
 
-    if(dist<=radius)return predicted; // inside envelope — prediction is valid
+    if(dist<=radius)return predicted;
 
-    // OUTSIDE envelope — pull back to envelope boundary
     this.enforced++;
-    // Move predicted position toward center, placing it on the boundary
     const ratio=radius/dist;
     return{
       lat:center.lat+(predicted.lat-center.lat)*ratio,
@@ -2119,14 +2180,26 @@ const PUE={
     };
   },
 
-  // Stats for display
   stats(){
+    const elapsed=this.active?(performance.now()-this.lastGoodTime)/1000:0;
+    // Calculate all layer radii for display
+    const physMax=this.lastGoodSpeed*elapsed+0.5*this.maxAccel*elapsed*elapsed;
+    let estDist=0;for(let i=0;i<this.speedHistory.length;i++)estDist+=this.speedHistory[i];
+    const cellPos=UTIN.predict();
     return{
       radius:this.active?this.getRadius():0,
-      elapsed:this.active?(performance.now()-this.lastGoodTime)/1000:0,
-      speed:this.lastGoodSpeed,
-      enforced:this.enforced,
-      total:this.total,
+      physicsMax:Math.round(physMax),
+      speedBound:Math.round(estDist*1.3),
+      cellBound:cellPos&&cellPos.acc?Math.round(cellPos.acc*2):0,
+      stopped:this.stopped,
+      turnDetected:this.turnDetected,
+      elapsed,speed:this.lastGoodSpeed,
+      enforced:this.enforced,total:this.total,
+      pct:this.total>0?Math.round(this.enforced/this.total*100):0,
+      headingDrift:this.headingHistory.length>1?Math.round(this.headingHistory[this.headingHistory.length-1]-this.lastGoodHeading):0
+    };
+  }
+};
       pct:this.total>0?Math.round(this.enforced/this.total*100):0
     };
   }
@@ -2245,6 +2318,7 @@ function tick(){
   if(phase==='jammed'||phase==='spoofed'){
     if(drPos){
       // ALL formulas predict independently — no forced blending
+      PUE.updateSensors(); // Track heading, speed, stops for smart shrinking
       FISH.tick(dt);
       ANIMAL.ant.detectStep(accel.x,accel.y,accel.z);
       ANIMAL.predictDenied(drPos,dt);
@@ -2396,7 +2470,7 @@ function tick(){
       const drift=hav(drPos,gpsTrue);$('ovErr').textContent=drift.toFixed(1)+'m';
       // Show PUE stats
       const ps=PUE.stats();
-      $('ovSrc').textContent='PUE:'+Math.round(ps.radius)+'m '+ps.enforced+'/'+ps.total+' bound';
+      $('ovSrc').textContent='R:'+Math.round(ps.radius)+'m'+(ps.stopped?' STOP':'')+(ps.turnDetected?' TURN':'')+' ph:'+ps.physicsMax+'m'+' '+ps.enforced+'/'+ps.total;
     }
     // Only pan during recording/denial, and only if moved >30m
     if(uiFrame%10===0&&phase!=='idle'&&(drPos||gpsSys)){
