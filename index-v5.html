@@ -1865,6 +1865,142 @@ const ROUTES={
 };
 
 // ═══════════════════════════════════════
+// FORMULA AGENTS — 10 agents per formula, each with different
+// sensor parameter tweaks. Natural selection finds optimal
+// parameters for EACH formula on THIS specific device.
+// 47 formulas × 10 agents = 470 evolving parameter sets.
+// ═══════════════════════════════════════
+const FAGENTS={
+  N:10,            // agents per formula
+  pools:[],        // pools[formulaIdx] = [{params,err,errAvg,errHistory,pos},...]
+  generation:0,
+  initialized:false,
+
+  init(){
+    this.pools=[];
+    F.forEach(()=>{
+      const pool=[];
+      for(let a=0;a<this.N;a++){
+        pool.push(this.randomParams());
+      }
+      this.pools.push(pool);
+    });
+    this.generation=0;this.initialized=true;
+  },
+
+  randomParams(){
+    return{
+      aScl:1.0+(Math.random()-0.5)*0.4,   // accel scale 0.8-1.2
+      aBx:(Math.random()-0.5)*0.2,          // accel bias X offset
+      aBy:(Math.random()-0.5)*0.2,          // accel bias Y offset
+      gScl:1.0+(Math.random()-0.5)*0.4,     // gyro scale
+      cOff:(Math.random()-0.5)*10,          // compass offset -5° to +5°
+      sMul:1.0+(Math.random()-0.5)*0.3,     // speed multiplier
+      hOff:(Math.random()-0.5)*8,           // heading offset degrees
+      err:999,errAvg:999,errHistory:[],pos:null
+    };
+  },
+
+  // Run formula fi with agent's tweaked sensor values
+  predict(fi,agent,pos,dt){
+    // Save globals
+    const sA={...accel},sG={...gyro},sC=compass;
+    // Apply agent's parameter tweaks to sensors
+    accel={x:(accel.x-agent.aBx)*agent.aScl,y:(accel.y-agent.aBy)*agent.aScl,z:accel.z};
+    gyro={x:gyro.x*agent.gScl,y:gyro.y*agent.gScl,z:gyro.z*agent.gScl};
+    compass=compass+agent.cOff;
+    // Run the actual formula with tweaked sensor data
+    let result=F[fi]._rawPredict.call(F[fi],{...pos},dt);
+    // Apply speed + heading corrections to the output
+    if(result&&pos){
+      const dLat=(result.lat-pos.lat)*agent.sMul;
+      const dLon=(result.lon-pos.lon)*agent.sMul;
+      const h=agent.hOff*Math.PI/180;
+      result={
+        lat:pos.lat+dLat*Math.cos(h)-dLon*Math.sin(h),
+        lon:pos.lon+dLat*Math.sin(h)+dLon*Math.cos(h)
+      };
+    }
+    // Restore globals
+    accel=sA;gyro=sG;compass=sC;
+    return result||pos;
+  },
+
+  // Score all agents against GPS truth
+  score(gps,dt){
+    if(!gps||!this.initialized)return;
+    this.pools.forEach((pool,fi)=>{
+      pool.forEach(agent=>{
+        if(!agent.pos){agent.pos={lat:gps.lat,lon:gps.lon};return;}
+        const predicted=this.predict(fi,agent,agent.pos,dt);
+        if(predicted){
+          agent.err=hav(predicted,gps);
+          agent.errHistory.push(agent.err);
+          if(agent.errHistory.length>20)agent.errHistory.shift();
+          agent.errAvg=agent.errHistory.reduce((s,e)=>s+e,0)/agent.errHistory.length;
+        }
+        agent.pos={lat:gps.lat,lon:gps.lon};
+      });
+    });
+    this.generation++;
+    if(this.generation%10===0)this.evolve();
+    if(this.generation%20===0)this.applyBest();
+  },
+
+  // Natural selection: per formula, kill worst 2, breed from best 2
+  evolve(){
+    this.pools.forEach(pool=>{
+      pool.sort((a,b)=>a.errAvg-b.errAvg);
+      const n=pool.length;
+      for(let i=0;i<2&&n>4;i++){
+        const parent=pool[Math.floor(Math.random()*2)];
+        const child={...parent,errHistory:[],err:999,errAvg:999,pos:null};
+        // Mutate each parameter slightly
+        child.aScl=Math.max(0.5,Math.min(1.5,child.aScl+(Math.random()-0.5)*0.1));
+        child.aBx+=(Math.random()-0.5)*0.05;
+        child.aBy+=(Math.random()-0.5)*0.05;
+        child.gScl=Math.max(0.5,Math.min(1.5,child.gScl+(Math.random()-0.5)*0.1));
+        child.cOff+=(Math.random()-0.5)*2;
+        child.sMul=Math.max(0.5,Math.min(1.5,child.sMul+(Math.random()-0.5)*0.06));
+        child.hOff+=(Math.random()-0.5)*2;
+        pool[n-1-i]=child;
+      }
+    });
+  },
+
+  // Apply best agent's learned parameters back to the formula's correction system
+  applyBest(){
+    this.pools.forEach((pool,fi)=>{
+      pool.sort((a,b)=>a.errAvg-b.errAvg);
+      const best=pool[0];
+      if(best.errAvg<999&&best.errAvg<F[fi].errAvg){
+        F[fi].speedScale=best.sMul;
+        F[fi].headingOff=best.hOff;
+      }
+    });
+  },
+
+  // Get best agent's error for each formula (for display)
+  bestErrors(){
+    return this.pools.map((pool,fi)=>{
+      pool.sort((a,b)=>a.errAvg-b.errAvg);
+      return{formula:F[fi].name,bestErr:pool[0].errAvg,bestParams:pool[0],spread:pool[pool.length-1].errAvg-pool[0].errAvg};
+    });
+  },
+
+  // Stats
+  stats(){
+    const total=this.pools.length*this.N;
+    let improved=0;
+    this.pools.forEach((pool,fi)=>{
+      pool.sort((a,b)=>a.errAvg-b.errAvg);
+      if(pool[0].errAvg<F[fi].errAvg&&pool[0].errAvg<999)improved++;
+    });
+    return{agents:total,formulas:this.pools.length,generation:this.generation,improved};
+  }
+};
+
+// ═══════════════════════════════════════
 // TERRAIN FINGERPRINT — mag+baro+cell pattern matching
 // ═══════════════════════════════════════
 const TERRAIN={
@@ -2083,6 +2219,7 @@ function tick(){
     scoreFormulas(gpsSys,dt);
     // Score auto-combos against GPS
     COMBOS.score(gpsSys,dt);
+    FAGENTS.score(gpsSys,dt);
     // Animal methods: record all environmental data at this GPS position
     ANIMAL.recordAll(gpsSys.lat,gpsSys.lon,accel,dt);
     // Update PUE reference (so when GPS is lost, we know last good position + speed)
@@ -2220,10 +2357,16 @@ function tick(){
       $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'err');
       // Lat/Lon column
       const fp=$('fp'+i);if(fp)fp.textContent=f.pos?f.pos.lat.toFixed(6)+','+f.pos.lon.toFixed(6):'--';
-      // Status: RUNNING/BEST/WAITING
+      // Status: RUNNING/BEST/WAITING + agent tuning info
       const fs=$('fs'+i);const running=f.errAvg<999;
-      if(i===bi){fs.textContent='BEST';fs.className='f-run';$('f'+i).className='best';}
-      else if(running){fs.textContent='RUNNING';fs.className='f-run';$('f'+i).className='';}
+      // Show agent-tuned error if available
+      let agentInfo='';
+      if(FAGENTS.initialized&&FAGENTS.pools[i]){
+        const ap=[...FAGENTS.pools[i]].sort((a,b)=>a.errAvg-b.errAvg);
+        if(ap[0].errAvg<999)agentInfo=' A:'+ap[0].errAvg.toFixed(1)+'m';
+      }
+      if(i===bi){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
+      else if(running){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
       else{fs.textContent='WAITING';fs.className='f-wait';$('f'+i).className='';}
     });
     // Source boxes red/green
@@ -2298,8 +2441,9 @@ function startRec(){
   buildFormulaTable();
   FISH.init(gpsTrue.lat,gpsTrue.lon);
   COMBOS.init();
+  FAGENTS.init();
   tickIv=setInterval(tick,1000);
-  log('Recording — '+F.length+' formulas + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish agents'+(boardConnected?' [BLE HARDWARE]':' [PHONE]'),'var(--green)');
+  log('Recording — '+F.length+' formulas × '+FAGENTS.N+' agents = '+F.length*FAGENTS.N+' parameter variants + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish'+(boardConnected?' [BLE]':' [PHONE]'),'var(--green)');
 }
 function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
@@ -2505,7 +2649,7 @@ function updateDataTab(){
     </div>`).join('');
   }
   // Fish info
-  if(FISH.schools&&FISH.schools.length)$('fishInfo').textContent=FISH.SCHOOLS+'×'+FISH.AGENTS_PER+'='+FISH.SCHOOLS*FISH.AGENTS_PER+' fish. Gen:'+FISH.generation+' Best:#'+FISH.bestSchoolIdx;
+  if(FISH.schools&&FISH.schools.length)$('fishInfo').textContent=FISH.SCHOOLS+'×'+FISH.AGENTS_PER+'='+FISH.SCHOOLS*FISH.AGENTS_PER+' fish Gen:'+FISH.generation+' | Formula Agents: '+F.length+'×'+FAGENTS.N+'='+F.length*FAGENTS.N+' Gen:'+FAGENTS.generation+(FAGENTS.initialized?' ('+FAGENTS.stats().improved+' formulas improved)':'');
   $('comboInfo').textContent='Pool:'+COMBOS.pool.length+' Gen:'+COMBOS.generation+(COMBOS.pool.length?' Best:'+COMBOS.bestDesc():'');
   $('fCount').textContent=F.length;
   // Storage estimate
