@@ -2403,6 +2403,33 @@ function tick(){
     if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
     INS.update(accel,gyro,dt);
     scoreFormulas(gpsSys,dt);
+    // ═══ 10m TRAINING CONSTRAINT: force formulas within 10m of GPS during recording ═══
+    // This is the "tight leash" — formulas that drift >10m get pulled back
+    // This makes evolution MUCH faster because bad predictions are immediately corrected
+    F.forEach(f=>{
+      if(f.pos&&gpsSys){
+        const dist=hav(f.pos,gpsSys);
+        if(dist>10){
+          const ratio=10/dist;
+          f.pos={lat:gpsSys.lat+(f.pos.lat-gpsSys.lat)*ratio,lon:gpsSys.lon+(f.pos.lon-gpsSys.lon)*ratio};
+        }
+      }
+    });
+    // ═══ Show cell tower triangulation on map ═══
+    const cellTri=UTIN.predict();
+    if(cellTri){
+      const cll=[cellTri.lat,cellTri.lon];
+      const cAcc=cellTri.acc||200;
+      if(!UTIN._marker){
+        UTIN._marker=L.circleMarker(cll,{radius:4,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.7,weight:1}).addTo(map);
+        UTIN._marker.bindTooltip('Cell Tri: '+cAcc+'m',{permanent:false,direction:'top'});
+        UTIN._circle=L.circle(cll,{radius:cAcc,color:'#e8a832',fillOpacity:.03,weight:1,dashArray:'4,4'}).addTo(map);
+      }else{
+        UTIN._marker.setLatLng(cll);
+        UTIN._marker.setTooltipContent('Cell Tri: '+cAcc+'m ('+((cellTri.towers||0))+' towers)');
+        UTIN._circle.setLatLng(cll);UTIN._circle.setRadius(cAcc);
+      }
+    }
     // Score every formula and layer for the scoring engine
     F.forEach(f=>{if(f.errAvg<999)SCORE.scoreFormula(f.name,f.errAvg);});
     if(FISH.schools&&FISH.schools.length){const bs=FISH.schools[FISH.bestSchoolIdx];if(bs&&bs.avgErr<999)SCORE.scoreLayer('fish',bs.avgErr);}
@@ -2438,7 +2465,16 @@ function tick(){
   if(phase==='jammed'||phase==='spoofed'){
     if(drPos){
       // ALL formulas predict independently — no forced blending
-      PUE.updateSensors(); // Track heading, speed, stops for smart shrinking
+      PUE.updateSensors();
+      // Update cell tower triangulation on map during denial too
+      const cellDenied=UTIN.predict();
+      if(cellDenied){
+        const cll=[cellDenied.lat,cellDenied.lon];const cAcc=cellDenied.acc||200;
+        if(!UTIN._marker){
+          UTIN._marker=L.circleMarker(cll,{radius:4,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.7,weight:1}).addTo(map);
+          UTIN._circle=L.circle(cll,{radius:cAcc,color:'#e8a832',fillOpacity:.03,weight:1,dashArray:'4,4'}).addTo(map);
+        }else{UTIN._marker.setLatLng(cll);UTIN._circle.setLatLng(cll);UTIN._circle.setRadius(cAcc);}
+      } // Track heading, speed, stops for smart shrinking
       FISH.tick(dt);
       ANIMAL.ant.detectStep(accel.x,accel.y,accel.z);
       ANIMAL.predictDenied(drPos,dt);
