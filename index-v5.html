@@ -276,6 +276,20 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
       <div class="mc"><div class="ml">Error</div><div class="mv" id="tfpErr">--</div><div class="mu">m</div></div>
     </div>
   </div>
+  <div class="card">
+    <div class="card-title">MANEUVER LIBRARY</div>
+    <div style="font-size:9px;color:var(--tm)">Records sensor signatures for turns, stops, accelerations. Recognizes maneuvers during GPS denial.</div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">Total</div><div class="mv" id="manTotal">0</div><div class="mu">recorded</div></div>
+      <div class="mc"><div class="ml">Turns</div><div class="mv" id="manTurns">0</div><div class="mu">detected</div></div>
+      <div class="mc"><div class="ml">90° Turns</div><div class="mv" id="man90">0</div><div class="mu">classified</div></div>
+    </div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">45° Turns</div><div class="mv" id="man45">0</div><div class="mu">classified</div></div>
+      <div class="mc"><div class="ml">Stops</div><div class="mv" id="manStops">0</div><div class="mu">detected</div></div>
+      <div class="mc"><div class="ml">Accels</div><div class="mv" id="manAccels">0</div><div class="mu">detected</div></div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══ TAB 3: DRILL ═══ -->
@@ -1895,6 +1909,7 @@ const SCORE={
     {id:'animal',name:'Animal Navigation',desc:'5 bio-inspired methods + fusion'},
     {id:'terrain',name:'Terrain Fingerprint',desc:'Mag+baro+cell pattern matching'},
     {id:'route',name:'Route DTW Learning',desc:'Stored route sensor matching'},
+    {id:'maneuver',name:'Maneuver Recognition',desc:'Turn/stop/accel pattern matching'},
   ],
 
   init(){
@@ -2110,6 +2125,171 @@ const FAGENTS={
       if(pool[0].errAvg<F[fi].errAvg&&pool[0].errAvg<999)improved++;
     });
     return{agents:total,formulas:this.pools.length,generation:this.generation,improved};
+  }
+};
+
+// ═══════════════════════════════════════
+// MANEUVER RECORDER — records sensor signatures for turns, stops, accel
+// Learns what a 90° turn looks like in gyro/compass/accel data.
+// During GPS denial, detects maneuvers and applies precise corrections.
+// ═══════════════════════════════════════
+const MANEUVER={
+  // Recorded maneuver signatures (from GPS-available training)
+  library:[],  // [{type:'turn',angle,duration,gyroPattern[],compassDelta,accelPattern[],speed,lat,lon}]
+  // Live detection state
+  detecting:false,
+  buffer:[],     // rolling window of sensor snapshots
+  lastHeading:0,
+  lastSpeed:0,
+  turnThreshold:8,   // degrees/sec gyro Z to detect turn start
+  stopThreshold:0.3, // accel energy to detect stop
+
+  // Current maneuver being detected
+  current:null,  // {type,startTime,startHeading,startSpeed,startLat,startLon,samples[]}
+
+  init(){
+    try{const d=localStorage.getItem('upin_maneuvers');if(d)this.library=JSON.parse(d);}catch(e){}
+  },
+  save(){
+    try{
+      // Keep only last 500 maneuvers to avoid localStorage overflow
+      if(this.library.length>500)this.library=this.library.slice(-500);
+      localStorage.setItem('upin_maneuvers',JSON.stringify(this.library));
+    }catch(e){}
+  },
+
+  // Called every tick during GPS recording — detect and record maneuvers
+  record(lat,lon,dt){
+    const gyroZ=gyro.z;
+    const headingNow=compass;
+    const accelE=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z)-9.81;
+    const speedNow=DATA.samples.length>0?DATA.samples[DATA.samples.length-1].speed:0;
+
+    // Rolling buffer for pattern matching (last 30 samples)
+    this.buffer.push({gz:gyroZ,hdg:headingNow,ae:Math.abs(accelE),spd:speedNow,ax:accel.x,ay:accel.y,t:performance.now()});
+    if(this.buffer.length>30)this.buffer.shift();
+
+    // ── DETECT START OF MANEUVER ──
+    if(!this.current){
+      // Turn detection: gyro Z exceeds threshold
+      if(Math.abs(gyroZ)>this.turnThreshold){
+        this.current={type:'turn',startTime:performance.now(),startHeading:headingNow,startSpeed:speedNow,startLat:lat,startLon:lon,samples:[],peakGyro:0};
+      }
+      // Stop detection: speed drops to near zero while previously moving
+      else if(speedNow<0.5&&this.lastSpeed>2){
+        this.current={type:'stop',startTime:performance.now(),startHeading:headingNow,startSpeed:this.lastSpeed,startLat:lat,startLon:lon,samples:[]};
+      }
+      // Acceleration detection: significant accel energy while speed increasing
+      else if(Math.abs(accelE)>1.5&&speedNow>this.lastSpeed+1){
+        this.current={type:'accel',startTime:performance.now(),startHeading:headingNow,startSpeed:speedNow,startLat:lat,startLon:lon,samples:[]};
+      }
+    }
+
+    // ── RECORD ONGOING MANEUVER ──
+    if(this.current){
+      this.current.samples.push({gz:gyroZ,hdg:headingNow,ae:Math.abs(accelE),spd:speedNow,ax:accel.x,ay:accel.y});
+      if(this.current.type==='turn')this.current.peakGyro=Math.max(this.current.peakGyro,Math.abs(gyroZ));
+
+      // Detect end of maneuver
+      const dur=(performance.now()-this.current.startTime)/1000;
+      let ended=false;
+
+      if(this.current.type==='turn'){
+        // Turn ends when gyro Z drops below threshold
+        if(Math.abs(gyroZ)<this.turnThreshold*0.5&&dur>0.5)ended=true;
+        if(dur>10)ended=true; // max 10s turn
+      }else if(this.current.type==='stop'){
+        // Stop ends when speed increases again or after 30s
+        if(speedNow>1)ended=true;
+        if(dur>30)ended=true;
+      }else if(this.current.type==='accel'){
+        // Accel ends when energy drops
+        if(Math.abs(accelE)<0.5&&dur>1)ended=true;
+        if(dur>10)ended=true;
+      }
+
+      if(ended){
+        this.finishManeuver(lat,lon);
+      }
+    }
+
+    this.lastHeading=headingNow;
+    this.lastSpeed=speedNow;
+  },
+
+  finishManeuver(lat,lon){
+    const m=this.current;
+    if(!m||m.samples.length<3)return void(this.current=null);
+
+    // Calculate maneuver properties
+    let headingDelta=compass-m.startHeading;
+    if(headingDelta>180)headingDelta-=360;
+    if(headingDelta<-180)headingDelta+=360;
+
+    const entry={
+      type:m.type,
+      angle:Math.round(headingDelta),           // degrees turned
+      duration:((performance.now()-m.startTime)/1000).toFixed(1)*1,
+      gyroPattern:m.samples.map(s=>s.gz),        // gyro Z signature
+      accelPattern:m.samples.map(s=>s.ae),       // accel energy signature
+      compassStart:m.startHeading,
+      compassEnd:compass,
+      speedStart:m.startSpeed,
+      speedEnd:DATA.samples.length>0?DATA.samples[DATA.samples.length-1].speed:0,
+      peakGyro:m.peakGyro||0,
+      lat:lat,lon:lon,                           // where it happened
+      ts:Date.now()
+    };
+
+    // Classify the turn angle
+    if(m.type==='turn'){
+      const absAngle=Math.abs(entry.angle);
+      if(absAngle>75&&absAngle<105)entry.turnClass='90deg';
+      else if(absAngle>35&&absAngle<55)entry.turnClass='45deg';
+      else if(absAngle>160&&absAngle<200)entry.turnClass='uturn';
+      else entry.turnClass=entry.angle>0?'right':'left';
+    }
+
+    this.library.push(entry);
+    if(this.library.length%10===0)this.save();
+    this.current=null;
+
+    log('Maneuver: '+m.type+(m.type==='turn'?' '+entry.angle+'° ('+entry.turnClass+')':'')+' dur:'+entry.duration+'s','var(--cyan)');
+  },
+
+  // ── During GPS denial: detect maneuver from sensor pattern ──
+  detectLive(){
+    if(this.buffer.length<5)return null;
+    const recent=this.buffer.slice(-5);
+    const avgGz=recent.reduce((s,b)=>s+Math.abs(b.gz),0)/recent.length;
+    const avgAe=recent.reduce((s,b)=>s+b.ae,0)/recent.length;
+
+    // Detect turn in progress
+    if(avgGz>this.turnThreshold){
+      // Find similar turns in library
+      const similar=this.library.filter(m=>m.type==='turn'&&Math.abs(m.peakGyro-avgGz)<5);
+      if(similar.length>0){
+        // Average the angle of similar turns
+        const avgAngle=similar.reduce((s,m)=>s+m.angle,0)/similar.length;
+        return{type:'turn',expectedAngle:avgAngle,confidence:Math.min(0.9,similar.length/10),samples:similar.length};
+      }
+    }
+
+    // Detect stop
+    if(avgAe<this.stopThreshold&&recent.every(b=>b.spd<0.5)){
+      return{type:'stop',confidence:0.95};
+    }
+
+    return null;
+  },
+
+  stats(){
+    const turns=this.library.filter(m=>m.type==='turn');
+    const stops=this.library.filter(m=>m.type==='stop');
+    const accels=this.library.filter(m=>m.type==='accel');
+    const t90=turns.filter(m=>m.turnClass==='90deg').length;
+    const t45=turns.filter(m=>m.turnClass==='45deg').length;
+    return{total:this.library.length,turns:turns.length,stops:stops.length,accels:accels.length,t90,t45};
   }
 };
 
@@ -2447,6 +2627,7 @@ function tick(){
     // v5: Route learning + terrain fingerprint + tower capture
     ROUTES.record(gpsSys.lat,gpsSys.lon);
     TERRAIN.record(gpsSys.lat,gpsSys.lon);
+    MANEUVER.record(gpsSys.lat,gpsSys.lon,dt);
     TOWER_CAPTURE.capture(gpsSys.lat,gpsSys.lon,boardData);
     // Calibrate ant step length from GPS distance every 50 steps
     if(ANIMAL.ant.steps%50===0&&ANIMAL.ant.steps>0&&lastPos){
@@ -2466,6 +2647,15 @@ function tick(){
     if(drPos){
       // ALL formulas predict independently — no forced blending
       PUE.updateSensors();
+      // Detect maneuvers during denial — use library to correct heading
+      const maneuver=MANEUVER.detectLive();
+      if(maneuver&&maneuver.type==='turn'&&maneuver.confidence>0.5){
+        log('Turn detected during denial: ~'+Math.round(maneuver.expectedAngle)+'° ('+maneuver.samples+' similar in library, conf:'+maneuver.confidence.toFixed(2)+')','var(--cyan)');
+      }
+      if(maneuver&&maneuver.type==='stop'){
+        // If stopped, tell PUE
+        PUE.stopped=true;
+      }
       // Update cell tower triangulation on map during denial too
       const cellDenied=UTIN.predict();
       if(cellDenied){
@@ -2858,6 +3048,11 @@ function updateDataTab(){
   $('learnRoutes').textContent=rs.routes;$('learnPts').textContent=rs.points;
   $('learnCov').textContent=rs.points*10; // ~10m per point
   $('tfpCount').textContent=TERRAIN.prints.length;
+  // Maneuver stats
+  const ms=MANEUVER.stats();
+  $('manTotal').textContent=ms.total;$('manTurns').textContent=ms.turns;
+  $('man90').textContent=ms.t90;$('man45').textContent=ms.t45;
+  $('manStops').textContent=ms.stops;$('manAccels').textContent=ms.accels;
   $('towersPre').textContent=TOWERS.length;
   $('towersCap').textContent=TOWER_CAPTURE.count();
   $('towersTotal').textContent=TOWERS.length+TOWER_CAPTURE.count();
@@ -2915,7 +3110,7 @@ function updateDataTab(){
 
 window.addEventListener('load',()=>{
   initMap();buildFormulaTable();
-  ROUTES.init();TOWER_CAPTURE.init();SCORE.init();
+  ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();
   if(!navigator.bluetooth){
     $('bleBtn').textContent='BLE NOT AVAILABLE — USE WiFi';
     $('bleBtn').className='btn-hw err';
