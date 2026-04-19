@@ -235,11 +235,11 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tp)
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="towers-data.js"></script>
 <script>
-const V=(()=>{
+var V=(()=>{
 // ═══════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════
-let map,marker,circle,gpsLine,drLine;
+let map,marker,circle,gpsLine,drLine,triMarker,triCircle;
 const MAX_TRAIL=200;
 let gpsTrail=[],drTrail=[];
 let gpsTrue=null,gpsSys=null,drPos=null;
@@ -249,6 +249,7 @@ let lastSensorTime=0;
 let compass=0,pitch=0,roll=0,gravity={x:0,y:0,z:9.8};
 let pressure=0,temp=0,baroAlt=0,laserMm=0;
 let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
+let boardTowerList=[];
 let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
 let drills=[],stepCount=0,lastStepT=0;
 let tickIv=null,alertIv=null,simStep=0,uiFrame=0;
@@ -631,19 +632,24 @@ function processBoardData(d){
     $('srcLaserd').textContent=(laserMm/1000).toFixed(2)+'m';
     $('srcLaserBox').className='src s-on';
   }
-  // Cell towers
+  // Cell towers — parse real CID+RSSI for triangulation
+  boardTowerList=[];
   if(d.cell4g){
     cellTowers4G=d.cell4g.towers||0;
     $('srcCell4G').innerHTML=(d.cell4g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
     $('srcCell4Gd').textContent=d.cell4g.inet?'4G inet':'no inet';
     $('srcCell4GBox').className='src '+(d.cell4g.ok?'s-on':'s-off');
+    if(d.cell4g.cid)boardTowerList.push({mcc:d.cell4g.mcc||404,mnc:d.cell4g.mnc,cid:d.cell4g.cid,lac:d.cell4g.tac||0,rssi:d.cell4g.rssi||-70,radio:'4G'});
+    if(d.cell4g.list)d.cell4g.list.forEach(t=>boardTowerList.push({mcc:t.mcc||404,mnc:t.mnc,cid:t.cid,lac:t.lac||t.tac||0,rssi:t.rssi||-70,radio:'4G'}));
   }
   if(d.cell2g){
     cellTowers2G=d.cell2g.towers||0;
     $('srcCell2G').innerHTML=(d.cell2g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
     $('srcCell2Gd').textContent=cellTowers2G+' towers';
     $('srcCell2GBox').className='src '+(d.cell2g.ok?'s-on':'s-off');
+    if(d.cell2g.list)d.cell2g.list.forEach(t=>boardTowerList.push({mcc:t.mcc||404,mnc:t.mnc,cid:t.cid,lac:t.lac||0,rssi:t.rssi||-85,radio:'2G'}));
   }
+  if(boardTowerList.length>0)UTIN.updateFromBoard(boardTowerList);
   // WiFi APs
   if(d.wifi){
     wifiAPs=d.wifi.aps||0;
@@ -763,7 +769,25 @@ const INS={
 // ═══════════════════════════════════════
 // TOWERS loaded from towers-data.js (44,279 real Indian towers)
 
+const TOWER_CID_IDX=(()=>{const idx=new Map();TOWERS.forEach(t=>{idx.set(t.c,t);});return idx;})();
+
 const UTIN={
+  boardResult:null,
+  lookupCID(cid){return TOWER_CID_IDX.get(cid)||null;},
+  updateFromBoard(towerList){
+    const matched=[];
+    towerList.forEach(bt=>{
+      const db=this.lookupCID(bt.cid);
+      if(db)matched.push({lat:db.l,lon:db.o,mnc:db.m,cid:bt.cid,signal:bt.rssi,radio:bt.radio,dist:0});
+    });
+    if(matched.length>=2){
+      this.boardResult=this.trilaterate(matched);
+      if(this.boardResult)this.boardResult.matched=matched.length;
+    }else if(matched.length===1){
+      this.boardResult={lat:matched[0].lat,lon:matched[0].lon,acc:2000,towers:1,matched:1};
+    }
+    if(matched.length>0)log('Tower match: '+matched.length+'/'+towerList.length+' CIDs in DB'+(this.boardResult?' → tri acc:'+this.boardResult.acc+'m':''),'var(--amber)');
+  },
   findNear(lat,lon,n=7){
     return TOWERS.map(t=>({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,
       dist:hav({lat,lon},{lat:t.l,lon:t.o}),
@@ -826,6 +850,7 @@ const UTIN={
     }
   },
   predict(){
+    if(this.boardResult)return this.boardResult;
     return this.lastTowers&&this.lastTowers.length>=3?this.trilaterate(this.lastTowers):null;
   }
 };
@@ -927,24 +952,19 @@ F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;con
 // F23: Barometric Altitude + Velocity (board has real BMP280)
 F.push(mkF('Baro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(5);if(!v)return pos;return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};}));
 
-// F24: Real Cell Tower Triangulation — uses actual tower data from A7670C/SIM900
-// Unlike simulated UTIN, this parses real MCC/MNC/LAC/CellID from the board
+// F24: Real Cell Tower Triangulation — uses actual CID+RSSI from A7670C/SIM900
 F.push(mkF('Real Cell Tri',function(pos,dt){
   if(!pos)return pos;
-  // When board sends real tower data, use it for triangulation
-  // For now: use UTIN simulated + blend with velocity
-  // When boardData has towers4g/towers2g arrays, parse and trilaterate
   const towerPos=UTIN.predict();
   const vel=velFromGPS(5);
   if(!towerPos&&!vel)return pos;
   if(!towerPos)return{lat:pos.lat+vel.vLat*dt,lon:pos.lon+vel.vLon*dt};
   if(!vel)return{lat:towerPos.lat,lon:towerPos.lon};
-  // Real tower count from board gives us confidence
+  const isReal=!!UTIN.boardResult;
   const towerCount=(cellTowers4G||0)+(cellTowers2G||0);
-  const towerConf=Math.min(0.7,towerCount*0.1); // more towers = more weight
-  const velConf=1-towerConf;
+  const towerConf=isReal?Math.min(0.85,0.3+towerCount*0.08):Math.min(0.5,towerCount*0.08);
   const vP={lat:pos.lat+vel.vLat*dt,lon:pos.lon+vel.vLon*dt};
-  return{lat:vP.lat*velConf+towerPos.lat*towerConf,lon:vP.lon*velConf+towerPos.lon*towerConf};
+  return{lat:vP.lat*(1-towerConf)+towerPos.lat*towerConf,lon:vP.lon*(1-towerConf)+towerPos.lon*towerConf};
 }));
 
 // F25: Laser Velocity — VL53L1X range changes over time = speed + direction
@@ -1895,6 +1915,20 @@ function tick(){
         else{PUE._circle.setLatLng([pc.lat,pc.lon]);PUE._circle.setRadius(pr);}
       }
 
+      // Triangulation dot + circle on map
+      const triPos=UTIN.predict();
+      if(triPos){
+        if(!triMarker){
+          triMarker=L.circleMarker([triPos.lat,triPos.lon],{radius:6,color:'#FF8C00',fillColor:'#FF8C00',fillOpacity:0.8,weight:2}).addTo(map);
+          triMarker.bindTooltip('Tower Triangulation',{permanent:false});
+          triCircle=L.circle([triPos.lat,triPos.lon],{radius:Math.min(triPos.acc||500,5000),color:'#FF8C00',fillOpacity:0.06,weight:1,dashArray:'4,4'}).addTo(map);
+        }else{
+          triMarker.setLatLng([triPos.lat,triPos.lon]);
+          triCircle.setLatLng([triPos.lat,triPos.lon]);
+          triCircle.setRadius(Math.min(triPos.acc||500,5000));
+        }
+      }
+
       // Draw top 5 formula trails on map (every 5th tick)
       if(uiFrame%5===0){
         const ranked=[...F].map((f,i)=>({i,err:f.drillDrift||f.errAvg||999})).sort((a,b)=>a.err-b.err);
@@ -2158,15 +2192,21 @@ function showReport(dur){
       <div style="font-size:8px;color:var(--td);margin-top:4px">Top 5 discovered combos:</div>
       ${COMBOS.top5().map((c,i)=>`<div class="rr"><span>${i+1}.</span><span class="rv" style="font-size:7px">${c}</span></div>`).join('')}
     </div>
-    <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER DATABASE</div>
+    <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER TRIANGULATION</div>
       <div class="rr"><span>Towers in database</span><span class="rv">${TOWERS.length}</span></div>
-      <div class="rr"><span>Nearby towers cached</span><span class="rv">${UTIN.lastTowers?UTIN.lastTowers.length:'--'}</span></div>
-      <div class="rr"><span>Scan history depth</span><span class="rv">${UTIN.scanHistory.length}/5</span></div>
-      <div class="rr"><span>Trilateration method</span><span class="rv">NLLS (5 iterations)</span></div>
-      ${UTIN.lastTowers?UTIN.lastTowers.slice(0,5).map((t,i)=>{
+      <div class="rr"><span>Board towers received</span><span class="rv">${boardTowerList.length>0?boardTowerList.length+' ('+boardTowerList.filter(t=>t.radio==='4G').length+'×4G + '+boardTowerList.filter(t=>t.radio==='2G').length+'×2G)':'--'}</span></div>
+      <div class="rr"><span>CIDs matched in DB</span><span class="rv">${UTIN.boardResult?UTIN.boardResult.matched+'/'+boardTowerList.length:'--'}</span></div>
+      <div class="rr"><span>Triangulation source</span><span class="rv">${UTIN.boardResult?'REAL RSSI':'Simulated path-loss'}</span></div>
+      <div class="rr"><span>Trilateration accuracy</span><span class="rv">${UTIN.predict()?UTIN.predict().acc+'m':'--'}</span></div>
+      <div class="rr"><span>Method</span><span class="rv">NLLS (5 iterations)</span></div>
+      ${boardTowerList.length>0?boardTowerList.slice(0,8).map((t,i)=>{
+        const op={40:'Airtel',41:'Vi',64:'BSNL',84:'Jio'}[t.mnc]||'Op'+t.mnc;
+        const matched=UTIN.lookupCID(t.cid)?'✓':'✗';
+        return`<div class="rr"><span>${matched} ${t.radio} ${op} CID:${t.cid}</span><span class="rv">${t.rssi}dBm</span></div>`;
+      }).join(''):(UTIN.lastTowers?UTIN.lastTowers.slice(0,5).map((t,i)=>{
         const op={40:'Airtel',41:'Vi',64:'BSNL',84:'Jio'}[t.mnc]||'Op'+t.mnc;
         return`<div class="rr"><span>Tower ${i+1} — ${op} (cid:${t.cid||'?'})</span><span class="rv">${Math.round(t.dist)}m / ${t.signal.toFixed(0)}dBm</span></div>`;
-      }).join(''):''}
+      }).join(''):'')}
     </div>
     <div class="rc"><div class="rct" style="color:var(--teal)">DATA SOURCES</div>
       <div class="rr"><span>IMU (accel+gyro+mag)</span><span class="rv">${boardConnected?'MPU9250 via '+(boardSource==='ble'?'BLE':'WiFi'):'Phone MEMS'}</span></div>
