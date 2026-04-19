@@ -6,7 +6,7 @@
 <title>UPIN v5 — FULL HARDWARE POWER</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
-:root{--bg:#080c14;--panel:#0f1520;--border:#1a2438;--cyan:#4da6ff;--green:#3dcc6e;--amber:#e8a832;--red:#f06060;--blue:#3B82F6;--purple:#A855F7;--tp:#dce6f5;--tm:#7a9bc0;--td:#4a6080}
+:root{--bg:#080c14;--panel:#0f1520;--border:#1a2438;--cyan:#4da6ff;--green:#3dcc6e;--amber:#e8a832;--red:#f06060;--blue:#3B82F6;--purple:#A855F7;--orange:#f97316;--teal:#2dd4bf;--tp:#dce6f5;--tm:#7a9bc0;--td:#4a6080}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(--bg);color:var(--tp);height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:11px}
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#050a12;border-bottom:1px solid var(--border);flex-shrink:0}
@@ -73,9 +73,9 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 /* Connect button */
 .btn-hw{font-size:11px;font-weight:900;letter-spacing:2px;text-transform:uppercase;color:var(--cyan);background:rgba(77,166,255,.04);border:2px solid var(--cyan);padding:14px 8px;width:100%;cursor:pointer;border-radius:2px;-webkit-tap-highlight-color:transparent;transition:all .2s}
 .btn-hw:active{background:rgba(77,166,255,.15);transform:scale(.98)}
-.btn-hw.ok{color:var(--green);border-color:var(--green);background:rgba(61,204,110,.06)}
-.btn-hw.err{color:var(--red);border-color:var(--red);background:rgba(240,96,96,.06)}
-.btn-hw.wait{color:var(--amber);border-color:var(--amber);animation:pulse 1.5s infinite}
+.btn-hw.ok,.btn-hw.connected{color:var(--green);border-color:var(--green);background:rgba(61,204,110,.06)}
+.btn-hw.err,.btn-hw.error{color:var(--red);border-color:var(--red);background:rgba(240,96,96,.06)}
+.btn-hw.wait,.btn-hw.connecting{color:var(--amber);border-color:var(--amber);animation:pulse 1.5s infinite}
 .ble-badge{display:inline-block;font-size:7px;font-weight:700;padding:2px 5px;border-radius:2px;letter-spacing:1px;margin-left:3px}
 .ble-on{background:var(--cyan);color:#000}.ble-off{background:var(--border);color:var(--td)}
 /* Alert */
@@ -2529,10 +2529,6 @@ const PUE={
       enforced:this.enforced,total:this.total,
       pct:this.total>0?Math.round(this.enforced/this.total*100):0,
       headingDrift:this.headingHistory.length>1?Math.round(this.headingHistory[this.headingHistory.length-1]-this.lastGoodHeading):0
-    };
-  }
-};
-      pct:this.total>0?Math.round(this.enforced/this.total*100):0
     };
   }
 };
