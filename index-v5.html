@@ -599,6 +599,8 @@ function onBLEData(event){
     json=json.replace(/:}/g,':null}');
     try{
       const d=JSON.parse(json);
+      // Skip keepalive messages (contain "k" key)
+      if(d.k!==undefined)continue;
       // Validate: must have at least one expected field
       if(d.imu||d.gps||d.baro||d.t!==undefined){
         boardData=d;processBoardData(d);bleGoodPkts++;
@@ -625,13 +627,50 @@ function onBLEData(event){
     log('BLE buffer overflow — resync','var(--red)');
   }
 }
+let bleReconnectAttempts=0;
 function onBLEDisconnect(){
   const wasBLE=(boardSource==='ble');
   if(wasBLE){boardConnected=false;useBoard=false;boardSource='none';}
-  $('bleBtn').className='btn-hw error';$('bleBtn').textContent='BLE DISCONNECTED — TAP TO RECONNECT';
   updateBoardUI();
-  log('BLE disconnected'+(wasBLE?' — falling back to phone':''),'var(--red)');
   if(wasBLE){initPhoneSensors();initPhoneGPS();}
+  // Auto-reconnect: try 3 times with 2s delay
+  if(wasBLE&&bleDevice&&bleReconnectAttempts<3){
+    bleReconnectAttempts++;
+    $('bleBtn').className='btn-hw wait';$('bleBtn').textContent='RECONNECTING... ('+bleReconnectAttempts+'/3)';
+    $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Reconnecting in 2s... (phone sensors active)';
+    log('BLE lost — auto-reconnect attempt '+bleReconnectAttempts+'/3 in 2s','var(--amber)');
+    setTimeout(()=>{
+      if(bleDevice&&!bleDevice.gatt.connected){
+        bleDevice.gatt.connect().then(server=>{
+          return server.getPrimaryService(BLE_SERVICE);
+        }).then(service=>{
+          return service.getCharacteristic(BLE_TX_CHAR);
+        }).then(char=>{
+          bleChar=char;
+          return char.startNotifications();
+        }).then(()=>{
+          bleChar.addEventListener('characteristicvaluechanged',onBLEData);
+          boardConnected=true;useBoard=true;boardSource='ble';bleReconnectAttempts=0;
+          $('boardStatus').innerHTML='<span class="sdot live"></span> RECONNECTED — hardware active';
+          $('bleBtn').className='btn-hw ok';$('bleBtn').textContent='HARDWARE CONNECTED';
+          updateBoardUI();
+          log('BLE reconnected!','var(--green)');
+        }).catch(e=>{
+          log('Reconnect failed: '+e.message,'var(--red)');
+          if(bleReconnectAttempts<3)onBLEDisconnect(); // retry
+          else{
+            $('bleBtn').className='btn-hw err';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
+            $('boardStatus').innerHTML='<span class="sdot err"></span> Auto-reconnect failed — tap to retry';
+            bleReconnectAttempts=0;
+          }
+        });
+      }
+    },2000);
+  }else{
+    $('bleBtn').className='btn-hw err';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
+    log('BLE disconnected'+(wasBLE?' — using phone sensors':''),'var(--red)');
+    bleReconnectAttempts=0;
+  }
 }
 function disconnectBLE(){
   if(bleChar){try{bleChar.removeEventListener('characteristicvaluechanged',onBLEData);}catch(e){}}
