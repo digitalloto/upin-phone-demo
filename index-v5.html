@@ -2572,9 +2572,17 @@ const TOWER_CAPTURE={
 // MAP + TICK + CONTROLS + REPORT
 // ═══════════════════════════════════════
 function initMap(){
-  map=L.map('map',{zoomControl:false}).setView([13.0827,80.2707],16);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:19}).addTo(map);
-  setTimeout(()=>map.invalidateSize(),300);
+  if(typeof L==='undefined'){
+    const mapEl=document.getElementById('map');
+    if(mapEl)mapEl.innerHTML='<div style="padding:20px;text-align:center;color:#e8a832;font-size:10px">Map unavailable (Leaflet CDN blocked).<br>Buttons still work.</div>';
+    log('Leaflet CDN blocked — map disabled but app works','var(--amber)');
+    return;
+  }
+  try{
+    map=L.map('map',{zoomControl:false}).setView([13.0827,80.2707],16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:19}).addTo(map);
+    setTimeout(()=>{if(map&&map.invalidateSize)map.invalidateSize();},300);
+  }catch(e){log('Map init error: '+e.message,'var(--red)');}
 }
 function drawPos(ll,r,c){
   if(marker){marker.setLatLng(ll);marker.setStyle({color:c,fillColor:c});}
@@ -3079,6 +3087,7 @@ function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish D
 
 // Update data tab stats
 function updateDataTab(){
+  try{
   const rs=ROUTES.stats();
   $('learnRoutes').textContent=rs.routes;$('learnPts').textContent=rs.points;
   $('learnCov').textContent=rs.points*10; // ~10m per point
@@ -3088,9 +3097,10 @@ function updateDataTab(){
   $('manTotal').textContent=ms.total;$('manTurns').textContent=ms.turns;
   $('man90').textContent=ms.t90;$('man45').textContent=ms.t45;
   $('manStops').textContent=ms.stops;$('manAccels').textContent=ms.accels;
-  $('towersPre').textContent=TOWERS.length;
+  const tL=(typeof TOWERS!=='undefined'?TOWERS.length:0);
+  $('towersPre').textContent=tL;
   $('towersCap').textContent=TOWER_CAPTURE.count();
-  $('towersTotal').textContent=TOWERS.length+TOWER_CAPTURE.count();
+  $('towersTotal').textContent=tL+TOWER_CAPTURE.count();
   $('dataSmp').textContent=DATA.count();
   $('dataGen').textContent=FISH.generation||0;
   const bi=bestFormulaIdx();$('dataBest').textContent=F[bi].errAvg<999?F[bi].errAvg.toFixed(1):'--';
@@ -3141,23 +3151,46 @@ function updateDataTab(){
   // Storage estimate
   let total=0;try{for(let k in localStorage)total+=(localStorage[k]||'').length;}catch(e){}
   $('storageInfo').textContent='localStorage: ~'+(total/1024).toFixed(0)+'KB / Routes:'+rs.routes+' / Towers:'+TOWER_CAPTURE.count()+' / Scores:'+(localStorage.getItem('upin_scores')?'saved':'none');
+  }catch(e){
+    const b=document.getElementById('log');
+    if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[updateDataTab] '+e.message;b.appendChild(d);}
+  }
 }
 
+// Global error handler — show runtime errors in the log div so we can debug on phone
+window.addEventListener('error',e=>{
+  try{
+    const b=document.getElementById('log');
+    if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[ERR] '+(e.message||e.error||e)+(e.filename?' @'+(e.lineno||''):'');b.appendChild(d);}
+  }catch(_){}
+});
+window.addEventListener('unhandledrejection',e=>{
+  try{
+    const b=document.getElementById('log');
+    if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[REJ] '+(e.reason&&e.reason.message||e.reason||'unknown');b.appendChild(d);}
+  }catch(_){}
+});
+
 window.addEventListener('load',()=>{
-  initMap();buildFormulaTable();
-  ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();
-  if(!navigator.bluetooth){
-    $('bleBtn').textContent='BLE NOT AVAILABLE — USE WiFi';
-    $('bleBtn').className='btn-hw err';
-    log('UPIN v5 ready — no BLE, use WiFi or phone','var(--amber)');
-  }else{
-    const ss=SCORE.summary();
-    log('UPIN v5 ready — '+F.length+' formulas, 470 agents, 600 fish'+(ss.totalSamples>0?' | Lifetime: '+ss.totalSamples+' samples, '+ss.improving+' improving':''),'var(--cyan)');
+  try{
+    initMap();buildFormulaTable();
+    ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();
+    if(!navigator.bluetooth){
+      $('bleBtn').textContent='BLE NOT AVAILABLE — USE WiFi';
+      $('bleBtn').className='btn-hw err';
+      log('UPIN v5 ready — no BLE, use WiFi or phone','var(--amber)');
+    }else{
+      const ss=SCORE.summary();
+      log('UPIN v5 ready — '+F.length+' formulas, 470 agents, 600 fish'+(ss.totalSamples>0?' | Lifetime: '+ss.totalSamples+' samples, '+ss.improving+' improving':''),'var(--cyan)');
+    }
+    log('Tower DB: '+(typeof TOWERS!=='undefined'?TOWERS.length:'--')+' preloaded + '+TOWER_CAPTURE.count()+' captured','var(--tm)');
+    const rs=ROUTES.stats();if(rs.routes>0)log('Routes: '+rs.routes+' stored ('+rs.points+' fingerprints)','var(--tm)');
+    updateDataTab();
+    setInterval(updateDataTab,5000); // refresh data tab every 5s
+  }catch(e){
+    const b=document.getElementById('log');
+    if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
-  log('Tower DB: '+TOWERS.length+' preloaded + '+TOWER_CAPTURE.count()+' captured','var(--tm)');
-  const rs=ROUTES.stats();if(rs.routes>0)log('Routes: '+rs.routes+' stored ('+rs.points+' fingerprints)','var(--tm)');
-  updateDataTab();
-  setInterval(updateDataTab,5000); // refresh data tab every 5s
 });
 return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA};
 })();
