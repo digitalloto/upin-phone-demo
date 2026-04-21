@@ -336,6 +336,19 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <div class="card-title">STORAGE</div>
     <div id="storageInfo" style="font-size:8px;color:var(--tm)">Calculating...</div>
   </div>
+  <div class="card">
+    <div class="card-title">USER PROFILE (VEHICLE CALIBRATIONS)</div>
+    <div style="font-size:9px;color:var(--tm);margin-bottom:8px">Each profile saves its own formula corrections, scores, fish DNA, and calibration. Switch profiles for different vehicles.</div>
+    <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px">
+      <span style="font-size:8px;font-weight:700;color:var(--cyan);letter-spacing:1px">ACTIVE:</span>
+      <span id="profileName" style="font-size:11px;font-weight:900;color:var(--green)">default</span>
+    </div>
+    <div style="display:flex;gap:4px;margin-bottom:6px">
+      <input type="text" id="profileInput" placeholder="New profile name..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:10px;padding:6px;border-radius:2px">
+      <button class="btn btn-green" onclick="V.createProfile()" style="font-size:7px;white-space:nowrap">CREATE</button>
+    </div>
+    <div id="profileList" style="font-size:9px;color:var(--tm)"></div>
+  </div>
 </div>
 
 <!-- Report overlay -->
@@ -365,9 +378,10 @@ function switchTab(idx){
 // ═══════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════
-let map,marker,circle,gpsLine,drLine;
+let map,marker,circle,gpsLine,drLine,fullRouteLine;
 const MAX_TRAIL=200;
-let gpsTrail=[],drTrail=[];
+let gpsTrail=[],drTrail=[],fullRoute=[];
+let turnMarkers=[];
 let gpsTrue=null,gpsSys=null,drPos=null;
 let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},mag={x:0,y:0,z:0};
 // Raw sensor values — sensor events write here, preprocessor reads from here
@@ -2033,9 +2047,101 @@ const SCORE={
 
 // ═══════════════════════════════════════
 // FORMULA AGENTS — 10 agents per formula, each with different
+// ═══════════════════════════════════════
+// USER PROFILES — per-vehicle calibration persistence
+// Each profile saves: formula corrections (corrLat/corrLon/speedScale),
+// SCORE history, CAL settings, FISH DNA, MANEUVER library.
+// Switch profiles for different vehicles — each learns independently.
+// ═══════════════════════════════════════
+const PROFILES={
+  active:'default',
+  list:{},
+  init(){
+    try{
+      const d=localStorage.getItem('upin_profiles_meta');
+      if(d){const m=JSON.parse(d);this.active=m.active||'default';this.list=m.list||{};}
+      if(!this.list['default'])this.list['default']={created:Date.now()};
+    }catch(e){this.list={'default':{created:Date.now()}};}
+  },
+  saveMeta(){
+    try{localStorage.setItem('upin_profiles_meta',JSON.stringify({active:this.active,list:this.list}));}catch(e){}
+  },
+  // Save current state to active profile
+  saveProfile(){
+    try{
+      const data={
+        formulas:F.map(f=>({name:f.name,corrLat:f.corrLat,corrLon:f.corrLon,corrCount:f.corrCount,speedScale:f.speedScale,headingOff:f.headingOff,errAvg:f.errAvg})),
+        cal:{accelScale:CAL.accelScale,gyroScale:CAL.gyroScale,compassOff:CAL.compassOff,speedMult:CAL.speedMult,accelBias:{...CAL.accelBias},gyroBias:{...CAL.gyroBias}},
+        predictor:{headingBias:PREDICTOR.headingBias,speedBias:PREDICTOR.speedBias},
+        savedAt:Date.now()
+      };
+      localStorage.setItem('upin_profile_'+this.active,JSON.stringify(data));
+      this.list[this.active]=this.list[this.active]||{};
+      this.list[this.active].lastSaved=Date.now();
+      this.list[this.active].formulaCount=F.length;
+      this.saveMeta();
+    }catch(e){}
+  },
+  // Load a profile's saved state
+  loadProfile(name){
+    try{
+      const d=localStorage.getItem('upin_profile_'+name);
+      if(!d)return false;
+      const data=JSON.parse(d);
+      // Restore formula corrections
+      if(data.formulas){
+        data.formulas.forEach(saved=>{
+          const f=F.find(x=>x.name===saved.name);
+          if(f){
+            f.corrLat=saved.corrLat||0;f.corrLon=saved.corrLon||0;
+            f.corrCount=saved.corrCount||0;f.speedScale=saved.speedScale||1;
+            f.headingOff=saved.headingOff||0;
+          }
+        });
+      }
+      // Restore calibration
+      if(data.cal){
+        CAL.accelScale=data.cal.accelScale||0.5;CAL.gyroScale=data.cal.gyroScale||1;
+        CAL.compassOff=data.cal.compassOff||0;CAL.speedMult=data.cal.speedMult||1;
+        if(data.cal.accelBias)Object.assign(CAL.accelBias,data.cal.accelBias);
+        if(data.cal.gyroBias)Object.assign(CAL.gyroBias,data.cal.gyroBias);
+      }
+      // Restore predictor biases
+      if(data.predictor){
+        PREDICTOR.headingBias=data.predictor.headingBias||0;
+        PREDICTOR.speedBias=data.predictor.speedBias||1;
+      }
+      return true;
+    }catch(e){return false;}
+  },
+  // Switch to a different profile
+  switchTo(name){
+    // Save current first
+    this.saveProfile();
+    // Reset formulas to defaults
+    F.forEach(f=>{f.corrLat=0;f.corrLon=0;f.corrCount=0;f.speedScale=1;f.headingOff=0;f.errAvg=999;f.err=999;});
+    CAL.accelScale=0.5;CAL.gyroScale=1;CAL.compassOff=0;CAL.speedMult=1;
+    PREDICTOR.headingBias=0;PREDICTOR.speedBias=1;PREDICTOR.errors=[];PREDICTOR.queue=[];
+    // Load new profile
+    this.active=name;
+    this.loadProfile(name);
+    this.saveMeta();
+    log('Switched to profile: '+name,'var(--green)');
+  },
+  create(name){
+    if(!name||name.length<1||name.length>30)return;
+    name=name.trim().replace(/[^a-zA-Z0-9_\- ]/g,'');
+    if(!name)return;
+    this.list[name]={created:Date.now()};
+    this.saveMeta();
+    this.switchTo(name);
+  },
+  getNames(){return Object.keys(this.list);}
+};
+
 // sensor parameter tweaks. Natural selection finds optimal
 // parameters for EACH formula on THIS specific device.
-// 47 formulas × 10 agents = 470 evolving parameter sets.
+// 54 formulas × 10 agents = 540 evolving parameter sets.
 // ═══════════════════════════════════════
 const FAGENTS={
   N:10,            // agents per formula
@@ -2292,6 +2398,19 @@ const MANEUVER={
     this.library.push(entry);
     if(this.library.length%10===0)this.save();
     this.current=null;
+
+    // Place turn marker on map with sensor data popup
+    try{
+      if(typeof L!=='undefined'&&map&&lat&&lon){
+        const color=m.type==='turn'?'#A855F7':m.type==='stop'?'#f06060':'#3dcc6e';
+        const icon=m.type==='turn'?'↻':m.type==='stop'?'■':'▶';
+        const mkr=L.circleMarker([lat,lon],{radius:5,color,fillColor:color,fillOpacity:0.8,weight:1}).addTo(map);
+        const peakGz=entry.peakGyro?entry.peakGyro.toFixed(1):'--';
+        const popup=`<b>${icon} ${m.type.toUpperCase()}</b>${m.type==='turn'?' '+entry.angle+'° ('+entry.turnClass+')':''}<br>dur: ${entry.duration}s<br>speed: ${entry.speedStart.toFixed(1)}→${entry.speedEnd.toFixed(1)} m/s<br>gyro peak: ${peakGz}°/s<br>hdg: ${Math.round(entry.compassStart)}°→${Math.round(entry.compassEnd)}°`;
+        mkr.bindPopup(popup,{className:'',maxWidth:200});
+        turnMarkers.push(mkr);
+      }
+    }catch(e){}
 
     log('Maneuver: '+m.type+(m.type==='turn'?' '+entry.angle+'° ('+entry.turnClass+')':'')+' dur:'+entry.duration+'s','var(--cyan)');
   },
@@ -2901,7 +3020,13 @@ function tick(){
     }
     const ll=[gpsSys.lat,gpsSys.lon];
     gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
-    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else if(typeof L!=='undefined')gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
+    // Full route (unlimited) + sensor snapshot per point
+    fullRoute.push({lat:gpsSys.lat,lon:gpsSys.lon,t:performance.now(),spd:gpsSys.speed||0,hdg:compass,gz:gyro.z,ae:Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81});
+    if(typeof L!=='undefined'){
+      if(fullRouteLine)fullRouteLine.setLatLngs(fullRoute.map(p=>[p.lat,p.lon]));
+      else fullRouteLine=L.polyline(fullRoute.map(p=>[p.lat,p.lon]),{color:'rgba(77,166,255,0.3)',weight:2}).addTo(map);
+    }
     drawPos(ll,gpsSys.acc||5,'#00FF88');
     if(lastPos)totalDist+=hav(lastPos,gpsSys);
     lastPos={lat:gpsSys.lat,lon:gpsSys.lon};drPos={lat:gpsSys.lat,lon:gpsSys.lon};
@@ -3174,6 +3299,8 @@ function endTest(){
   if(alertIv)clearInterval(alertIv);clearInterval(tickIv);
   if(phase==='jammed'||phase==='spoofed')resurface();
   const dur=startTime?(performance.now()-startTime)/1000:0;phase='idle';
+  // Auto-save profile calibrations after every test
+  try{PROFILES.saveProfile();}catch(e){}
   showReport(dur);
 }
 
@@ -3191,7 +3318,50 @@ function showReport(dur){
       <div class="rr"><span>Drift</span><span class="rv" style="color:${d.driftM<20?'var(--green)':'var(--red)'}">${d.driftM.toFixed(1)}m [${d.grade}]</span></div>
       ${top}</div>`;}).join('');
 
+  // Simplified plain-language summary
+  const bestF=ranked[0];
+  const worstF=ranked[ranked.length-1];
+  const predConf=PREDICTOR.confidence();
+  const manStats=MANEUVER.stats();
+  const adaptedCount=F.filter(f=>f.corrCount>10).length;
+  const improvedCount=F.filter(f=>f.speedScale!==1.0||f.corrLat!==0||f.corrLon!==0).length;
+  const bestGrade=drills.length?drills.reduce((b,d)=>d.grade<b?d.grade:b,'D'):'--';
+  const profileName=PROFILES.active;
+
+  // Route segments for the report
+  let routeSegments='';
+  if(fullRoute.length>2){
+    let segs=[];let segStart=fullRoute[0];let lastHdg=segStart.hdg;
+    for(let i=1;i<fullRoute.length;i++){
+      const p=fullRoute[i];
+      let dh=p.hdg-lastHdg;if(dh>180)dh-=360;if(dh<-180)dh+=360;
+      if(Math.abs(dh)>20||i===fullRoute.length-1){
+        const dist=hav(segStart,p);
+        segs.push({dist:Math.round(dist),hdg:Math.round(segStart.hdg),dh:Math.round(dh),spd:(segStart.spd*3.6).toFixed(0)});
+        segStart=p;
+      }
+      lastHdg=p.hdg;
+    }
+    routeSegments=segs.slice(0,15).map((s,i)=>`<div class="rr"><span>Leg ${i+1}: ${s.hdg}° for ${s.dist}m @ ${s.spd}km/h</span><span class="rv" style="color:${Math.abs(s.dh)>60?'var(--amber)':'var(--tm)'}">${s.dh>0?'↱':'↰'} ${Math.abs(s.dh)}°</span></div>`).join('');
+  }
+
   $('rptB').innerHTML=`
+    <div class="rc" style="border-color:var(--green);background:rgba(61,204,110,.03)">
+      <div class="rct" style="color:var(--green);font-size:10px">QUICK SUMMARY — ${profileName.toUpperCase()}</div>
+      <div style="font-size:11px;color:var(--tp);line-height:1.8;padding:4px 0">
+        You ${totalDist>1000?'drove':'moved'} <b style="color:var(--cyan)">${totalDist>1000?(totalDist/1000).toFixed(1)+'km':Math.round(totalDist)+'m'}</b> in <b style="color:var(--cyan)">${fmt(dur)}</b>${avgSpd>0?' at avg <b style="color:var(--cyan)">'+(avgSpd*3.6).toFixed(0)+'km/h</b>':''}.
+        ${drills.length?'GPS was denied <b style="color:var(--red)">'+drills.length+' time'+(drills.length>1?'s':'')+'</b> for a total of <b style="color:var(--red)">'+fmt(drills.reduce((s,d)=>s+d.blindSec,0))+'</b>.':'No GPS denial drills were run.'}
+        ${drills.length?'Average drift was <b style="color:'+(avgD<20?'var(--green)':'var(--red)')+'">'+avgD.toFixed(1)+'m</b>'+(bestGrade!=='--'?' (grade: <b>'+bestGrade+'</b>)':'')+'.':''}
+      </div>
+      <div style="font-size:10px;color:var(--tp);line-height:1.8;padding:4px 0;border-top:1px solid var(--border);margin-top:4px">
+        Best formula: <b style="color:var(--green)">${bestF?bestF.name:'--'}</b> (${bestF&&bestF.errAvg<999?bestF.errAvg.toFixed(1)+'m avg err':'no data'}).<br>
+        <b style="color:var(--cyan)">${adaptedCount}</b> of ${F.length} formulas have self-corrected (${improvedCount} changed speed/heading).<br>
+        Predictor confidence: <b style="color:${predConf>0.7?'var(--green)':predConf>0.4?'var(--amber)':'var(--red)'}">${(predConf*100).toFixed(0)}%</b>
+        ${predConf>0.7?' — validated model, high trust during denial':predConf>0.4?' — building confidence, moderate trust':'— still learning, low trust'}.
+      </div>
+      ${manStats.total>0?'<div style="font-size:10px;color:var(--tp);line-height:1.8;padding:4px 0;border-top:1px solid var(--border);margin-top:4px">Maneuvers detected: <b>'+manStats.turns+'</b> turns ('+manStats.t90+'× 90°, '+manStats.t45+'× 45°), <b>'+manStats.stops+'</b> stops, <b>'+manStats.accels+'</b> accelerations.</div>':''}
+    </div>
+    ${routeSegments?`<div class="rc"><div class="rct" style="color:var(--cyan)">ROUTE SEGMENTS (heading changes)</div>${routeSegments}<div style="font-size:7px;color:var(--td);margin-top:4px">${fullRoute.length} GPS points recorded — showing legs where heading changed >20°</div></div>`:''}
     <div class="rc"><div class="rct" style="color:var(--cyan)">SUMMARY</div>
       <div class="rr"><span>Duration</span><span class="rv">${fmt(dur)}</span></div>
       <div class="rr"><span>Distance</span><span class="rv">${Math.round(totalDist)}m</span></div>
@@ -3315,6 +3485,32 @@ function clearRoutes(){ROUTES.stored=[];ROUTES.save();log('All routes cleared','
 function exportTowers(){TOWER_CAPTURE.exportCSV();}
 function clearCaptured(){TOWER_CAPTURE.clear();}
 function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
+function createProfile(){
+  const name=$('profileInput').value;
+  if(!name){log('Enter a profile name','var(--red)');return;}
+  PROFILES.create(name);
+  $('profileInput').value='';
+  $('profileName').textContent=PROFILES.active;
+  updateProfileList();
+}
+function switchProfile(name){
+  PROFILES.switchTo(name);
+  $('profileName').textContent=PROFILES.active;
+  updateProfileList();
+}
+function updateProfileList(){
+  const names=PROFILES.getNames();
+  $('profileList').innerHTML=names.map(n=>{
+    const info=PROFILES.list[n]||{};
+    const active=n===PROFILES.active;
+    const saved=info.lastSaved?new Date(info.lastSaved).toLocaleDateString():'never';
+    return`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">
+      <span style="color:${active?'var(--green)':'var(--tm)'};font-weight:${active?'700':'400'}">${active?'● ':'○ '}${n}</span>
+      <span style="font-size:7px;color:var(--td)">${saved}</span>
+      ${active?'<span style="font-size:7px;color:var(--green);font-weight:700">ACTIVE</span>':'<button class="btn btn-dim" onclick="V.switchProfile(\''+n.replace(/'/g,"\\'")+'\')" style="font-size:7px;padding:3px 6px">Switch</button>'}
+    </div>`;
+  }).join('');
+}
 
 // Update data tab stats
 function updateDataTab(){
@@ -3381,7 +3577,7 @@ function updateDataTab(){
 
   // Storage estimate
   let total=0;try{for(let k in localStorage)total+=(localStorage[k]||'').length;}catch(e){}
-  $('storageInfo').textContent='localStorage: ~'+(total/1024).toFixed(0)+'KB / Routes:'+rs.routes+' / Towers:'+TOWER_CAPTURE.count()+' / Scores:'+(localStorage.getItem('upin_scores')?'saved':'none');
+  $('storageInfo').textContent='localStorage: ~'+(total/1024).toFixed(0)+'KB / Routes:'+rs.routes+' / Towers:'+TOWER_CAPTURE.count()+' / Scores:'+(localStorage.getItem('upin_scores')?'saved':'none')+' / Profile:'+PROFILES.active;
   }catch(e){
     const b=document.getElementById('log');
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[updateDataTab] '+e.message;b.appendChild(d);}
@@ -3405,14 +3601,18 @@ window.addEventListener('unhandledrejection',e=>{
 window.addEventListener('load',()=>{
   try{
     initMap();buildFormulaTable();
-    ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();
+    ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();PROFILES.init();
+    // Load active profile's saved calibrations
+    PROFILES.loadProfile(PROFILES.active);
+    $('profileName').textContent=PROFILES.active;
+    updateProfileList();
     if(!navigator.bluetooth){
       $('bleBtn').textContent='BLE NOT AVAILABLE — USE WiFi';
       $('bleBtn').className='btn-hw err';
       log('UPIN v5 ready — no BLE, use WiFi or phone','var(--amber)');
     }else{
       const ss=SCORE.summary();
-      log('UPIN v5 ready — '+F.length+' formulas, 470 agents, 600 fish'+(ss.totalSamples>0?' | Lifetime: '+ss.totalSamples+' samples, '+ss.improving+' improving':''),'var(--cyan)');
+      log('UPIN v5 ready — '+F.length+' formulas, '+F.length*10+' agents, 600 fish | Profile: '+PROFILES.active+(ss.totalSamples>0?' | Lifetime: '+ss.totalSamples+' samples, '+ss.improving+' improving':''),'var(--cyan)');
     }
     log('Tower DB: '+(typeof TOWERS!=='undefined'?TOWERS.length:'--')+' preloaded + '+TOWER_CAPTURE.count()+' captured','var(--tm)');
     const rs=ROUTES.stats();if(rs.routes>0)log('Routes: '+rs.routes+' stored ('+rs.points+' fingerprints)','var(--tm)');
@@ -3423,7 +3623,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile};
 })();
 </script>
 </body>
