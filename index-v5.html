@@ -2377,6 +2377,223 @@ F.push(mkF('Route DTW',(pos,dt)=>{
 }));
 
 // ═══════════════════════════════════════
+// PREDICTIVE POSITIONER — "Where will I BE in 5s?" then validate
+// Predicts T+5, scores against reality when it arrives, learns heading/speed bias.
+// A validated predictor earns confidence: during GPS-denial the last N validated
+// predictions prove the model works, so prediction #N+1 is trustworthy.
+// ═══════════════════════════════════════
+const PREDICTOR={
+  horizonMs:5000,           // 5s look-ahead
+  queue:[],                 // pending predictions awaiting validation
+  errors:[],                // last 30 validation errors (m)
+  headingBias:0,            // learned heading drift (deg)
+  speedBias:1.0,            // learned speed multiplier
+  accelWin:[],              // 20-sample accel-magnitude window
+  cruiseState:'unknown',    // cruise | accel | decel | stop
+  validated:0,              // total validated predictions
+  lastPredPos:null,         // most recent T+5 prediction for UI
+  _marker:null,             // leaflet marker for prediction
+
+  // Called every tick during recording
+  update(pos,speed,heading,accelMag,now){
+    // 20-sample cruise classifier
+    this.accelWin.push(accelMag);
+    if(this.accelWin.length>20)this.accelWin.shift();
+    if(this.accelWin.length>=10){
+      const avg=this.accelWin.reduce((s,v)=>s+v,0)/this.accelWin.length;
+      if(speed<0.5)this.cruiseState='stop';
+      else if(avg>1.2)this.cruiseState='accel';
+      else if(avg<0.3&&speed<3)this.cruiseState='decel';
+      else this.cruiseState='cruise';
+    }
+    // Validate queued predictions whose target time arrived
+    while(this.queue.length&&this.queue[0].targetTime<=now){
+      const old=this.queue.shift();
+      if(pos){
+        const err=hav(pos,old.predPos);
+        this.errors.push(err);
+        if(this.errors.length>30)this.errors.shift();
+        this.validated++;
+        // Learn heading bias from bearing error
+        const dLat=pos.lat-old.sourcePos.lat,dLon=pos.lon-old.sourcePos.lon;
+        if(Math.abs(dLat)+Math.abs(dLon)>1e-7){
+          const trueBear=Math.atan2(dLon,dLat)*180/Math.PI;
+          let dh=trueBear-old.heading;
+          if(dh>180)dh-=360;if(dh<-180)dh+=360;
+          this.headingBias=this.headingBias*0.92+dh*0.08;
+          this.headingBias=Math.max(-45,Math.min(45,this.headingBias));
+        }
+        // Learn speed bias
+        const predDist=hav(old.sourcePos,old.predPos);
+        const actDist=hav(old.sourcePos,pos);
+        if(predDist>0.5&&actDist>0.5){
+          const r=actDist/predDist;
+          this.speedBias=this.speedBias*0.92+r*0.08;
+          this.speedBias=Math.max(0.4,Math.min(2.5,this.speedBias));
+        }
+      }
+    }
+    // Enqueue new T+5 prediction
+    if(pos&&speed>=0){
+      let adj=speed*this.speedBias;
+      if(this.cruiseState==='decel')adj*=0.7;
+      else if(this.cruiseState==='stop')adj=0;
+      else if(this.cruiseState==='accel')adj*=1.15;
+      const h=(heading+this.headingBias)*Math.PI/180;
+      const dist=adj*(this.horizonMs/1000);
+      const predPos={
+        lat:pos.lat+(dist*Math.cos(h))/111320,
+        lon:pos.lon+(dist*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))
+      };
+      this.queue.push({targetTime:now+this.horizonMs,predPos,sourcePos:{...pos},heading:heading+this.headingBias});
+      this.lastPredPos=predPos;
+      if(this.queue.length>20)this.queue.shift(); // safety
+    }
+  },
+  // Extrapolate current position forward by dt seconds (used as formula)
+  predict(pos,dt){
+    if(!pos||!DATA.samples.length)return null;
+    const speed=DATA.samples[DATA.samples.length-1].speed||0;
+    let adj=speed*this.speedBias;
+    if(this.cruiseState==='decel')adj*=0.7;
+    else if(this.cruiseState==='stop')adj=0;
+    else if(this.cruiseState==='accel')adj*=1.15;
+    const h=(compass+CAL.compassOff+this.headingBias)*Math.PI/180;
+    return{
+      lat:pos.lat+(adj*Math.cos(h)*dt)/111320,
+      lon:pos.lon+(adj*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))
+    };
+  },
+  avgErr(){return this.errors.length?this.errors.reduce((s,v)=>s+v,0)/this.errors.length:0;},
+  // Confidence 0-1: 0m err = 1.0, 20m err = 0.0
+  confidence(){
+    if(this.errors.length<3)return 0;
+    const avg=this.avgErr();
+    return Math.max(0,Math.min(1,1-avg/20));
+  },
+  stats(){
+    return{
+      avgErr:this.avgErr(),samples:this.errors.length,validated:this.validated,
+      queued:this.queue.length,headingBias:this.headingBias,speedBias:this.speedBias,
+      cruiseState:this.cruiseState,confidence:this.confidence()
+    };
+  }
+};
+
+// ═══════════════════════════════════════
+// PREDICTOR FORMULAS — predict-ahead models added as first-class formulas
+// ═══════════════════════════════════════
+
+// F47: Predict T+5 — the validated predictor (the main idea)
+F.push(mkF('Predict T+5',(pos,dt)=>{
+  const p=PREDICTOR.predict(pos,dt);
+  return p||pos;
+}));
+
+// F48: Accel State MA — 20-sample cruise/accel/decel aware
+F.push(mkF('Accel State MA',function(pos,dt){
+  if(DATA.samples.length<3)return pos;
+  const s=avgSpeed(5);
+  let adj=s;
+  if(PREDICTOR.cruiseState==='decel')adj=s*0.7;
+  else if(PREDICTOR.cruiseState==='stop')adj=0;
+  else if(PREDICTOR.cruiseState==='accel')adj=s*1.15;
+  const h=(compass+CAL.compassOff)*Math.PI/180;
+  return{
+    lat:pos.lat+(adj*Math.cos(h)*dt)/111320,
+    lon:pos.lon+(adj*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))
+  };
+}));
+
+// F49: Maneuver Aware — curves prediction during detected turns
+F.push(mkF('Maneuver Aware',function(pos,dt){
+  if(DATA.samples.length<3)return pos;
+  const s=avgSpeed(5);
+  const turnRate=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;
+  this._h=(this._h||0)+turnRate*dt;
+  if(Math.abs(turnRate)>5&&s>0.3){
+    const r=s/Math.abs(turnRate*Math.PI/180);
+    const arc=turnRate*dt*Math.PI/180;
+    const dx=r*Math.sin(arc),dy=r*(1-Math.cos(arc));
+    const h=this._h*Math.PI/180;
+    return{
+      lat:pos.lat+(dx*Math.cos(h)-dy*Math.sin(h))/111320,
+      lon:pos.lon+(dx*Math.sin(h)+dy*Math.cos(h))/(111320*Math.cos(pos.lat*Math.PI/180))
+    };
+  }
+  const h=this._h*Math.PI/180;
+  return{
+    lat:pos.lat+(s*Math.cos(h)*dt)/111320,
+    lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))
+  };
+}));
+
+// F50: Checkpoint Match — snaps toward known waypoints from ROUTES
+F.push(mkF('Checkpoint Match',function(pos,dt){
+  const v=velFromGPS(5);
+  const vP=v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  try{
+    if(!ROUTES||!ROUTES.stored||!ROUTES.stored.length)return vP;
+    let best=null,bestD=Infinity;
+    for(const route of ROUTES.stored){
+      const pts=route.points||route||[];
+      for(const pt of pts){
+        if(!pt||pt.lat==null)continue;
+        const d=hav(vP,pt);
+        if(d<bestD){bestD=d;best=pt;}
+      }
+    }
+    if(best&&bestD<15){
+      const w=(1-bestD/15)*0.35;
+      return{lat:vP.lat*(1-w)+best.lat*w,lon:vP.lon*(1-w)+best.lon*w};
+    }
+  }catch(e){}
+  return vP;
+}));
+
+// F51: Predictor Ensemble — weighted blend of top 3 formulas by recent accuracy
+F.push(mkF('Predictor Ensemble',function(pos,dt){
+  const me=this;
+  const ranked=F.filter(f=>f!==me&&f.errAvg<999).sort((a,b)=>a.errAvg-b.errAvg).slice(0,3);
+  if(!ranked.length){
+    const v=velFromGPS(5);
+    return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  }
+  let sL=0,sO=0,sW=0;
+  ranked.forEach(f=>{
+    try{
+      const p=f.predict({...pos},dt);
+      if(!p||p.lat==null)return;
+      const w=1/(f.errAvg+0.5);
+      sL+=p.lat*w;sO+=p.lon*w;sW+=w;
+    }catch(e){}
+  });
+  return sW>0?{lat:sL/sW,lon:sO/sW}:pos;
+}));
+
+// F52: Tidal Drift — 12.4h tidal model adds slow lateral drift (maritime/riverine)
+F.push(mkF('Tidal Drift',function(pos,dt){
+  const v=velFromGPS(5);
+  const base=v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  const hrs=(Date.now()/3600000)%12.42;
+  const tidalSpeed=0.12*Math.sin(hrs*2*Math.PI/12.42); // m/s
+  const tidalHeading=90*Math.PI/180; // due east — in production from chart
+  return{
+    lat:base.lat+(tidalSpeed*Math.cos(tidalHeading)*dt)/111320,
+    lon:base.lon+(tidalSpeed*Math.sin(tidalHeading)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))
+  };
+}));
+
+// F53: Depth Constrained — uses baro + laser to flag maritime zone (placeholder for chart data)
+F.push(mkF('Depth Constrained',function(pos,dt){
+  const v=velFromGPS(5);
+  const base=v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  this._maritime=baroAlt<5&&baroAlt>-2;
+  // In production: snap to charted depth contours / avoid land polygons
+  return base;
+}));
+
+// ═══════════════════════════════════════
 // POSITION UNCERTAINTY ENVELOPE (PUE)
 // "You can only be within speed × time from last known position"
 // Any formula predicting outside this radius is GUARANTEED wrong.
@@ -2625,6 +2842,11 @@ function tick(){
     if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
     if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
     INS.update(accel,gyro,dt);
+    // PREDICTOR: record T+5 prediction, validate past ones, learn bias
+    try{
+      const aMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
+      PREDICTOR.update(gpsSys,gpsSys.speed||avgSpeed(5)||0,compass+CAL.compassOff,aMag,now);
+    }catch(e){}
     scoreFormulas(gpsSys,dt);
     // ═══ 10m TRAINING CONSTRAINT: force formulas within 10m of GPS during recording ═══
     // This is the "tight leash" — formulas that drift >10m get pulled back
@@ -3052,6 +3274,15 @@ function showReport(dur){
       <div class="rr"><span>Best DNA zuptTh</span><span class="rv">${fs.topDNA.zuptTh.toFixed(3)}</span></div>
       <div class="rr"><span>Best DNA hdgSrc</span><span class="rv">${['mag','gps','gyro'][fs.topDNA.hdgSrc]}</span></div>
       `:''}`;})()}
+    </div>
+    <div class="rc"><div class="rct" style="color:var(--purple)">PREDICTIVE POSITIONER (T+5)</div>
+      ${(()=>{const ps=PREDICTOR.stats();const conf=ps.confidence;const cColor=conf>0.7?'var(--green)':conf>0.4?'var(--amber)':'var(--red)';return`
+      <div class="rr"><span>Confidence</span><span class="rv" style="color:${cColor}">${(conf*100).toFixed(0)}% ${conf>0.7?'(high)':conf>0.4?'(med)':'(low)'}</span></div>
+      <div class="rr"><span>Avg prediction error</span><span class="rv">${ps.avgErr.toFixed(1)}m over ${ps.samples} samples</span></div>
+      <div class="rr"><span>Total validated</span><span class="rv">${ps.validated}</span></div>
+      <div class="rr"><span>Learned heading bias</span><span class="rv">${ps.headingBias.toFixed(1)}°</span></div>
+      <div class="rr"><span>Learned speed bias</span><span class="rv">${ps.speedBias.toFixed(3)}×</span></div>
+      <div class="rr"><span>Cruise state</span><span class="rv">${ps.cruiseState}</span></div>`;})()}
     </div>
     <div class="rc"><div class="rct" style="color:var(--amber)">DATA QUALITY FIXES</div>
       <div class="rr"><span>Accel units</span><span class="rv">${PREPROCESS.accelInG===true?'g→m/s² (converted)':PREPROCESS.accelInG===false?'m/s² (native)':'detecting'}</span></div>
