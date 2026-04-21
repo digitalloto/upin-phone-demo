@@ -3028,6 +3028,68 @@ function tick(){
       else fullRouteLine=L.polyline(fullRoute.map(p=>[p.lat,p.lon]),{color:'rgba(77,166,255,0.3)',weight:2}).addTo(map);
     }
     drawPos(ll,gpsSys.acc||5,'#00FF88');
+
+    // Show top 5 formula positions during recording (small dots — track how they'd do)
+    if(typeof L!=='undefined'&&uiFrame%5===0){
+      const ranked=[...F].map((f,i)=>({i,f,err:f.errAvg||999})).filter(x=>x.f.pos).sort((a,b)=>a.err-b.err);
+      const colors=['#00E5FF','#00FF88','#FFB800','#3B82F6','#A855F7'];
+      for(let r=0;r<5&&r<ranked.length;r++){
+        const f=ranked[r].f;
+        if(f.pos){
+          const fll=[f.pos.lat,f.pos.lon];
+          if(!f._mapDot){
+            f._mapDot=L.circleMarker(fll,{radius:3,color:colors[r],fillColor:colors[r],fillOpacity:0.5,weight:1}).addTo(map);
+            f._mapDot.bindTooltip('#'+(r+1)+' '+f.name+' ('+f.errAvg.toFixed(1)+'m)',{permanent:false,direction:'top',offset:[0,-6]});
+          }else{
+            f._mapDot.setLatLng(fll);
+            f._mapDot.setTooltipContent('#'+(r+1)+' '+f.name+' ('+(f.errAvg<999?f.errAvg.toFixed(1)+'m':'--')+')');
+          }
+        }
+      }
+      F.forEach((f,i)=>{
+        const inTop=ranked.slice(0,5).some(r=>r.i===i);
+        if(!inTop&&f._mapDot&&phase==='recording'){try{map.removeLayer(f._mapDot);f._mapDot=null;}catch(e){}}
+      });
+    }
+
+    // PREDICTOR T+5 marker — show where the system predicts you'll be in 5s
+    if(typeof L!=='undefined'&&PREDICTOR.lastPredPos){
+      const pp=PREDICTOR.lastPredPos;
+      const pConf=PREDICTOR.confidence();
+      const pColor=pConf>0.7?'#3dcc6e':pConf>0.4?'#e8a832':'#f06060';
+      if(!PREDICTOR._marker){
+        PREDICTOR._marker=L.circleMarker([pp.lat,pp.lon],{radius:4,color:pColor,fillColor:pColor,fillOpacity:0.4,weight:1,dashArray:'3,3'}).addTo(map);
+        PREDICTOR._marker.bindTooltip('T+5 pred',{permanent:false,direction:'top',offset:[0,-6]});
+        PREDICTOR._line=L.polyline([[gpsSys.lat,gpsSys.lon],[pp.lat,pp.lon]],{color:pColor,weight:1,opacity:0.4,dashArray:'3,3'}).addTo(map);
+      }else{
+        PREDICTOR._marker.setLatLng([pp.lat,pp.lon]);
+        PREDICTOR._marker.setStyle({color:pColor,fillColor:pColor});
+        PREDICTOR._line.setLatLngs([[gpsSys.lat,gpsSys.lon],[pp.lat,pp.lon]]);
+        PREDICTOR._line.setStyle({color:pColor});
+      }
+    }
+
+    // Speed + direction indicator: heading wedge + speed ring around current position
+    if(typeof L!=='undefined'&&gpsSys){
+      const spd=gpsSys.speed||avgSpeed(3)||0;
+      const hdg=(compass+CAL.compassOff)*Math.PI/180;
+      const spdRadius=Math.max(3,Math.min(50,spd*3)); // 3px min, 50px max = 0-17m/s
+      // Speed ring
+      if(!marker._spdRing){
+        marker._spdRing=L.circle([gpsSys.lat,gpsSys.lon],{radius:spdRadius,color:'rgba(77,166,255,0.3)',fillOpacity:0,weight:1}).addTo(map);
+      }else{
+        marker._spdRing.setLatLng([gpsSys.lat,gpsSys.lon]);marker._spdRing.setRadius(spdRadius);
+      }
+      // Direction arrow (small line from position in heading direction)
+      const arrowLen=Math.max(8,spd*4)/111320; // meters to degrees
+      const arrowEnd={lat:gpsSys.lat+arrowLen*Math.cos(hdg),lon:gpsSys.lon+arrowLen*Math.sin(hdg)/(Math.cos(gpsSys.lat*Math.PI/180))};
+      if(!marker._hdgLine){
+        marker._hdgLine=L.polyline([[gpsSys.lat,gpsSys.lon],[arrowEnd.lat,arrowEnd.lon]],{color:'#4da6ff',weight:2,opacity:0.7}).addTo(map);
+      }else{
+        marker._hdgLine.setLatLngs([[gpsSys.lat,gpsSys.lon],[arrowEnd.lat,arrowEnd.lon]]);
+      }
+    }
+
     if(lastPos)totalDist+=hav(lastPos,gpsSys);
     lastPos={lat:gpsSys.lat,lon:gpsSys.lon};drPos={lat:gpsSys.lat,lon:gpsSys.lon};
     F.forEach(f=>{if(!f.pos)f.pos={lat:gpsSys.lat,lon:gpsSys.lon};});
