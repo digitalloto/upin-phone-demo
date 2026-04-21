@@ -571,6 +571,8 @@ function connectBLE(){
     $('boardStatus').innerHTML='<span class="sdot live"></span> BLE CONNECTED — 7 SENSORS';
     $('bleBtn').className='btn-hw connected';$('bleBtn').textContent='BLE CONNECTED — TAP TO DISCONNECT';
     $('bStart').disabled=false;$('bStart').style.opacity='1';
+    // Always start phone GPS as fallback — board GPS may not have a fix
+    initPhoneGPS();
     updateBoardUI();
     log('BLE connected! Receiving sensor data at 5Hz','var(--green)');
   }).catch(err=>{
@@ -713,6 +715,7 @@ function fetchWiFi(){
       $('boardStatus').innerHTML='<span class="sdot live"></span> WiFi CONNECTED — 5Hz polling';
       $('wifiBtn').textContent='WiFi CONNECTED — TAP TO DISCONNECT';$('wifiBtn').style.color='var(--green)';$('wifiBtn').style.borderColor='var(--green)';
       $('bStart').disabled=false;$('bStart').style.opacity='1';
+      initPhoneGPS(); // phone GPS as fallback if board GPS has no fix
       updateBoardUI();
       log('WiFi board connected! Reading sensors at 5Hz','var(--green)');
     }
@@ -778,16 +781,20 @@ function processBoardData(d){
     $('srcBarod').textContent=pressure.toFixed(0)+'hPa';
     $('srcBaroBox').className='src on';
   }
-  // GPS (NEO-6M)
+  // GPS (NEO-6M on board)
   if(d.gps&&d.gps.ok){
-    const pos={lat:d.gps.lat,lon:d.gps.lon,acc:d.gps.hdop*5||10};
+    const pos={lat:d.gps.lat,lon:d.gps.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
     gpsTrue=pos;
     if(phase==='idle'||phase==='recording')gpsSys=pos;
     baroAlt=d.gps.alt||baroAlt;
     $('srcGPS').innerHTML='<span class="sdot live"></span>'+d.gps.sats+'sat';
     $('srcGPSd').textContent='hdop:'+d.gps.hdop;
     $('ovSat').textContent=d.gps.sats;
-    if(!marker){map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>5){marker.setLatLng([pos.lat,pos.lon]);_lastMarker={lat:pos.lat,lon:pos.lon};}
+    if(!marker&&typeof L!=='undefined'){map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>5)){marker.setLatLng([pos.lat,pos.lon]);_lastMarker={lat:pos.lat,lon:pos.lon};}
+  }else{
+    // Board GPS has no fix — show status. Phone GPS fallback handles position.
+    $('srcGPS').innerHTML='<span class="sdot off"></span>'+(gpsTrue?'Phone':'OFF');
+    $('srcGPSd').textContent=gpsTrue?'±'+Math.round(gpsTrue.acc||10)+'m':'no fix';
   }
   // Laser (VL53L1X)
   if(d.laser&&d.laser.ok){
@@ -3221,7 +3228,8 @@ function tick(){
     $('ovSrc').textContent=boardConnected?(boardSource==='ble'?'BLE':'WiFi'):'PHONE';
     // Formula table + map overlay
     const bi=bestFormulaIdx();
-    $('ovBest').textContent=F[bi].name+' '+F[bi].errAvg.toFixed(1)+'m';
+    $('ovBest').textContent=F[bi].name+' '+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m':'--');
+    if(phase==='recording'&&F[bi].errAvg<999)$('ovErr').textContent=F[bi].errAvg.toFixed(1)+'m';
     F.forEach((f,i)=>{
       const el=$('fe'+i);if(!el)return;
       el.textContent=f.errAvg<999?f.errAvg.toFixed(1)+'m':'--';
@@ -3303,7 +3311,18 @@ function calibrate(){
   },5000);
 }
 function startRec(){
-  if(!gpsTrue){log('No GPS','var(--red)');return;}
+  // If no GPS, try cell tower triangulation as fallback position
+  if(!gpsTrue){
+    const cellPos=UTIN.predict();
+    if(cellPos){
+      gpsTrue={lat:cellPos.lat,lon:cellPos.lon,acc:cellPos.acc||200};
+      gpsSys={...gpsTrue};
+      log('No GPS — using cell tower position (±'+Math.round(gpsTrue.acc)+'m)','var(--amber)');
+    }else{
+      log('No GPS and no cell towers — use Phone Only or wait for GPS fix','var(--red)');
+      return;
+    }
+  }
   phase='recording';startTime=performance.now();lastTick=null;
   $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
   $('b1').style.display='none';$('b2').style.display='block';$('calMeter').style.display='block';
@@ -3311,11 +3330,13 @@ function startRec(){
   $('bJam').disabled=false;$('bJam').style.opacity='1';
   $('bSpoof').disabled=false;$('bSpoof').style.opacity='1';
   buildFormulaTable();
+  // Initialize all formulas with starting position
+  F.forEach(f=>{f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.errAvg=999;f.err=999;f.errHistory=[];});
   FISH.init(gpsTrue.lat,gpsTrue.lon);
   COMBOS.init();
   FAGENTS.init();SCORE.newSession();
   tickIv=setInterval(tick,1000);
-  log('Recording — '+F.length+' formulas × '+FAGENTS.N+' agents = '+F.length*FAGENTS.N+' parameter variants + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish'+(boardConnected?' [BLE]':' [PHONE]'),'var(--green)');
+  log('Recording — '+F.length+' formulas × '+FAGENTS.N+' agents = '+F.length*FAGENTS.N+' parameter variants + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish'+(boardConnected?' ['+boardSource.toUpperCase()+']':' [PHONE]'),'var(--green)');
 }
 function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
