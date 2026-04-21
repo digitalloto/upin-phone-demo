@@ -290,6 +290,16 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
       <div class="mc"><div class="ml">Accels</div><div class="mv" id="manAccels">0</div><div class="mu">detected</div></div>
     </div>
   </div>
+  <div class="card">
+    <div class="card-title">ML ENHANCEMENT LAYERS</div>
+    <div style="font-size:9px;color:var(--tm);margin-bottom:8px">Naval advisor ML layers. Toggle on/off independently. Each trains during GPS and predicts during denial.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px">
+      <button class="btn btn-cyan" id="mlSvm" onclick="V.toggleML('svm')" style="font-size:7px">SVM Gate: ON</button>
+      <button class="btn btn-cyan" id="mlRf" onclick="V.toggleML('rf')" style="font-size:7px">RF Fusion: ON</button>
+      <button class="btn btn-cyan" id="mlDoppler" onclick="V.toggleML('doppler')" style="font-size:7px">Doppler: ON</button>
+    </div>
+    <div id="mlCompare" style="font-size:8px;color:var(--tm)">Run a test to see comparison</div>
+  </div>
 </div>
 
 <!-- ═══ TAB 3: DRILL ═══ -->
@@ -2503,6 +2513,335 @@ F.push(mkF('Route DTW',(pos,dt)=>{
 }));
 
 // ═══════════════════════════════════════
+// ML ENHANCEMENT LAYERS (Naval Advisor)
+// SVM Quality Gate + Random Forest Fusion + Doppler Shift
+// Pure JavaScript implementations — no Python dependencies.
+// Each has: training mode (GPS available) → inference mode (GPS denied)
+// Each persists learned models to localStorage.
+// ═══════════════════════════════════════
+
+// ── LAYER TOGGLE SYSTEM ──
+const ML_TOGGLE={
+  svm:true,rf:true,doppler:true,
+  init(){try{const d=localStorage.getItem('upin_ml_toggles');if(d)Object.assign(this,JSON.parse(d));}catch(e){}},
+  save(){try{localStorage.setItem('upin_ml_toggles',JSON.stringify({svm:this.svm,rf:this.rf,doppler:this.doppler}));}catch(e){}},
+  toggle(layer){this[layer]=!this[layer];this.save();log('ML layer '+layer+': '+(this[layer]?'ON':'OFF'),'var(--cyan)');}
+};
+
+// ── ML COMPARISON METRICS ──
+const ML_COMPARE={
+  baseline:{samples:0,totalErr:0,recentErr:[]},
+  svm:{samples:0,totalErr:0,recentErr:[],accepted:0,rejected:0},
+  rf:{samples:0,totalErr:0,recentErr:[]},
+  doppler:{samples:0,totalErr:0,recentErr:[]},
+  record(layer,err){
+    if(!this[layer]||err>=999||!isFinite(err))return;
+    const m=this[layer];
+    m.samples++;m.totalErr+=err;
+    m.recentErr.push(err);if(m.recentErr.length>50)m.recentErr.shift();
+  },
+  avg(layer){const m=this[layer];return m&&m.samples>0?m.totalErr/m.samples:0;},
+  summary(){
+    return['baseline','svm','rf','doppler'].map(k=>{
+      const m=this[k];if(!m)return null;
+      const avg=m.samples>0?m.totalErr/m.samples:0;
+      const recent=m.recentErr.length>0?m.recentErr.reduce((s,v)=>s+v,0)/m.recentErr.length:0;
+      return{name:k,avg:avg.toFixed(1),recent:recent.toFixed(1),samples:m.samples,
+        extra:k==='svm'?'acc:'+m.accepted+' rej:'+m.rejected:''};
+    }).filter(Boolean);
+  }
+};
+
+// ═══════════════════════════════════════
+// LAYER 1: SVM QUALITY GATE
+// Linear SVM classifier: learns to separate "reliable" vs "unreliable"
+// sensor readings based on feature vector distance from decision boundary.
+// Training: GPS-available ticks build labeled feature vectors.
+// Inference: classifies each reading → confidence score (0-1).
+// ═══════════════════════════════════════
+const SVM_GATE={
+  // Learned model parameters (linear SVM = weight vector + bias)
+  weights:null,  // Float64Array of feature weights
+  bias:0,
+  nFeatures:8,   // [accelMag, gyroMag, magMag, speed, hdop, pressure, cellCount, sensorAge]
+  // Training data
+  trainX:[],trainY:[],  // features[], labels (1=reliable, -1=unreliable)
+  trained:false,
+  C:1.0,         // regularization
+  maxTrain:500,  // max training samples
+  // Stats
+  accepted:0,rejected:0,
+
+  init(){
+    this.weights=new Float64Array(this.nFeatures);
+    try{
+      const d=localStorage.getItem('upin_svm_model');
+      if(d){const m=JSON.parse(d);this.weights=new Float64Array(m.w);this.bias=m.b;this.trained=true;}
+    }catch(e){}
+  },
+  save(){
+    try{localStorage.setItem('upin_svm_model',JSON.stringify({w:Array.from(this.weights),b:this.bias}));}catch(e){}
+  },
+  // Extract feature vector from current sensor state
+  features(pos){
+    const aM=Math.sqrt(accel.x**2+accel.y**2+accel.z**2);
+    const gM=Math.sqrt(gyro.x**2+gyro.y**2+gyro.z**2);
+    const mM=Math.sqrt(mag.x**2+mag.y**2+mag.z**2);
+    const spd=DATA.samples.length?DATA.samples[DATA.samples.length-1].speed:0;
+    const hdop=pos&&pos.acc?pos.acc/5:2;
+    const prs=pressure||1013;
+    const cellN=cellTowers4G+cellTowers2G;
+    const age=(performance.now()-lastSensorTime)/1000;
+    return[aM/10,gM/100,mM/100,spd/30,hdop/10,prs/1100,cellN/10,Math.min(age,5)/5];
+  },
+  // Train: add labeled sample during GPS-available
+  addSample(pos,gpsErr){
+    if(this.trainX.length>=this.maxTrain)this.trainX.shift(),this.trainY.shift();
+    const x=this.features(pos);
+    const label=gpsErr<10?1:-1; // reliable if <10m error
+    this.trainX.push(x);this.trainY.push(label);
+    // Online SGD update every 50 samples
+    if(this.trainX.length%50===0&&this.trainX.length>=100)this.train();
+  },
+  // SGD training (linear SVM with hinge loss)
+  train(){
+    const N=this.trainX.length;if(N<50)return;
+    const w=new Float64Array(this.nFeatures);let b=0;
+    const lr0=0.01;
+    for(let epoch=0;epoch<20;epoch++){
+      const lr=lr0/(1+epoch*0.1);
+      for(let i=0;i<N;i++){
+        const x=this.trainX[i],y=this.trainY[i];
+        let score=b;for(let j=0;j<this.nFeatures;j++)score+=w[j]*x[j];
+        if(y*score<1){
+          for(let j=0;j<this.nFeatures;j++)w[j]+=lr*(y*x[j]-2*this.C*w[j]/N);
+          b+=lr*y;
+        }else{
+          for(let j=0;j<this.nFeatures;j++)w[j]-=lr*2*this.C*w[j]/N;
+        }
+      }
+    }
+    this.weights=w;this.bias=b;this.trained=true;this.save();
+  },
+  // Inference: classify + confidence score
+  classify(pos){
+    if(!this.trained)return{reliable:true,confidence:0.5};
+    const x=this.features(pos);
+    let score=this.bias;for(let j=0;j<this.nFeatures;j++)score+=this.weights[j]*x[j];
+    const reliable=score>0;
+    const confidence=1/(1+Math.exp(-Math.abs(score))); // sigmoid of margin
+    if(reliable)this.accepted++;else this.rejected++;
+    ML_COMPARE.svm.accepted=this.accepted;ML_COMPARE.svm.rejected=this.rejected;
+    return{reliable,confidence,score};
+  }
+};
+
+// ═══════════════════════════════════════
+// LAYER 2: RANDOM FOREST FUSION
+// Ensemble of 200 decision stumps (lightweight trees) that vote on position.
+// Each tree splits on a random feature subset → predicts lat/lon offset.
+// Training: GPS-available ticks build feature→offset pairs.
+// Inference: all trees vote, median gives robust position estimate.
+// ═══════════════════════════════════════
+const RF_FUSION={
+  trees:[],         // [{featIdx, splitVal, leftLat, leftLon, rightLat, rightLon}]
+  nTrees:200,       // 200 lightweight stumps (fast in browser)
+  nFeatures:10,     // feature vector length
+  trainX:[],trainY:[], // features[], {dlat, dlon} offsets from velocity prediction
+  trained:false,
+  maxTrain:800,
+
+  init(){
+    try{
+      const d=localStorage.getItem('upin_rf_model');
+      if(d){this.trees=JSON.parse(d);this.trained=this.trees.length>0;}
+    }catch(e){}
+  },
+  save(){
+    try{localStorage.setItem('upin_rf_model',JSON.stringify(this.trees));}catch(e){}
+  },
+  features(pos){
+    const aM=Math.sqrt(accel.x**2+accel.y**2+accel.z**2);
+    const gZ=gyro.z;
+    const mM=Math.sqrt(mag.x**2+mag.y**2+mag.z**2);
+    const spd=DATA.samples.length?DATA.samples[DATA.samples.length-1].speed:0;
+    const hdg=compass;
+    const prs=pressure||1013;
+    const cellN=cellTowers4G+cellTowers2G;
+    const gv=gravity?Math.sqrt(gravity.x**2+gravity.y**2+gravity.z**2):9.8;
+    const stepR=stepCount/(DATA.count()||1);
+    const turnRate=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;
+    return[aM/10,gZ/50,mM/100,spd/30,hdg/360,prs/1100,cellN/10,gv/10,stepR,turnRate/100];
+  },
+  addSample(pos,gpsPos){
+    if(this.trainX.length>=this.maxTrain)this.trainX.shift(),this.trainY.shift();
+    const v=velFromGPS(5);
+    if(!v||!gpsPos)return;
+    const vPred={lat:pos.lat+v.vLat,lon:pos.lon+v.vLon};
+    // Target: how much to correct the velocity prediction
+    const dlat=gpsPos.lat-vPred.lat;
+    const dlon=gpsPos.lon-vPred.lon;
+    this.trainX.push(this.features(pos));
+    this.trainY.push({dlat,dlon});
+    if(this.trainX.length%100===0&&this.trainX.length>=200)this.train();
+  },
+  // Build forest of decision stumps
+  train(){
+    const N=this.trainX.length;if(N<100)return;
+    this.trees=[];
+    for(let t=0;t<this.nTrees;t++){
+      // Random feature to split on
+      const fi=Math.floor(Math.random()*this.nFeatures);
+      // Random split value (between min and max of that feature in a random subset)
+      const subset=[];
+      for(let s=0;s<Math.min(50,N);s++)subset.push(Math.floor(Math.random()*N));
+      const vals=subset.map(i=>this.trainX[i][fi]);
+      const splitVal=(Math.min(...vals)+Math.max(...vals))/2+(Math.random()-0.5)*0.1;
+      // Compute mean target for left and right
+      let lLat=0,lLon=0,lN=0,rLat=0,rLon=0,rN=0;
+      for(const i of subset){
+        if(this.trainX[i][fi]<=splitVal){lLat+=this.trainY[i].dlat;lLon+=this.trainY[i].dlon;lN++;}
+        else{rLat+=this.trainY[i].dlat;rLon+=this.trainY[i].dlon;rN++;}
+      }
+      this.trees.push({
+        fi,sv:splitVal,
+        ll:lN>0?lLat/lN:0,lo:lN>0?lLon/lN:0,
+        rl:rN>0?rLat/rN:0,ro:rN>0?rLon/rN:0
+      });
+    }
+    this.trained=true;this.save();
+  },
+  // Inference: all trees vote → median position correction
+  predict(pos,dt){
+    if(!this.trained||!this.trees.length||!pos)return null;
+    const x=this.features(pos);
+    const lats=[],lons=[];
+    const v=velFromGPS(5);
+    const base=v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+    for(const tree of this.trees){
+      if(x[tree.fi]<=tree.sv){lats.push(tree.ll);lons.push(tree.lo);}
+      else{lats.push(tree.rl);lons.push(tree.ro);}
+    }
+    lats.sort((a,b)=>a-b);lons.sort((a,b)=>a-b);
+    const medLat=lats[Math.floor(lats.length/2)];
+    const medLon=lons[Math.floor(lons.length/2)];
+    return{lat:base.lat+medLat,lon:base.lon+medLon};
+  }
+};
+
+// ═══════════════════════════════════════
+// LAYER 3: DOPPLER SHIFT ANALYSIS
+// Estimates velocity from cell tower RSSI rate of change.
+// Approaching tower → RSSI increases → positive Doppler
+// Receding from tower → RSSI decreases → negative Doppler
+// Uses known tower positions + RSSI derivatives to solve velocity vector.
+// ═══════════════════════════════════════
+const DOPPLER={
+  history:[],     // [{ts, towers:[{lat,lon,rssi,cid}]}] — last 10 scans
+  maxHistory:10,
+  lastVelocity:null,  // {vLat, vLon, speed, heading}
+  estSpeed:0,
+  estHeading:0,
+
+  // Record a tower scan
+  record(towers,ts){
+    if(!towers||!towers.length)return;
+    this.history.push({ts:ts||performance.now(),towers:towers.map(t=>({lat:t.lat,lon:t.lon,rssi:t.signal,cid:t.cid||0}))});
+    if(this.history.length>this.maxHistory)this.history.shift();
+    if(this.history.length>=3)this.estimateVelocity();
+  },
+  // Estimate velocity from RSSI rate of change + known tower positions
+  estimateVelocity(){
+    const n=this.history.length;
+    if(n<3)return;
+    const curr=this.history[n-1],prev=this.history[n-3];
+    const dtSec=(curr.ts-prev.ts)/1000;
+    if(dtSec<0.5)return;
+    // Match towers between scans by lat/lon proximity
+    let vLatSum=0,vLonSum=0,weight=0;
+    for(const ct of curr.towers){
+      // Find same tower in previous scan
+      const pt=prev.towers.find(t=>Math.abs(t.lat-ct.lat)<0.001&&Math.abs(t.lon-ct.lon)<0.001);
+      if(!pt)continue;
+      const dRSSI=(ct.rssi-pt.rssi)/dtSec; // dBm/sec
+      if(Math.abs(dRSSI)<0.1)continue; // noise floor
+      // Path loss model: RSSI = -50 - 35*log10(d/100)
+      // d(RSSI)/dt ≈ -35/(d*ln10) * d(dist)/dt
+      // → d(dist)/dt ≈ dRSSI * d * ln(10) / -35
+      const estDist=100*Math.pow(10,(ct.rssi+50)/-35); // current distance
+      const radialSpeed=dRSSI*estDist*Math.LN10/-35; // m/s toward tower
+      // Radial speed → project onto lat/lon axes using tower bearing
+      const bearing=Math.atan2(ct.lon-13.08,ct.lat-13.08); // approx bearing to tower
+      // Negative radialSpeed = approaching; positive = receding
+      const vLat=-radialSpeed*Math.cos(bearing)/111320;
+      const vLon=-radialSpeed*Math.sin(bearing)/(111320*Math.cos(13.08*Math.PI/180));
+      const w=Math.abs(dRSSI); // weight by RSSI change magnitude
+      vLatSum+=vLat*w;vLonSum+=vLon*w;weight+=w;
+    }
+    if(weight>0){
+      const vLat=vLatSum/weight;
+      const vLon=vLonSum/weight;
+      this.estSpeed=Math.sqrt(vLat**2+vLon**2)*111320; // m/s
+      this.estHeading=Math.atan2(vLon,vLat)*180/Math.PI;
+      if(this.estHeading<0)this.estHeading+=360;
+      this.lastVelocity={vLat,vLon,speed:this.estSpeed,heading:this.estHeading};
+    }
+  },
+  // Predict position from Doppler-derived velocity
+  predict(pos,dt){
+    if(!this.lastVelocity||!pos)return null;
+    return{
+      lat:pos.lat+this.lastVelocity.vLat*dt,
+      lon:pos.lon+this.lastVelocity.vLon*dt
+    };
+  },
+  stats(){
+    return{speed:this.estSpeed,heading:this.estHeading,scans:this.history.length,
+      hasFix:!!this.lastVelocity};
+  }
+};
+
+// ── ML LAYER FORMULAS (registered into F array) ──
+
+// F54: SVM Quality Gate — filters unreliable readings, predicts with reliable ones only
+F.push(mkF('SVM Gate',function(pos,dt){
+  if(!ML_TOGGLE.svm)return pos;
+  const cls=SVM_GATE.classify(pos);
+  if(!cls.reliable){
+    // Unreliable reading — use last known good velocity instead
+    const v=velFromGPS(5);
+    return v?{lat:pos.lat+v.vLat*dt*cls.confidence,lon:pos.lon+v.vLon*dt*cls.confidence}:pos;
+  }
+  // Reliable — use full velocity prediction weighted by confidence
+  const v=velFromGPS(5);
+  return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+}));
+
+// F55: Random Forest Fusion — ensemble of 200 trees votes on position correction
+F.push(mkF('RF Fusion',function(pos,dt){
+  if(!ML_TOGGLE.rf)return pos;
+  const p=RF_FUSION.predict(pos,dt);
+  return p||pos;
+}));
+
+// F56: Doppler Shift — velocity from cell tower RSSI rate of change
+F.push(mkF('Doppler Shift',function(pos,dt){
+  if(!ML_TOGGLE.doppler)return pos;
+  const p=DOPPLER.predict(pos,dt);
+  if(!p){
+    const v=velFromGPS(5);
+    return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  }
+  // Blend Doppler with velocity prediction for robustness
+  const v=velFromGPS(5);
+  if(v){
+    const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};
+    return{lat:vP.lat*0.6+p.lat*0.4,lon:vP.lon*0.6+p.lon*0.4};
+  }
+  return p;
+}));
+
+// ═══════════════════════════════════════
 // PREDICTIVE POSITIONER — "Where will I BE in 5s?" then validate
 // Predicts T+5, scores against reality when it arrives, learns heading/speed bias.
 // A validated predictor earns confidence: during GPS-denial the last N validated
@@ -2974,6 +3313,21 @@ function tick(){
       PREDICTOR.update(gpsSys,gpsSys.speed||avgSpeed(5)||0,compass+CAL.compassOff,aMag,now);
     }catch(e){}
     scoreFormulas(gpsSys,dt);
+    // ── ML LAYER TRAINING (GPS available → learn patterns) ──
+    try{
+      const bestErr=F[bestFormulaIdx()].errAvg;
+      if(ML_TOGGLE.svm)SVM_GATE.addSample(gpsSys,bestErr<999?bestErr:50);
+      if(ML_TOGGLE.rf)RF_FUSION.addSample(gpsSys,gpsSys);
+      // Doppler: feed cell tower data
+      if(ML_TOGGLE.doppler&&UTIN.lastTowers)DOPPLER.record(UTIN.lastTowers,now);
+      // Comparison: score baseline (best formula) vs ML layers
+      if(bestErr<999){
+        ML_COMPARE.record('baseline',bestErr);
+        const svmF=F.find(f=>f.name==='SVM Gate');if(svmF&&svmF.errAvg<999)ML_COMPARE.record('svm',svmF.errAvg);
+        const rfF=F.find(f=>f.name==='RF Fusion');if(rfF&&rfF.errAvg<999)ML_COMPARE.record('rf',rfF.errAvg);
+        const dopF=F.find(f=>f.name==='Doppler Shift');if(dopF&&dopF.errAvg<999)ML_COMPARE.record('doppler',dopF.errAvg);
+      }
+    }catch(e){}
     // ═══ 10m TRAINING CONSTRAINT: force formulas within 10m of GPS during recording ═══
     // This is the "tight leash" — formulas that drift >10m get pulled back
     // This makes evolution MUCH faster because bad predictions are immediately corrected
@@ -3537,6 +3891,16 @@ function showReport(dur){
       <div class="rr"><span>Learned speed bias</span><span class="rv">${ps.speedBias.toFixed(3)}×</span></div>
       <div class="rr"><span>Cruise state</span><span class="rv">${ps.cruiseState}</span></div>`;})()}
     </div>
+    <div class="rc"><div class="rct" style="color:var(--blue)">ML LAYERS — SIDE-BY-SIDE COMPARISON</div>
+      ${(()=>{const comp=ML_COMPARE.summary();if(!comp.length)return'<div class="rr"><span>No comparison data</span></div>';
+      return comp.map(c=>{
+        const col=c.name==='baseline'?'var(--green)':c.name==='svm'?'var(--purple)':c.name==='rf'?'var(--cyan)':'var(--amber)';
+        return`<div class="rr"><span style="color:${col};font-weight:700">${c.name.toUpperCase()}</span><span class="rv">avg ${c.avg}m / recent ${c.recent}m / ${c.samples} samples ${c.extra}</span></div>`;
+      }).join('');})()}
+      <div class="rr"><span>SVM Gate</span><span class="rv">${ML_TOGGLE.svm?'ON — trained:'+SVM_GATE.trained+' acc:'+SVM_GATE.accepted+' rej:'+SVM_GATE.rejected:'OFF'}</span></div>
+      <div class="rr"><span>RF Fusion</span><span class="rv">${ML_TOGGLE.rf?'ON — trees:'+RF_FUSION.trees.length+' trained:'+RF_FUSION.trained:'OFF'}</span></div>
+      <div class="rr"><span>Doppler Shift</span><span class="rv">${ML_TOGGLE.doppler?'ON — scans:'+DOPPLER.history.length+' speed:'+DOPPLER.estSpeed.toFixed(1)+'m/s hdg:'+Math.round(DOPPLER.estHeading)+'°':'OFF'}</span></div>
+    </div>
     <div class="rc"><div class="rct" style="color:var(--amber)">DATA QUALITY FIXES</div>
       <div class="rr"><span>Accel units</span><span class="rv">${PREPROCESS.accelInG===true?'g→m/s² (converted)':PREPROCESS.accelInG===false?'m/s² (native)':'detecting'}</span></div>
       <div class="rr"><span>Gyro bias ready</span><span class="rv">${PREPROCESS.gyroBiasReady?'Yes ('+PREPROCESS.gyroBias.x.toFixed(2)+','+PREPROCESS.gyroBias.y.toFixed(2)+','+PREPROCESS.gyroBias.z.toFixed(2)+')':'No'}</span></div>
@@ -3568,6 +3932,24 @@ function clearRoutes(){ROUTES.stored=[];ROUTES.save();log('All routes cleared','
 function exportTowers(){TOWER_CAPTURE.exportCSV();}
 function clearCaptured(){TOWER_CAPTURE.clear();}
 function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
+function toggleML(layer){
+  ML_TOGGLE.toggle(layer);
+  const btn=$('ml'+layer.charAt(0).toUpperCase()+layer.slice(1));
+  if(btn){
+    const on=ML_TOGGLE[layer];
+    btn.textContent=(layer==='svm'?'SVM Gate':layer==='rf'?'RF Fusion':'Doppler')+': '+(on?'ON':'OFF');
+    btn.className='btn '+(on?'btn-cyan':'btn-dim');
+  }
+  updateMLCompare();
+}
+function updateMLCompare(){
+  const comp=ML_COMPARE.summary();
+  if(!comp.length){$('mlCompare').textContent='Run a test to see comparison';return;}
+  $('mlCompare').innerHTML=comp.map(c=>{
+    const col=c.name==='baseline'?'var(--green)':c.name==='svm'?'var(--purple)':c.name==='rf'?'var(--cyan)':'var(--amber)';
+    return`<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border)"><span style="color:${col};font-weight:700">${c.name.toUpperCase()}</span><span>avg:${c.avg}m recent:${c.recent}m (${c.samples}s) ${c.extra}</span></div>`;
+  }).join('');
+}
 function createProfile(){
   const name=$('profileInput').value;
   if(!name){log('Enter a profile name','var(--red)');return;}
@@ -3631,6 +4013,8 @@ function updateDataTab(){
   // Fish info
   if(FISH.schools&&FISH.schools.length)$('fishInfo').textContent=FISH.SCHOOLS+'×'+FISH.AGENTS_PER+'='+FISH.SCHOOLS*FISH.AGENTS_PER+' fish Gen:'+FISH.generation+' | Formula Agents: '+F.length+'×'+FAGENTS.N+'='+F.length*FAGENTS.N+' Gen:'+FAGENTS.generation+(FAGENTS.initialized?' ('+FAGENTS.stats().improved+' formulas improved)':'');
   $('comboInfo').textContent='Pool:'+COMBOS.pool.length+' Gen:'+COMBOS.generation+(COMBOS.pool.length?' Best:'+COMBOS.bestDesc():'');
+  // ML comparison dashboard
+  try{updateMLCompare();}catch(e){}
   $('fCount').textContent=F.length;
 
   // Layer scores display
@@ -3685,6 +4069,7 @@ window.addEventListener('load',()=>{
   try{
     initMap();buildFormulaTable();
     ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();PROFILES.init();
+    ML_TOGGLE.init();SVM_GATE.init();RF_FUSION.init();
     // Load active profile's saved calibrations
     PROFILES.loadProfile(PROFILES.active);
     $('profileName').textContent=PROFILES.active;
@@ -3706,7 +4091,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML};
 })();
 </script>
 </body>
