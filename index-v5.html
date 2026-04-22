@@ -137,6 +137,27 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <div id="boardStatus" style="font-size:8px;color:var(--td);margin-top:4px"><span class="sdot off"></span> Choose BLE or WiFi</div>
     <div class="note">iPhone: BLE not supported — use WiFi. Join UPIN-SENSOR-BOARD network first.</div>
   </div>
+  <!-- User Profile -->
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:6px 8px;margin-bottom:6px;display:flex;align-items:center;gap:6px">
+    <span style="font-size:7px;font-weight:700;color:var(--td);letter-spacing:1px">PROFILE:</span>
+    <span id="dashProfile" style="font-size:10px;font-weight:900;color:var(--green)">default</span>
+    <input type="text" id="dashProfileInput" placeholder="New..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:9px;padding:4px;border-radius:2px;max-width:100px">
+    <button class="btn btn-green" onclick="V.createProfile(document.getElementById('dashProfileInput').value);document.getElementById('dashProfileInput').value='';document.getElementById('dashProfile').textContent=V._getProfile?V._getProfile():'?';" style="font-size:6px;padding:4px 6px;white-space:nowrap">+NEW</button>
+  </div>
+  <!-- Route Navigation -->
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:6px 8px;margin-bottom:6px">
+    <div style="font-size:7px;font-weight:700;color:var(--cyan);letter-spacing:1px;margin-bottom:4px">ROUTE NAVIGATION</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:4px">
+      <input type="text" id="routeFrom" placeholder="From lat,lon (or tap map)" style="background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+      <input type="text" id="routeTo" placeholder="To lat,lon (destination)" style="background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+    </div>
+    <div style="display:flex;gap:4px">
+      <button class="btn btn-cyan" onclick="V.setRoute()" style="font-size:7px;flex:1">SET ROUTE</button>
+      <button class="btn btn-green" onclick="V.useCurrentAsFrom()" style="font-size:7px;flex:1">USE GPS AS FROM</button>
+      <button class="btn btn-dim" onclick="V.clearRoute()" style="font-size:7px;flex:1">CLEAR</button>
+    </div>
+    <div id="routeStatus" style="font-size:7px;color:var(--td);margin-top:3px">No route set. During GPS denial, the system can follow a pre-set route.</div>
+  </div>
   <!-- Metrics -->
   <div class="row row3">
     <div class="mc"><div class="ml">Speed</div><div class="mv" id="mSpd">0</div><div class="mu">km/h</div></div>
@@ -2801,6 +2822,88 @@ const DOPPLER={
   }
 };
 
+// ═══════════════════════════════════════
+// ROUTE NAVIGATION — From/To destination layer
+// Set a start+end point. During GPS denial, formulas can use the route
+// as a constraint: if you know where you're going and the sensor data
+// matches forward movement along the route, snap to the route.
+// ═══════════════════════════════════════
+const ROUTE_NAV={
+  from:null,to:null,    // {lat,lon}
+  waypoints:[],          // interpolated points every ~50m
+  active:false,
+  progress:0,           // 0-1, how far along the route
+  routeLine:null,       // Leaflet polyline
+  _fromMarker:null,_toMarker:null,
+
+  setRoute(fromLat,fromLon,toLat,toLon){
+    this.from={lat:fromLat,lon:fromLon};
+    this.to={lat:toLat,lon:toLon};
+    this.active=true;this.progress=0;
+    // Interpolate waypoints every ~50m
+    const totalDist=hav(this.from,this.to);
+    const nPts=Math.max(2,Math.round(totalDist/50));
+    this.waypoints=[];
+    for(let i=0;i<=nPts;i++){
+      const t=i/nPts;
+      this.waypoints.push({
+        lat:this.from.lat+(this.to.lat-this.from.lat)*t,
+        lon:this.from.lon+(this.to.lon-this.from.lon)*t,
+        dist:totalDist*t
+      });
+    }
+    // Draw route on map
+    if(typeof L!=='undefined'&&map){
+      const pts=this.waypoints.map(p=>[p.lat,p.lon]);
+      if(this.routeLine)map.removeLayer(this.routeLine);
+      this.routeLine=L.polyline(pts,{color:'#A855F7',weight:3,opacity:0.6,dashArray:'10,6'}).addTo(map);
+      if(this._fromMarker)map.removeLayer(this._fromMarker);
+      if(this._toMarker)map.removeLayer(this._toMarker);
+      this._fromMarker=L.circleMarker([fromLat,fromLon],{radius:8,color:'#3dcc6e',fillColor:'#3dcc6e',fillOpacity:1}).bindPopup('START').addTo(map);
+      this._toMarker=L.circleMarker([toLat,toLon],{radius:8,color:'#f06060',fillColor:'#f06060',fillOpacity:1}).bindPopup('DESTINATION').addTo(map);
+    }
+    log('Route set: '+totalDist.toFixed(0)+'m, '+this.waypoints.length+' waypoints','var(--purple)');
+    $('routeStatus').textContent='Route: '+totalDist.toFixed(0)+'m | '+this.waypoints.length+' waypoints | ACTIVE';
+  },
+  clear(){
+    this.from=null;this.to=null;this.waypoints=[];this.active=false;this.progress=0;
+    if(this.routeLine&&map){map.removeLayer(this.routeLine);this.routeLine=null;}
+    if(this._fromMarker&&map){map.removeLayer(this._fromMarker);this._fromMarker=null;}
+    if(this._toMarker&&map){map.removeLayer(this._toMarker);this._toMarker=null;}
+    $('routeStatus').textContent='No route set.';
+    log('Route cleared','var(--amber)');
+  },
+  // Find closest waypoint to a position
+  findNearest(pos){
+    if(!this.active||!this.waypoints.length)return null;
+    let best=null,bestD=Infinity;
+    this.waypoints.forEach((wp,i)=>{
+      const d=hav(pos,wp);
+      if(d<bestD){bestD=d;best={...wp,idx:i,dist:d};}
+    });
+    return best;
+  },
+  // During GPS denial: predict position along route using speed + accumulated distance
+  predict(pos,dt,speed){
+    if(!this.active||!this.waypoints.length||!pos)return null;
+    const nearest=this.findNearest(pos);
+    if(!nearest||nearest.dist>200)return null; // too far from route
+    // Advance along route by speed*dt
+    const advanceM=speed*dt;
+    const targetDist=nearest.dist+advanceM;
+    // Find next waypoint along route
+    const nextIdx=Math.min(nearest.idx+1,this.waypoints.length-1);
+    const nextWp=this.waypoints[nextIdx];
+    this.progress=nextIdx/this.waypoints.length;
+    // Blend: snap toward route (weighted by proximity)
+    const snapW=Math.max(0,1-nearest.dist/100)*0.5; // 50% snap when right on route
+    return{
+      lat:pos.lat*(1-snapW)+nextWp.lat*snapW,
+      lon:pos.lon*(1-snapW)+nextWp.lon*snapW
+    };
+  }
+};
+
 // ── ML LAYER FORMULAS (registered into F array) ──
 
 // F54: SVM Quality Gate — filters unreliable readings, predicts with reliable ones only
@@ -2837,6 +2940,18 @@ F.push(mkF('Doppler Shift',function(pos,dt){
   if(v){
     const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};
     return{lat:vP.lat*0.6+p.lat*0.4,lon:vP.lon*0.6+p.lon*0.4};
+  }
+  return p;
+}));
+
+// F57: Route Navigation — follows pre-set route during GPS denial
+F.push(mkF('Route Nav',function(pos,dt){
+  if(!ROUTE_NAV.active)return pos;
+  const spd=DATA.samples.length?DATA.samples[DATA.samples.length-1].speed:0;
+  const p=ROUTE_NAV.predict(pos,dt,spd);
+  if(!p){
+    const v=velFromGPS(5);
+    return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
   }
   return p;
 }));
@@ -3932,6 +4047,22 @@ function clearRoutes(){ROUTES.stored=[];ROUTES.save();log('All routes cleared','
 function exportTowers(){TOWER_CAPTURE.exportCSV();}
 function clearCaptured(){TOWER_CAPTURE.clear();}
 function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
+function setRoute(){
+  const fromStr=$('routeFrom').value.trim();
+  const toStr=$('routeTo').value.trim();
+  if(!fromStr||!toStr){log('Enter from and to coordinates (lat,lon)','var(--red)');return;}
+  const fp=fromStr.split(',').map(Number);
+  const tp=toStr.split(',').map(Number);
+  if(fp.length<2||tp.length<2||isNaN(fp[0])||isNaN(tp[0])){log('Invalid coordinates — use format: lat,lon','var(--red)');return;}
+  ROUTE_NAV.setRoute(fp[0],fp[1],tp[0],tp[1]);
+}
+function useCurrentAsFrom(){
+  if(!gpsTrue){log('No GPS position yet','var(--red)');return;}
+  $('routeFrom').value=gpsTrue.lat.toFixed(6)+','+gpsTrue.lon.toFixed(6);
+  log('Set FROM to current GPS position','var(--green)');
+}
+function clearRoute(){ROUTE_NAV.clear();}
+function _getProfile(){return PROFILES.active;}
 function toggleML(layer){
   ML_TOGGLE.toggle(layer);
   const btn=$('ml'+layer.charAt(0).toUpperCase()+layer.slice(1));
@@ -3955,12 +4086,12 @@ function createProfile(){
   if(!name){log('Enter a profile name','var(--red)');return;}
   PROFILES.create(name);
   $('profileInput').value='';
-  $('profileName').textContent=PROFILES.active;
+  $('profileName').textContent=PROFILES.active;try{$('dashProfile').textContent=PROFILES.active;}catch(e){}
   updateProfileList();
 }
 function switchProfile(name){
   PROFILES.switchTo(name);
-  $('profileName').textContent=PROFILES.active;
+  $('profileName').textContent=PROFILES.active;try{$('dashProfile').textContent=PROFILES.active;}catch(e){}
   updateProfileList();
 }
 function updateProfileList(){
@@ -4072,7 +4203,7 @@ window.addEventListener('load',()=>{
     ML_TOGGLE.init();SVM_GATE.init();RF_FUSION.init();
     // Load active profile's saved calibrations
     PROFILES.loadProfile(PROFILES.active);
-    $('profileName').textContent=PROFILES.active;
+    $('profileName').textContent=PROFILES.active;try{$('dashProfile').textContent=PROFILES.active;}catch(e){}
     updateProfileList();
     if(!navigator.bluetooth){
       $('bleBtn').textContent='BLE NOT AVAILABLE — USE WiFi';
@@ -4084,14 +4215,40 @@ window.addEventListener('load',()=>{
     }
     log('Tower DB: '+(typeof TOWERS!=='undefined'?TOWERS.length:'--')+' preloaded + '+TOWER_CAPTURE.count()+' captured','var(--tm)');
     const rs=ROUTES.stats();if(rs.routes>0)log('Routes: '+rs.routes+' stored ('+rs.points+' fingerprints)','var(--tm)');
+    // AUTO-ACTIVATE: phone sensors + GPS always start on load
+    initPhoneSensors();initPhoneGPS();
+    log('Phone sensors + GPS activated automatically','var(--green)');
     updateDataTab();
-    setInterval(updateDataTab,5000); // refresh data tab every 5s
+    setInterval(updateDataTab,5000);
+    // Live sensor display BEFORE recording starts (updates speed/heading/sensor bars)
+    setInterval(()=>{
+      if(phase!=='idle')return; // tick() handles it during recording
+      try{
+        // Update sensor bars
+        $('sAx').textContent=accel.x.toFixed(2);$('sAy').textContent=accel.y.toFixed(2);$('sAz').textContent=accel.z.toFixed(2);
+        $('sGx').textContent=gyro.x.toFixed(1);$('sGy').textContent=gyro.y.toFixed(1);$('sGz').textContent=gyro.z.toFixed(1);
+        $('sMx').textContent=mag.x.toFixed(1);$('sMy').textContent=mag.y.toFixed(1);$('sMz').textContent=mag.z.toFixed(1);
+        $('sHdg').textContent=Math.round(compass)+'°';$('sPitch').textContent=pitch.toFixed(0);$('sRoll').textContent=roll.toFixed(0);
+        // Speed/heading from GPS
+        if(gpsSys){
+          $('mSpd').textContent=Math.round((gpsSys.speed||0)*3.6);
+          $('mHdg').textContent=Math.round(compass)+'°';
+          $('mAlt').textContent=baroAlt?baroAlt.toFixed(1):'--';
+          $('ovSrc').textContent=boardConnected?(boardSource==='ble'?'BLE':'WiFi'):'PHONE';
+          $('ovSat').textContent=gpsSys.acc?'±'+Math.round(gpsSys.acc)+'m':'--';
+        }
+        // Pressure/temp
+        $('mPrs').textContent=pressure?pressure.toFixed(0):'--';
+        $('mTmp').textContent=temp?temp.toFixed(1):'--';
+        $('mLsr').textContent=laserMm||'--';
+      }catch(e){}
+    },500);
   }catch(e){
     const b=document.getElementById('log');
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,_getProfile};
 })();
 </script>
 </body>
