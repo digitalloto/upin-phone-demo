@@ -833,16 +833,22 @@ function processBoardData(d){
     $('srcLaser').innerHTML='<span class="sdot live"></span>'+laserMm+'mm';
     $('srcLaserd').textContent=(laserMm/1000).toFixed(2)+'m';
   }
-  // Cell towers
+  // Cell towers — show green when towers detected (even if ok=false)
   if(d.cell4g){
     cellTowers4G=d.cell4g.towers||0;
-    $('srcCell4G').innerHTML=(d.cell4g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
-    $('srcCell4Gd').textContent=d.cell4g.inet?'4G inet':'no inet';
+    const c4ok=d.cell4g.ok||cellTowers4G>0;
+    $('srcCell4G').innerHTML=(c4ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
+    $('srcCell4Gd').textContent=(d.cell4g.inet?'4G inet':'no inet')+(d.cell4g.cid?' CID:'+d.cell4g.cid:'');
+    $('srcCell4GBox').className='src '+(c4ok?'on':'off');
+    // Feed Doppler with real tower data from board
+    if(cellTowers4G>0&&UTIN.lastTowers&&ML_TOGGLE.doppler)try{DOPPLER.record(UTIN.lastTowers,performance.now());}catch(e){}
   }
   if(d.cell2g){
     cellTowers2G=d.cell2g.towers||0;
-    $('srcCell2G').innerHTML=(d.cell2g.ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
+    const c2ok=d.cell2g.ok||cellTowers2G>0;
+    $('srcCell2G').innerHTML=(c2ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
     $('srcCell2Gd').textContent=cellTowers2G+' towers';
+    $('srcCell2GBox').className='src '+(c2ok?'on':'off');
   }
   // WiFi APs
   if(d.wifi){
@@ -858,8 +864,13 @@ function processBoardData(d){
 function initPhoneGPS(){
   if(!('geolocation' in navigator)){useSimGPS();return;}
   navigator.geolocation.watchPosition(p=>{
-    gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy};
+    gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy,speed:p.coords.speed||0};
     if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;
+    // Update speed/heading in idle mode immediately
+    if(phase==='idle'){
+      $('mSpd').textContent=Math.round((gpsTrue.speed||0)*3.6);
+      $('mHdg').textContent=Math.round(p.coords.heading||compass)+'°';
+    }
     if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);marker=L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!_lastMarker||hav(_lastMarker,gpsTrue)>5){marker.setLatLng([gpsTrue.lat,gpsTrue.lon]);_lastMarker={lat:gpsTrue.lat,lon:gpsTrue.lon};}
     $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
     $('srcGPSd').textContent='±'+Math.round(gpsTrue.acc)+'m';
@@ -3777,6 +3788,14 @@ function calibrate(){
     $('badge').textContent='READY';$('badge').className='badge b-phone';
     $('srcPhone').innerHTML='<span class="sdot live"></span>Cal';
     $('srcPhoned').textContent='bias:'+CAL.accelBias.x.toFixed(2)+','+CAL.accelBias.y.toFixed(2);
+    // AUTO-START: begin recording immediately after calibration
+    // No need for a separate "Start Recording" click.
+    if(gpsTrue||gpsSys){
+      log('Auto-starting recording...','var(--green)');
+      setTimeout(()=>startRec(),500);
+    }else{
+      log('Waiting for GPS fix to start recording — or tap Start Recording','var(--amber)');
+    }
   },5000);
 }
 function startRec(){
