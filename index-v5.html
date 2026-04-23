@@ -126,6 +126,15 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 
 <!-- ═══ TAB 0: DASHBOARD ═══ -->
 <div class="tab-body active" id="t0">
+  <!-- FIX 4: GPS Denied toggle -->
+  <div style="background:rgba(240,96,96,.06);border:1px solid var(--red);border-radius:2px;padding:6px 8px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;display:none" id="gpsDeniedBar">
+    <span style="font-size:9px;font-weight:700;color:var(--red);letter-spacing:2px">GPS DENIED — UPIN ONLY</span>
+    <button class="btn btn-dim" onclick="V.toggleGpsDenied()" style="font-size:7px;padding:3px 8px">RESTORE GPS</button>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+    <button class="btn btn-red" id="gpsDeniedBtn" onclick="V.toggleGpsDenied()" style="font-size:7px;padding:5px 8px;flex:0 0 auto">GPS DENIED MODE: OFF</button>
+    <span style="font-size:7px;color:var(--td)">Suppress GPS to test UPIN-only positioning</span>
+  </div>
   <!-- Connection -->
   <div class="card">
     <div class="card-title">HARDWARE BOARD <span class="ble-badge ble-off" id="bleBadge">BLE</span> <span class="ble-badge ble-off" id="wifiBadge">WiFi</span></div>
@@ -364,6 +373,15 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     </div>
   </div>
   <div class="card">
+    <div class="card-title">FIX REJECTIONS (phantom coordinates)</div>
+    <div id="rejectCount" style="font-size:9px;color:var(--tm)">0 rejections</div>
+    <div id="rejectLog" style="font-size:7px;color:var(--td);max-height:80px;overflow-y:auto"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">COMPASS HEALTH</div>
+    <div id="compassHealth" style="font-size:9px;color:var(--tm)">No data</div>
+  </div>
+  <div class="card">
     <div class="card-title">STORAGE</div>
     <div id="storageInfo" style="font-size:8px;color:var(--tm)">Calculating...</div>
   </div>
@@ -414,18 +432,66 @@ const MAX_TRAIL=200;
 let gpsTrail=[],drTrail=[],fullRoute=[];
 let turnMarkers=[];
 let gpsTrue=null,gpsSys=null,drPos=null;
+let gpsDeniedMode=false; // FIX 4: user toggle to suppress all GPS
 let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},mag={x:0,y:0,z:0};
 // Raw sensor values — sensor events write here, preprocessor reads from here
 // This prevents bias correction from stacking on already-corrected values
 let rawAccel={x:0,y:0,z:9.8},rawGyro={x:0,y:0,z:0};
 let lastSensorTime=0; // detect stale sensor readings
 let compass=0,pitch=0,roll=0,gravity={x:0,y:0,z:9.8};
+let lastValidCompass=0; // FIX 6: compass fallback
 let pressure=0,temp=0,baroAlt=0,laserMm=0;
 let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
 let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
 let drills=[],stepCount=0,lastStepT=0;
 let tickIv=null,alertIv=null,simStep=0,uiFrame=0;
 let _lastPan=null,_lastMarker=null;
+
+// ═══════════════════════════════════════
+// FIX 1: COORDINATE BOUNDS CHECK — configurable for future ocean tests
+// ═══════════════════════════════════════
+const INDIA_BBOX={latMin:6.0,latMax:38.0,lonMin:68.0,lonMax:98.0};
+let lastGoodFix=null;
+const FIX_REJECTIONS=[]; // FIX 2: rolling log of last 100 rejections
+let compassBadCount=0,compassTotalCount=0; // FIX 6
+
+function validateFix(lat,lon,source){
+  if(!isFinite(lat)||!isFinite(lon)||lat===0||lon===0)
+    return rejectFix(lat,lon,source,'zero_or_nan');
+  if(lat<INDIA_BBOX.latMin||lat>INDIA_BBOX.latMax||lon<INDIA_BBOX.lonMin||lon>INDIA_BBOX.lonMax)
+    return rejectFix(lat,lon,source,'out_of_bounds');
+  if(lastGoodFix){
+    const distM=hav({lat,lon},lastGoodFix);
+    const dtSec=(performance.now()-lastGoodFix.t)/1000;
+    if(dtSec>0&&distM/dtSec>500) // FIX 5: >500m/s = impossible
+      return rejectFix(lat,lon,source,'impossible_speed');
+  }
+  lastGoodFix={lat,lon,t:performance.now()};
+  return{ok:true,lat,lon};
+}
+function rejectFix(lat,lon,source,reason){
+  FIX_REJECTIONS.push({t:performance.now(),src:source,lat,lon,reason,
+    goodLat:lastGoodFix?lastGoodFix.lat:0,goodLon:lastGoodFix?lastGoodFix.lon:0});
+  if(FIX_REJECTIONS.length>100)FIX_REJECTIONS.shift();
+  return{ok:false,lat:lastGoodFix?lastGoodFix.lat:0,lon:lastGoodFix?lastGoodFix.lon:0};
+}
+
+// FIX 6: Compass validity gate
+function validCompass(raw){
+  compassTotalCount++;
+  if(raw<0||raw>360||!isFinite(raw)){compassBadCount++;return lastValidCompass;}
+  lastValidCompass=raw;return raw;
+}
+
+// FIX 3: CID index for O(1) tower lookups from board data
+let TOWER_CID_IDX=null;
+function buildCIDIndex(){
+  if(typeof TOWERS==='undefined'||TOWER_CID_IDX)return;
+  TOWER_CID_IDX=new Map();
+  TOWERS.forEach(t=>{TOWER_CID_IDX.set(t.c,t);});
+}
+let boardTowerList=[]; // real towers from board with positions+RSSI
+
 // Board state
 let boardConnected=false,boardData=null;
 let useBoard=false; // true=hardware sensors, false=phone sensors
@@ -800,7 +866,7 @@ function processBoardData(d){
     accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
     gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
     mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
-    compass=d.imu.hdg;pitch=d.imu.pitch;roll=d.imu.roll;
+    compass=validCompass(d.imu.hdg);pitch=d.imu.pitch;roll=d.imu.roll;
     $('srcIMU').innerHTML='<span class="sdot live"></span>OK';
     $('srcIMUd').textContent='hdg:'+Math.round(compass)+'°';
     $('srcIMUBox').className='src on';
@@ -813,8 +879,11 @@ function processBoardData(d){
     $('srcBaroBox').className='src on';
   }
   // GPS (NEO-6M on board)
-  if(d.gps&&d.gps.ok){
-    const pos={lat:d.gps.lat,lon:d.gps.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
+  if(d.gps&&d.gps.ok&&!gpsDeniedMode){
+    const gv=validateFix(d.gps.lat,d.gps.lon,'boardGPS');
+    if(!gv.ok){/* phantom from board GPS — skip */}
+    else{
+    const pos={lat:gv.lat,lon:gv.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
     gpsTrue=pos;
     if(phase==='idle'||phase==='recording')gpsSys=pos;
     baroAlt=d.gps.alt||baroAlt;
@@ -822,10 +891,11 @@ function processBoardData(d){
     $('srcGPSd').textContent='hdop:'+d.gps.hdop;
     $('ovSat').textContent=d.gps.sats;
     if(!marker&&typeof L!=='undefined'){map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>5)){marker.setLatLng([pos.lat,pos.lon]);_lastMarker={lat:pos.lat,lon:pos.lon};}
+    } // close validateFix else
   }else{
-    // Board GPS has no fix — show status. Phone GPS fallback handles position.
-    $('srcGPS').innerHTML='<span class="sdot off"></span>'+(gpsTrue?'Phone':'OFF');
-    $('srcGPSd').textContent=gpsTrue?'±'+Math.round(gpsTrue.acc||10)+'m':'no fix';
+    // Board GPS has no fix or GPS denied — show status
+    $('srcGPS').innerHTML='<span class="sdot off"></span>'+(gpsDeniedMode?'DENIED':gpsTrue?'Phone':'OFF');
+    $('srcGPSd').textContent=gpsDeniedMode?'UPIN only':gpsTrue?'±'+Math.round(gpsTrue.acc||10)+'m':'no fix';
   }
   // Laser (VL53L1X)
   if(d.laser&&d.laser.ok){
@@ -833,15 +903,20 @@ function processBoardData(d){
     $('srcLaser').innerHTML='<span class="sdot live"></span>'+laserMm+'mm';
     $('srcLaserd').textContent=(laserMm/1000).toFixed(2)+'m';
   }
-  // Cell towers — show green when towers detected (even if ok=false)
+  // FIX 3: Cell towers — parse REAL CIDs from board, look up in 44k tower DB
+  buildCIDIndex(); // lazy-build CID→tower map on first call
+  boardTowerList=[];
   if(d.cell4g){
     cellTowers4G=d.cell4g.towers||0;
     const c4ok=d.cell4g.ok||cellTowers4G>0;
     $('srcCell4G').innerHTML=(c4ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
     $('srcCell4Gd').textContent=(d.cell4g.inet?'4G inet':'no inet')+(d.cell4g.cid?' CID:'+d.cell4g.cid:'');
     $('srcCell4GBox').className='src '+(c4ok?'on':'off');
-    // Feed Doppler with real tower data from board
-    if(cellTowers4G>0&&UTIN.lastTowers&&ML_TOGGLE.doppler)try{DOPPLER.record(UTIN.lastTowers,performance.now());}catch(e){}
+    // Look up 4G CID in tower database
+    if(d.cell4g.cid&&TOWER_CID_IDX){
+      const t=TOWER_CID_IDX.get(d.cell4g.cid);
+      if(t)boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:d.cell4g.rssi||-80,dist:0,gen:'4G'});
+    }
   }
   if(d.cell2g){
     cellTowers2G=d.cell2g.towers||0;
@@ -849,6 +924,18 @@ function processBoardData(d){
     $('srcCell2G').innerHTML=(c2ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
     $('srcCell2Gd').textContent=cellTowers2G+' towers';
     $('srcCell2GBox').className='src '+(c2ok?'on':'off');
+    // Look up 2G CIDs in tower database
+    if(d.cell2g.list&&Array.isArray(d.cell2g.list)&&TOWER_CID_IDX){
+      d.cell2g.list.forEach(c=>{
+        const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;
+        if(cid){const t=TOWER_CID_IDX.get(cid);if(t)boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});}
+      });
+    }
+  }
+  // If we got real tower positions, feed them into UTIN for triangulation
+  if(boardTowerList.length>=2){
+    UTIN.lastTowers=boardTowerList;
+    if(ML_TOGGLE.doppler)try{DOPPLER.record(boardTowerList,performance.now());}catch(e){}
   }
   // WiFi APs
   if(d.wifi){
@@ -866,7 +953,10 @@ function initPhoneGPS(){
   if(_gpsWatchId)return; // already watching — don't duplicate
   if(!('geolocation' in navigator)){useSimGPS();return;}
   _gpsWatchId=navigator.geolocation.watchPosition(p=>{
-    gpsTrue={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy,speed:p.coords.speed||0};
+    if(gpsDeniedMode)return; // FIX 4: suppress GPS in denied mode
+    const v=validateFix(p.coords.latitude,p.coords.longitude,'phoneGPS');
+    if(!v.ok)return;
+    gpsTrue={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:p.coords.speed||0};
     if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;
     if(phase==='idle'){
       $('mSpd').textContent=Math.round((gpsTrue.speed||0)*3.6);
@@ -897,7 +987,7 @@ function initPhoneSensors(){
     lastSensorTime=performance.now();
   });
   const sO=()=>window.addEventListener('deviceorientation',e=>{
-      compass=e.alpha||0;pitch=e.beta||0;roll=e.gamma||0;
+      compass=validCompass(e.alpha||0);pitch=e.beta||0;roll=e.gamma||0;
       // Derive approximate mag vector from compass heading
       // Real magnetometer gives x/y/z in µT. We simulate from heading.
       const hRad=(e.alpha||0)*Math.PI/180;
@@ -3584,7 +3674,8 @@ function tick(){
       }
     }
 
-    if(lastPos)totalDist+=hav(lastPos,gpsSys);
+    // FIX 5: distance counter clamp — cap at 250m/tick (≈900km/h max)
+    if(lastPos){const dd=hav(lastPos,gpsSys);if(dd<250)totalDist+=dd;}
     lastPos={lat:gpsSys.lat,lon:gpsSys.lon};drPos={lat:gpsSys.lat,lon:gpsSys.lon};
     F.forEach(f=>{if(!f.pos)f.pos={lat:gpsSys.lat,lon:gpsSys.lon};});
   }
@@ -3617,9 +3708,11 @@ function tick(){
       F.forEach((f,i)=>{
         if(f.pos){
           let predicted=f.predict(f.pos,dt)||f.pos;
-          // ═══ PUE CONSTRAINT: pull back if outside reachability envelope ═══
           predicted=PUE.constrain(predicted);
-          f.pos=predicted;
+          // FIX 1: bounds-check formula output
+          const fv=validateFix(predicted.lat,predicted.lon,'F:'+f.name);
+          if(fv.ok)f.pos=predicted;
+          // else: keep f.pos unchanged (last known good)
         }
         if(!f.drillTrail)f.drillTrail=[];
         if(f.pos)f.drillTrail.push([f.pos.lat,f.pos.lon]);
@@ -4073,6 +4166,20 @@ function clearRoutes(){ROUTES.stored=[];ROUTES.save();log('All routes cleared','
 function exportTowers(){TOWER_CAPTURE.exportCSV();}
 function clearCaptured(){TOWER_CAPTURE.clear();}
 function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
+function toggleGpsDenied(){
+  gpsDeniedMode=!gpsDeniedMode;
+  $('gpsDeniedBtn').textContent='GPS DENIED MODE: '+(gpsDeniedMode?'ON':'OFF');
+  $('gpsDeniedBtn').className='btn '+(gpsDeniedMode?'btn-red':'btn-dim');
+  $('gpsDeniedBar').style.display=gpsDeniedMode?'flex':'none';
+  if(gpsDeniedMode){
+    gpsSys=null;
+    $('srcGPS').innerHTML='<span class="sdot err"></span>DENIED';
+    $('srcGPSd').textContent='UPIN only';
+    log('GPS DENIED MODE ON — all GPS suppressed, UPIN-only positioning','var(--red)');
+  }else{
+    log('GPS DENIED MODE OFF — GPS restored','var(--green)');
+  }
+}
 function setRoute(){
   const fromStr=$('routeFrom').value.trim();
   const toStr=$('routeTo').value.trim();
@@ -4170,8 +4277,13 @@ function updateDataTab(){
   // Fish info
   if(FISH.schools&&FISH.schools.length)$('fishInfo').textContent=FISH.SCHOOLS+'×'+FISH.AGENTS_PER+'='+FISH.SCHOOLS*FISH.AGENTS_PER+' fish Gen:'+FISH.generation+' | Formula Agents: '+F.length+'×'+FAGENTS.N+'='+F.length*FAGENTS.N+' Gen:'+FAGENTS.generation+(FAGENTS.initialized?' ('+FAGENTS.stats().improved+' formulas improved)':'');
   $('comboInfo').textContent='Pool:'+COMBOS.pool.length+' Gen:'+COMBOS.generation+(COMBOS.pool.length?' Best:'+COMBOS.bestDesc():'');
-  // ML comparison dashboard
   try{updateMLCompare();}catch(e){}
+  // FIX 2: rejection log display
+  $('rejectCount').textContent=FIX_REJECTIONS.length+' rejections'+(FIX_REJECTIONS.length>0?' (last: '+FIX_REJECTIONS[FIX_REJECTIONS.length-1].src+' '+FIX_REJECTIONS[FIX_REJECTIONS.length-1].reason+')':'');
+  $('rejectLog').innerHTML=FIX_REJECTIONS.slice(-10).reverse().map(r=>'<div>'+r.src+': '+r.reason+' lat='+r.lat.toFixed(4)+' lon='+r.lon.toFixed(4)+'</div>').join('');
+  // FIX 6: compass health
+  const cpct=compassTotalCount>0?Math.round(compassBadCount/compassTotalCount*100):0;
+  $('compassHealth').innerHTML=(cpct>10?'<span style="color:var(--red);font-weight:700">BAD CAL — '+cpct+'% invalid</span>':'<span style="color:var(--green)">OK — '+cpct+'% invalid</span>')+' ('+compassBadCount+'/'+compassTotalCount+' samples, last valid: '+Math.round(lastValidCompass)+'°)';
   $('fCount').textContent=F.length;
 
   // Layer scores display
@@ -4274,7 +4386,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,_getProfile};
 })();
 </script>
 </body>
