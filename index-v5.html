@@ -934,7 +934,7 @@ function processBoardData(d){
   }
   // If we got real tower positions, feed them into UTIN for triangulation
   if(boardTowerList.length>=2){
-    UTIN.lastTowers=boardTowerList;
+    UTIN.recordBoardScan(boardTowerList);
     if(ML_TOGGLE.doppler)try{DOPPLER.record(boardTowerList,performance.now());}catch(e){}
   }
   // WiFi APs
@@ -951,9 +951,9 @@ function processBoardData(d){
 let _gpsWatchId=null;
 function initPhoneGPS(){
   if(_gpsWatchId)return; // already watching — don't duplicate
-  if(!('geolocation' in navigator)){useSimGPS();return;}
+  if(!('geolocation' in navigator)){noGpsAvailable('Geolocation API not supported');return;}
   _gpsWatchId=navigator.geolocation.watchPosition(p=>{
-    if(gpsDeniedMode)return; // FIX 4: suppress GPS in denied mode
+    if(gpsDeniedMode)return;
     const v=validateFix(p.coords.latitude,p.coords.longitude,'phoneGPS');
     if(!v.ok)return;
     gpsTrue={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:p.coords.speed||0};
@@ -967,12 +967,15 @@ function initPhoneGPS(){
     $('bStart').disabled=false;$('bStart').style.opacity='1';
     $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
     $('srcGPSd').textContent='±'+Math.round(gpsTrue.acc)+'m';
-  },()=>{if(!gpsTrue)useSimGPS();},{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+  },err=>{if(!gpsTrue)noGpsAvailable(err&&err.message?err.message:'GPS unavailable');},{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
 }
-function useSimGPS(){
-  log('Simulated GPS','var(--amber)');
-  const base={lat:13.0827,lon:80.2707};
-  setInterval(()=>{simStep++;gpsTrue={lat:base.lat+simStep*0.000009+(Math.random()-.5)*0.00001,lon:base.lon+simStep*0.000006+(Math.random()-.5)*0.00001,acc:10};if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;if(!marker){map.setView([gpsTrue.lat,gpsTrue.lon],17);marker=L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(phase!=='idle'||!_lastMarker||hav(_lastMarker,gpsTrue)>5){marker.setLatLng([gpsTrue.lat,gpsTrue.lon]);_lastMarker={lat:gpsTrue.lat,lon:gpsTrue.lon};}},1000);
+// REAL DATA ONLY: no simulation fallback. If no GPS is available,
+// tell the user and disable recording. Board GPS or phone GPS must work.
+function noGpsAvailable(reason){
+  log('NO GPS: '+reason+' — connect board GPS or enable device location','var(--red)');
+  $('srcGPS').innerHTML='<span class="sdot err"></span>NO GPS';
+  $('srcGPSd').textContent=reason.substring(0,30);
+  $('bStart').disabled=true;$('bStart').style.opacity='0.3';
 }
 function initPhoneSensors(){
   $('srcPhone').innerHTML='<span class="sdot live"></span>Active';$('srcPhoned').textContent='accel+gyro';
@@ -988,10 +991,10 @@ function initPhoneSensors(){
   });
   const sO=()=>window.addEventListener('deviceorientation',e=>{
       compass=validCompass(e.alpha||0);pitch=e.beta||0;roll=e.gamma||0;
-      // Derive approximate mag vector from compass heading
-      // Real magnetometer gives x/y/z in µT. We simulate from heading.
-      const hRad=(e.alpha||0)*Math.PI/180;
-      mag={x:Math.cos(hRad)*45,y:Math.sin(hRad)*45,z:Math.sin((e.beta||0)*Math.PI/180)*25};
+      // REAL DATA ONLY: phone browsers do not expose raw magnetometer.
+      // Leave mag at zero when using phone sensors. When board is connected,
+      // processBoardData fills mag from the real MPU9250 magnetometer.
+      if(!boardConnected)mag={x:0,y:0,z:0};
     });
   if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function')DeviceMotionEvent.requestPermission().then(p=>{if(p==='granted')sM();}).catch(()=>{});
   else if('DeviceMotionEvent' in window)sM();
@@ -1071,13 +1074,10 @@ const INS={
 // TOWERS loaded from towers-data.js (44,279 real Indian towers)
 
 const UTIN={
-  findNear(lat,lon,n=7){
-    return TOWERS.map(t=>({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,
-      dist:hav({lat,lon},{lat:t.l,lon:t.o}),
-      // Path loss model: -50dBm at 100m, -110dBm at 5km (n=3.5 for urban Chennai)
-      signal:Math.max(-110,Math.min(-50,-50-35*Math.log10(Math.max(100,hav({lat,lon},{lat:t.l,lon:t.o}))/100)))
-    })).sort((a,b)=>a.dist-b.dist).slice(0,n);
-  },
+  // REAL DATA ONLY: no simulated path-loss RSSI.
+  // lastTowers is populated by processBoardData from actual board cell data
+  // (real CIDs looked up in TOWERS DB, real RSSI from board).
+  // If board provides no cell data, predict() returns null — no fake fix.
   // Non-linear least squares trilateration (more accurate than weighted centroid)
   trilaterate(towers){
     if(towers.length<3)return null;
@@ -1108,31 +1108,32 @@ const UTIN={
     const avgD=towers.reduce((s,t)=>s+hav({lat,lon},{lat:t.lat,lon:t.lon}),0)/towers.length;
     return Math.round(avgD*Math.max(0.2,1-towers.length*0.1)*0.5);
   },
-  // Temporal averaging: keep last 5 scans, use averaged RSSI
+  // Temporal averaging: keep last 5 real scans from board
   scanHistory:[],
   lastTowers:null,
-  update(lat,lon){
-    const near=this.findNear(lat,lon,7);
-    this.scanHistory.push(near);
+  // Called from processBoardData when board sends real cell data
+  recordBoardScan(towers){
+    if(!towers||!towers.length)return;
+    this.scanHistory.push(towers);
     if(this.scanHistory.length>5)this.scanHistory.shift();
-    // Average RSSI across scans for each tower
-    if(this.scanHistory.length>=3){
-      const merged=new Map();
-      this.scanHistory.forEach(scan=>{
-        scan.forEach(t=>{
-          const k=t.lat.toFixed(5)+','+t.lon.toFixed(5);
-          if(!merged.has(k))merged.set(k,{...t,signals:[],count:0});
-          const m=merged.get(k);m.signals.push(t.signal);m.count++;
-        });
+    // Average RSSI across scans for each tower (same CID)
+    const merged=new Map();
+    this.scanHistory.forEach(scan=>{
+      scan.forEach(t=>{
+        const k=t.cid||(t.lat.toFixed(5)+','+t.lon.toFixed(5));
+        if(!merged.has(k))merged.set(k,{...t,signals:[],count:0});
+        const m=merged.get(k);m.signals.push(t.signal);m.count++;
       });
-      this.lastTowers=[...merged.values()].map(t=>({
-        ...t,signal:t.signals.reduce((s,v)=>s+v,0)/t.signals.length // averaged RSSI
-      })).sort((a,b)=>a.dist-b.dist).slice(0,7);
-    }else{
-      this.lastTowers=near;
-    }
+    });
+    this.lastTowers=[...merged.values()].map(t=>{
+      const t2={...t,signal:t.signals.reduce((s,v)=>s+v,0)/t.signals.length};
+      delete t2.signals;delete t2.count;return t2;
+    }).sort((a,b)=>a.signal>b.signal?-1:1).slice(0,7);
   },
+  // Legacy stub — no-op (used to simulate based on GPS, now disabled)
+  update(lat,lon){/* REAL DATA ONLY: use recordBoardScan instead */},
   predict(){
+    // Need at least 3 real towers for trilateration. Otherwise return null (no fake fix).
     return this.lastTowers&&this.lastTowers.length>=3?this.trilaterate(this.lastTowers):null;
   }
 };
@@ -1219,8 +1220,26 @@ F.push(mkF('Circ Arc',function(pos,dt){if(DATA.samples.length<3)return pos;const
 F.push(mkF('Spd Decay',function(pos,dt){if(DATA.samples.length<2)return pos;this._s=(this._s||0)*0.95+DATA.samples[DATA.samples.length-1].speed*0.05;this._s*=0.999;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(this._s*Math.cos(h)*dt)/111320,lon:pos.lon+(this._s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 F.push(mkF('Hdg Rate',function(pos,dt){if(DATA.samples.length<3)return pos;const l=DATA.samples[DATA.samples.length-1];let dh=l.heading-(this._lh||l.heading);if(dh>180)dh-=360;if(dh<-180)dh+=360;this._hr=(this._hr||0)*0.7+dh*0.3;this._lh=l.heading+this._hr;const s=avgSpeed(5);const h=this._lh*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 F.push(mkF('Gravity',(pos,dt)=>{if(DATA.samples.length<3)return pos;const tF=gravity.y/9.8,tS=gravity.x/9.8;const s=avgSpeed(5)*(1+Math.sqrt(tF*tF+tS*tS)*0.5);const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
-F.push(mkF('Mag Pattern',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
-F.push(mkF('Barometric',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+// Mag Pattern: use real magnetometer x/y for heading, combined with accel speed
+F.push(mkF('Mag Pattern',function(pos,dt){
+  const mM=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+  if(mM<1)return pos; // no real mag data
+  const hRad=Math.atan2(mag.y,mag.x); // heading from mag x/y
+  const s=avgSpeed(5)||0;
+  return{lat:pos.lat+(s*Math.cos(hRad)*dt)/111320,lon:pos.lon+(s*Math.sin(hRad)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+// Barometric: use real pressure altitude change to detect speed on slopes
+F.push(mkF('Barometric',function(pos,dt){
+  if(!pressure)return pos; // no real baro data
+  this._lastAlt=this._lastAlt||baroAlt;
+  const dAlt=baroAlt-this._lastAlt;
+  this._lastAlt=baroAlt;
+  const s=avgSpeed(5)||0;
+  const h=(compass+CAL.compassOff)*Math.PI/180;
+  // Use baro-derived vertical speed to modulate horizontal distance (steeper = slower horizontal)
+  const vFactor=Math.max(0.5,Math.min(1.5,1+Math.abs(dAlt)*0.1));
+  return{lat:pos.lat+(s*vFactor*Math.cos(h)*dt)/111320,lon:pos.lon+(s*vFactor*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
 // F16: Sensor Fusion
 F.push(mkF('Sensor Fuse',function(pos,dt){const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const sS=aM*CAL.accelScale*CAL.speedMult;const sG=avgSpeed(5);const s=sS*0.3+sG*0.7;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt*0.3;const cH=(compass+CAL.compassOff);const fH=(cH*0.7+this._h*0.3)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(fH)*dt)/111320,lon:pos.lon+(s*Math.sin(fH)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F17: Historical Match
@@ -3259,17 +3278,12 @@ F.push(mkF('Predictor Ensemble',function(pos,dt){
   return sW>0?{lat:sL/sW,lon:sO/sW}:pos;
 }));
 
-// F52: Tidal Drift — 12.4h tidal model adds slow lateral drift (maritime/riverine)
-F.push(mkF('Tidal Drift',function(pos,dt){
+// F52: Tidal Drift — DISABLED: requires real tidal chart data (NOAA/ENC).
+// Returns velocity-only prediction. Re-enable when TIDAL_CHART is populated
+// with real station data for your operating region.
+F.push(mkF('Tidal Drift (disabled)',function(pos,dt){
   const v=velFromGPS(5);
-  const base=v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
-  const hrs=(Date.now()/3600000)%12.42;
-  const tidalSpeed=0.12*Math.sin(hrs*2*Math.PI/12.42); // m/s
-  const tidalHeading=90*Math.PI/180; // due east — in production from chart
-  return{
-    lat:base.lat+(tidalSpeed*Math.cos(tidalHeading)*dt)/111320,
-    lon:base.lon+(tidalSpeed*Math.sin(tidalHeading)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))
-  };
+  return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
 }));
 
 // F53: Depth Constrained — uses baro + laser to flag maritime zone (placeholder for chart data)
