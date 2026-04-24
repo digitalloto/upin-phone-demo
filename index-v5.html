@@ -878,24 +878,35 @@ function processBoardData(d){
     $('srcBarod').textContent=pressure.toFixed(0)+'hPa';
     $('srcBaroBox').className='src on';
   }
-  // GPS (NEO-6M on board)
-  if(d.gps&&d.gps.ok&&!gpsDeniedMode){
+  // GPS priority: Board GPS > Phone GPS. Auto-switch.
+  // During jam/spoof: ALL GPS blocked from formulas (gpsSys stays null).
+  if(d.gps&&d.gps.ok&&!gpsDeniedMode&&phase!=='jammed'&&phase!=='spoofed'){
     const gv=validateFix(d.gps.lat,d.gps.lon,'boardGPS');
-    if(!gv.ok){/* phantom from board GPS — skip */}
-    else{
-    const pos={lat:gv.lat,lon:gv.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
-    gpsTrue=pos;
-    if(phase==='idle'||phase==='recording')gpsSys=pos;
-    baroAlt=d.gps.alt||baroAlt;
-    $('srcGPS').innerHTML='<span class="sdot live"></span>'+d.gps.sats+'sat';
-    $('srcGPSd').textContent='hdop:'+d.gps.hdop;
-    $('ovSat').textContent=d.gps.sats;
-    if(!marker&&typeof L!=='undefined'){map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);$('bStart').disabled=false;$('bStart').style.opacity='1';}else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>5)){marker.setLatLng([pos.lat,pos.lon]);_lastMarker={lat:pos.lat,lon:pos.lon};}
-    } // close validateFix else
-  }else{
-    // Board GPS has no fix or GPS denied — show status
-    $('srcGPS').innerHTML='<span class="sdot off"></span>'+(gpsDeniedMode?'DENIED':gpsTrue?'Phone':'OFF');
-    $('srcGPSd').textContent=gpsDeniedMode?'UPIN only':gpsTrue?'±'+Math.round(gpsTrue.acc||10)+'m':'no fix';
+    if(gv.ok){
+      const pos={lat:gv.lat,lon:gv.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
+      gpsTrue=pos;gpsSource='board';
+      if(phase==='idle'||phase==='recording')gpsSys=pos;
+      baroAlt=d.gps.alt||baroAlt;
+      $('srcGPS').innerHTML='<span class="sdot live"></span>Board '+d.gps.sats+'sat';
+      $('srcGPSd').textContent='hdop:'+d.gps.hdop;
+      $('ovSat').textContent=d.gps.sats;
+      $('bStart').disabled=false;$('bStart').style.opacity='1';
+      if(!marker&&typeof L!=='undefined'){try{map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);}catch(e){}}
+      else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>5)){try{marker.setLatLng([pos.lat,pos.lon]);}catch(e){}_lastMarker={lat:pos.lat,lon:pos.lon};}
+    }
+  }else if(!d.gps||!d.gps.ok){
+    // Board GPS has no fix — allow phone GPS to take over
+    if(gpsSource==='board')gpsSource='none'; // release board lock → phone can fill in
+    if(gpsDeniedMode){
+      $('srcGPS').innerHTML='<span class="sdot err"></span>DENIED';
+      $('srcGPSd').textContent='UPIN only';
+    }else if(phase==='jammed'||phase==='spoofed'){
+      $('srcGPS').innerHTML='<span class="sdot err"></span>BLOCKED';
+      $('srcGPSd').textContent='drill active';
+    }else{
+      $('srcGPS').innerHTML='<span class="sdot '+(gpsTrue?'live':'off')+'"></span>'+(gpsSource==='phone'?'Phone':'Waiting...');
+      $('srcGPSd').textContent=gpsTrue?'±'+Math.round(gpsTrue.acc||10)+'m':'no fix';
+    }
   }
   // Laser (VL53L1X)
   if(d.laser&&d.laser.ok){
@@ -949,33 +960,42 @@ function processBoardData(d){
 // PHONE SENSORS (fallback)
 // ═══════════════════════════════════════
 let _gpsWatchId=null;
+let gpsSource='none'; // 'board' | 'phone' | 'none'
 function initPhoneGPS(){
-  if(_gpsWatchId)return; // already watching — don't duplicate
-  if(!('geolocation' in navigator)){noGpsAvailable('Geolocation API not supported');return;}
+  if(_gpsWatchId)return;
+  if(!('geolocation' in navigator)){
+    log('Phone GPS not available — will use board GPS','var(--amber)');
+    $('srcGPS').innerHTML='<span class="sdot off"></span>Waiting';
+    $('srcGPSd').textContent='need board or phone';
+    return;
+  }
   _gpsWatchId=navigator.geolocation.watchPosition(p=>{
-    if(gpsDeniedMode)return;
     const v=validateFix(p.coords.latitude,p.coords.longitude,'phoneGPS');
     if(!v.ok)return;
-    gpsTrue={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:p.coords.speed||0};
-    if(phase==='idle'||phase==='recording')gpsSys=gpsTrue;
+    const phoneFix={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:p.coords.speed||0};
+    // During jam/spoof: keep gpsTrue for drift measurement but don't update gpsSys
+    if(phase==='jammed'||phase==='spoofed'){
+      gpsTrue=phoneFix; // ground truth only — NOT fed to formulas
+      return;
+    }
+    if(gpsDeniedMode)return;
+    // Board GPS has priority. Only use phone GPS if board GPS is not providing.
+    if(gpsSource==='board')return; // board is active, skip phone
+    gpsTrue=phoneFix;
+    gpsSys=phoneFix;
+    gpsSource='phone';
     if(phase==='idle'){
-      $('mSpd').textContent=Math.round((gpsTrue.speed||0)*3.6);
+      $('mSpd').textContent=Math.round((phoneFix.speed||0)*3.6);
       $('mHdg').textContent=Math.round(p.coords.heading||compass)+'°';
     }
-    if(!marker&&typeof L!=='undefined'){try{map.setView([gpsTrue.lat,gpsTrue.lon],17);marker=L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);}catch(e){}}
-    else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,gpsTrue)>5)){try{marker.setLatLng([gpsTrue.lat,gpsTrue.lon]);}catch(e){}_lastMarker={lat:gpsTrue.lat,lon:gpsTrue.lon};}
+    if(!marker&&typeof L!=='undefined'){try{map.setView([phoneFix.lat,phoneFix.lon],17);marker=L.circleMarker([phoneFix.lat,phoneFix.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);}catch(e){}}
+    else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,phoneFix)>5)){try{marker.setLatLng([phoneFix.lat,phoneFix.lon]);}catch(e){}_lastMarker={lat:phoneFix.lat,lon:phoneFix.lon};}
     $('bStart').disabled=false;$('bStart').style.opacity='1';
     $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
-    $('srcGPSd').textContent='±'+Math.round(gpsTrue.acc)+'m';
-  },err=>{if(!gpsTrue)noGpsAvailable(err&&err.message?err.message:'GPS unavailable');},{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
-}
-// REAL DATA ONLY: no simulation fallback. If no GPS is available,
-// tell the user and disable recording. Board GPS or phone GPS must work.
-function noGpsAvailable(reason){
-  log('NO GPS: '+reason+' — connect board GPS or enable device location','var(--red)');
-  $('srcGPS').innerHTML='<span class="sdot err"></span>NO GPS';
-  $('srcGPSd').textContent=reason.substring(0,30);
-  $('bStart').disabled=true;$('bStart').style.opacity='0.3';
+    $('srcGPSd').textContent='±'+Math.round(phoneFix.acc)+'m';
+  },err=>{
+    log('Phone GPS: '+(err&&err.message?err.message:'unavailable')+' — will use board GPS','var(--amber)');
+  },{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
 }
 function initPhoneSensors(){
   $('srcPhone').innerHTML='<span class="sdot live"></span>Active';$('srcPhoned').textContent='accel+gyro';
@@ -3941,24 +3961,29 @@ function startRec(){
   log('Recording — '+F.length+' formulas × '+FAGENTS.N+' agents = '+F.length*FAGENTS.N+' parameter variants + '+FISH.SCHOOLS*FISH.AGENTS_PER+' fish'+(boardConnected?' ['+boardSource.toUpperCase()+']':' [PHONE]'),'var(--green)');
 }
 function jam(){
-  if(phase!=='recording')return;phase='jammed';drillStart=performance.now();gpsSys=null;
-  PUE.activate(); // Lock the envelope at current position + speed
+  if(phase!=='recording')return;phase='jammed';drillStart=performance.now();
+  // BLOCK ALL GPS — board AND phone. gpsTrue keeps updating for drift measurement only.
+  gpsSys=null;gpsSource='none';
+  PUE.activate();
   $('badge').textContent='JAMMED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('jalrt').style.display='block';
-  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}if(f._mapDot){map.removeLayer(f._mapDot);f._mapDot=null;}});
+  $('srcGPS').innerHTML='<span class="sdot err"></span>BLOCKED';$('srcGPSd').textContent='ALL GPS DENIED';
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){try{map.removeLayer(f.mapLine);}catch(e){}}f.mapLine=null;if(f._mapDot){try{map.removeLayer(f._mapDot);}catch(e){}}f._mapDot=null;});
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
-  const ps=PUE.stats();log('GPS JAMMED — envelope: '+Math.round(ps.radius)+'m radius @ '+Math.round(ps.speed*3.6)+'km/h','var(--amber)');
+  const ps=PUE.stats();log('GPS JAMMED — ALL GPS BLOCKED (board+phone). Envelope: '+Math.round(ps.radius)+'m @ '+Math.round(ps.speed*3.6)+'km/h','var(--amber)');
 }
 function spoof(){
-  if(phase!=='recording')return;phase='spoofed';drillStart=performance.now();gpsSys=null;
-  PUE.activate(); // Lock the envelope
+  if(phase!=='recording')return;phase='spoofed';drillStart=performance.now();
+  gpsSys=null;gpsSource='none';
+  PUE.activate();
   $('badge').textContent='SPOOFED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('salrt').style.display='block';
-  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){map.removeLayer(f.mapLine);f.mapLine=null;}if(f._mapDot){map.removeLayer(f._mapDot);f._mapDot=null;}});
+  $('srcGPS').innerHTML='<span class="sdot err"></span>BLOCKED';$('srcGPSd').textContent='ALL GPS DENIED';
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){try{map.removeLayer(f.mapLine);}catch(e){}}f.mapLine=null;if(f._mapDot){try{map.removeLayer(f._mapDot);}catch(e){}}f._mapDot=null;});
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='spoofed'){clearInterval(alertIv);return;}$('sT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
-  log('GPS SPOOFED — envelope active, formulas constrained','var(--red)');
+  log('GPS SPOOFED — ALL GPS BLOCKED. Formulas constrained by PUE','var(--red)');
 }
 function resurface(){
   if(phase!=='jammed'&&phase!=='spoofed')return;
