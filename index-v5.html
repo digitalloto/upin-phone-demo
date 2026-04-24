@@ -485,12 +485,33 @@ function validCompass(raw){
 
 // FIX 3: CID index for O(1) tower lookups from board data
 let TOWER_CID_IDX=null;
+let TOWER_MNC_IDX=null; // MNC→[towers] for area-level fallback
 function buildCIDIndex(){
   if(typeof TOWERS==='undefined'||TOWER_CID_IDX)return;
   TOWER_CID_IDX=new Map();
-  TOWERS.forEach(t=>{TOWER_CID_IDX.set(t.c,t);});
+  TOWER_MNC_IDX=new Map();
+  TOWERS.forEach(t=>{
+    TOWER_CID_IDX.set(t.c,t);
+    if(!TOWER_MNC_IDX.has(t.m))TOWER_MNC_IDX.set(t.m,[]);
+    TOWER_MNC_IDX.get(t.m).push(t);
+  });
 }
 let boardTowerList=[]; // real towers from board with positions+RSSI
+
+// When CID isn't found in DB, find nearest towers with same MNC
+// (same network operator = geographically relevant)
+function lookupTowerFallback(mnc,rssi,lastKnownLat,lastKnownLon){
+  if(!TOWER_MNC_IDX||!TOWER_MNC_IDX.has(mnc))return null;
+  const opTowers=TOWER_MNC_IDX.get(mnc);
+  // If we have a last known position, find nearest towers of same operator
+  if(lastKnownLat&&lastKnownLon){
+    const nearby=opTowers.map(t=>({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,
+      dist:hav({lat:lastKnownLat,lon:lastKnownLon},{lat:t.l,lon:t.o}),signal:rssi
+    })).sort((a,b)=>a.dist-b.dist).slice(0,3);
+    if(nearby.length&&nearby[0].dist<5000)return nearby[0]; // within 5km
+  }
+  return null;
+}
 
 // Board state
 let boardConnected=false,boardData=null;
@@ -914,36 +935,60 @@ function processBoardData(d){
     $('srcLaser').innerHTML='<span class="sdot live"></span>'+laserMm+'mm';
     $('srcLaserd').textContent=(laserMm/1000).toFixed(2)+'m';
   }
-  // FIX 3: Cell towers — parse REAL CIDs from board, look up in 44k tower DB
-  buildCIDIndex(); // lazy-build CID→tower map on first call
+  // FIX 3: Cell towers — parse CIDs, look up in DB, fallback to MNC-area matching
+  buildCIDIndex();
   boardTowerList=[];
+  const refPos=gpsTrue||lastGoodFix; // for MNC fallback proximity search
+  const refLat=refPos?refPos.lat:13.08;
+  const refLon=refPos?refPos.lon:80.27;
+  let cidHits=0,cidMisses=0;
   if(d.cell4g){
     cellTowers4G=d.cell4g.towers||0;
     const c4ok=d.cell4g.ok||cellTowers4G>0;
     $('srcCell4G').innerHTML=(c4ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
     $('srcCell4Gd').textContent=(d.cell4g.inet?'4G inet':'no inet')+(d.cell4g.cid?' CID:'+d.cell4g.cid:'');
     $('srcCell4GBox').className='src '+(c4ok?'on':'off');
-    // Look up 4G CID in tower database
     if(d.cell4g.cid&&TOWER_CID_IDX){
       const t=TOWER_CID_IDX.get(d.cell4g.cid);
-      if(t)boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:d.cell4g.rssi||-80,dist:0,gen:'4G'});
+      if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:d.cell4g.rssi||-80,dist:0,gen:'4G'});cidHits++;}
+      else{
+        // CID not in DB — fallback: nearest tower of same MNC
+        const fb=lookupTowerFallback(d.cell4g.mnc||84,d.cell4g.rssi||-80,refLat,refLon);
+        if(fb)boardTowerList.push(fb);
+        cidMisses++;
+      }
     }
   }
   if(d.cell2g){
     cellTowers2G=d.cell2g.towers||0;
     const c2ok=d.cell2g.ok||cellTowers2G>0;
     $('srcCell2G').innerHTML=(c2ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
-    $('srcCell2Gd').textContent=cellTowers2G+' towers';
+    $('srcCell2Gd').textContent=cellTowers2G+'t'+(cidHits>0?' ('+cidHits+' exact)':'')+(cidMisses>0?' ('+cidMisses+' area)':'');
     $('srcCell2GBox').className='src '+(c2ok?'on':'off');
-    // Look up 2G CIDs in tower database
     if(d.cell2g.list&&Array.isArray(d.cell2g.list)&&TOWER_CID_IDX){
       d.cell2g.list.forEach(c=>{
-        const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;
-        if(cid){const t=TOWER_CID_IDX.get(cid);if(t)boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});}
+        const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;const mnc=c.mnc||c.MNC||84;
+        if(cid){
+          const t=TOWER_CID_IDX.get(cid);
+          if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});cidHits++;}
+          else{
+            const fb=lookupTowerFallback(mnc,rssi,refLat,refLon);
+            if(fb)boardTowerList.push(fb);
+            cidMisses++;
+          }
+        }
       });
+    }else if(cellTowers2G>0&&TOWER_MNC_IDX){
+      // Board sends tower COUNT but no individual list — use MNC-area fallback
+      // Find nearest towers of MNC=84 (Jio, most common) as area estimate
+      const mncTowers=TOWER_MNC_IDX.get(84)||TOWER_MNC_IDX.get(41)||[];
+      const nearby=mncTowers.map(t=>({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,
+        dist:hav({lat:refLat,lon:refLon},{lat:t.l,lon:t.o}),signal:-85
+      })).sort((a,b)=>a.dist-b.dist).slice(0,Math.min(cellTowers2G,5));
+      nearby.forEach(t=>{if(t.dist<10000)boardTowerList.push(t);}); // within 10km
     }
   }
-  // If we got real tower positions, feed them into UTIN for triangulation
+  // Feed real tower data (or area-matched) into UTIN
   if(boardTowerList.length>=2){
     UTIN.recordBoardScan(boardTowerList);
     if(ML_TOGGLE.doppler)try{DOPPLER.record(boardTowerList,performance.now());}catch(e){}
@@ -1100,7 +1145,7 @@ const UTIN={
   // If board provides no cell data, predict() returns null — no fake fix.
   // Non-linear least squares trilateration (more accurate than weighted centroid)
   trilaterate(towers){
-    if(towers.length<3)return null;
+    if(towers.length<2)return null; // 2+ towers = weighted centroid; 3+ = NLLS refinement
     // Start with weighted centroid
     let sL=0,sO=0,sW=0;
     towers.forEach(t=>{const w=Math.pow(10,(t.signal+100)/30);sL+=t.lat*w;sO+=t.lon*w;sW+=w;});
@@ -1153,8 +1198,8 @@ const UTIN={
   // Legacy stub — no-op (used to simulate based on GPS, now disabled)
   update(lat,lon){/* REAL DATA ONLY: use recordBoardScan instead */},
   predict(){
-    // Need at least 3 real towers for trilateration. Otherwise return null (no fake fix).
-    return this.lastTowers&&this.lastTowers.length>=3?this.trilaterate(this.lastTowers):null;
+    // 2+ towers = position fix. 3+ = NLLS-refined. 1 = null (not enough).
+    return this.lastTowers&&this.lastTowers.length>=2?this.trilaterate(this.lastTowers):null;
   }
 };
 
