@@ -455,6 +455,52 @@ let lastGoodFix=null;
 const FIX_REJECTIONS=[]; // FIX 2: rolling log of last 100 rejections
 let compassBadCount=0,compassTotalCount=0; // FIX 6
 
+// ═══════════════════════════════════════
+// LIVE CID LOOKUP — OpenCellID API for towers not in local DB
+// Fires async fetch, caches result in localStorage. Next BLE packet picks it up.
+// ═══════════════════════════════════════
+const CID_CACHE_KEY='upin_cid_cache';
+let cidCache={}; // {mcc-mnc-lac-cid: {lat,lon,range,ts}}
+let cidPending=new Set(); // CIDs currently being looked up (avoid duplicate requests)
+let cidLookups=0,cidCacheHits=0;
+const OPENCELLID_TOKEN='pk.e3891cf93763ba8e2a235fb5d87d5383';
+
+function initCIDCache(){
+  try{const d=localStorage.getItem(CID_CACHE_KEY);if(d)cidCache=JSON.parse(d);}catch(e){}
+}
+function saveCIDCache(){
+  try{localStorage.setItem(CID_CACHE_KEY,JSON.stringify(cidCache));}catch(e){}
+}
+
+function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
+  const key=mcc+'-'+mnc+'-'+lac+'-'+cid;
+  // Already cached?
+  if(cidCache[key]){
+    cidCacheHits++;
+    return cidCache[key]; // {lat,lon,range}
+  }
+  // Already pending?
+  if(cidPending.has(key))return null;
+  // Fire async lookup
+  cidPending.add(key);
+  cidLookups++;
+  const url='https://opencellid.org/cell/get?key='+OPENCELLID_TOKEN+'&mcc='+mcc+'&mnc='+mnc+'&lac='+lac+'&cellid='+cid+'&format=json';
+  fetch(url).then(r=>r.json()).then(d=>{
+    cidPending.delete(key);
+    if(d.lat&&d.lon&&d.lat!==0){
+      cidCache[key]={lat:d.lat,lon:d.lon,range:d.range||500,ts:Date.now()};
+      saveCIDCache();
+      // Also add to our runtime CID index for instant lookup next time
+      if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:d.lat,o:d.lon,m:mnc,c:cid});
+      log('Tower found: CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+' ('+d.range+'m)','var(--green)');
+    }else{
+      cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true}; // mark as not found
+      saveCIDCache();
+    }
+  }).catch(e=>{cidPending.delete(key);});
+  return null; // not available yet — will be on next packet
+}
+
 function validateFix(lat,lon,source){
   if(!isFinite(lat)||!isFinite(lon)||lat===0||lon===0)
     return rejectFix(lat,lon,source,'zero_or_nan');
@@ -952,9 +998,14 @@ function processBoardData(d){
       const t=TOWER_CID_IDX.get(d.cell4g.cid);
       if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:d.cell4g.rssi||-80,dist:0,gen:'4G'});cidHits++;}
       else{
-        // CID not in DB — fallback: nearest tower of same MNC
-        const fb=lookupTowerFallback(d.cell4g.mnc||84,d.cell4g.rssi||-80,refLat,refLon);
-        if(fb)boardTowerList.push(fb);
+        // CID not in local DB — try live OpenCellID API lookup
+        const mcc=d.cell4g.mcc||404;const mnc=d.cell4g.mnc||84;const lac=d.cell4g.tac||d.cell4g.lac||0;
+        const online=lookupCIDOnline(mcc,mnc,lac,d.cell4g.cid,d.cell4g.rssi||-80);
+        if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid:d.cell4g.cid,signal:d.cell4g.rssi||-80,dist:0,gen:'4G-API'});
+        else{
+          const fb=lookupTowerFallback(mnc,d.cell4g.rssi||-80,refLat,refLon);
+          if(fb)boardTowerList.push(fb);
+        }
         cidMisses++;
       }
     }
@@ -972,8 +1023,14 @@ function processBoardData(d){
           const t=TOWER_CID_IDX.get(cid);
           if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});cidHits++;}
           else{
-            const fb=lookupTowerFallback(mnc,rssi,refLat,refLon);
-            if(fb)boardTowerList.push(fb);
+            // Try live API lookup
+            const mcc=c.mcc||c.MCC||404;const lac=c.lac||c.LAC||0;
+            const online=lookupCIDOnline(mcc,mnc,lac,cid,rssi);
+            if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid,signal:rssi,dist:0,gen:'2G-API'});
+            else{
+              const fb=lookupTowerFallback(mnc,rssi,refLat,refLon);
+              if(fb)boardTowerList.push(fb);
+            }
             cidMisses++;
           }
         }
@@ -4368,6 +4425,10 @@ function updateDataTab(){
   // FIX 6: compass health
   const cpct=compassTotalCount>0?Math.round(compassBadCount/compassTotalCount*100):0;
   $('compassHealth').innerHTML=(cpct>10?'<span style="color:var(--red);font-weight:700">BAD CAL — '+cpct+'% invalid</span>':'<span style="color:var(--green)">OK — '+cpct+'% invalid</span>')+' ('+compassBadCount+'/'+compassTotalCount+' samples, last valid: '+Math.round(lastValidCompass)+'°)';
+  // CID lookup stats
+  const cachedCount=Object.keys(cidCache).filter(k=>!cidCache[k].miss).length;
+  const missCount=Object.keys(cidCache).filter(k=>cidCache[k].miss).length;
+  $('rejectCount').textContent=FIX_REJECTIONS.length+' coord rejections | CID lookups: '+cidLookups+' API, '+cidCacheHits+' cached, '+cachedCount+' found, '+missCount+' not in OpenCellID';
   $('fCount').textContent=F.length;
 
   // Layer scores display
@@ -4422,7 +4483,7 @@ window.addEventListener('load',()=>{
   try{
     initMap();buildFormulaTable();
     ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();PROFILES.init();
-    ML_TOGGLE.init();SVM_GATE.init();RF_FUSION.init();
+    ML_TOGGLE.init();SVM_GATE.init();RF_FUSION.init();initCIDCache();
     // Load active profile's saved calibrations
     PROFILES.loadProfile(PROFILES.active);
     $('profileName').textContent=PROFILES.active;try{$('dashProfile').textContent=PROFILES.active;}catch(e){}
