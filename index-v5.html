@@ -123,6 +123,18 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <div><strong>SRC:</strong> <span id="ovSrc">--</span> <strong>ERR:</strong> <span id="ovErr">--</span></div>
     <div><strong>SAT:</strong> <span id="ovSat">--</span> <strong>F:</strong> <span id="ovBest">--</span></div>
   </div>
+  <!-- Map layer toggles -->
+  <div style="position:absolute;top:6px;right:6px;z-index:1000;background:rgba(8,12,20,.92);border:1px solid var(--border);border-radius:2px;padding:4px;font-size:7px">
+    <div style="color:var(--cyan);font-weight:700;letter-spacing:1px;margin-bottom:2px">LAYERS</div>
+    <label style="display:block;color:var(--green);cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('gps')" style="margin-right:3px">GPS Trail</label>
+    <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('towers')" style="margin-right:3px">Cell Towers</label>
+    <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('tri')" style="margin-right:3px">Triangulation</label>
+    <label style="display:block;color:#4da6ff;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('formulas')" style="margin-right:3px">Formula Dots</label>
+    <label style="display:block;color:#f06060;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('pue')" style="margin-right:3px">PUE Envelope</label>
+    <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('route')" style="margin-right:3px">Route</label>
+    <label style="display:block;color:#FFB800;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('predict')" style="margin-right:3px">T+5 Predict</label>
+    <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('turns')" style="margin-right:3px">Turn Markers</label>
+  </div>
 </div>
 
 <!-- ═══ TAB 0: DASHBOARD ═══ -->
@@ -412,13 +424,22 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   <div class="card">
     <div class="card-title" style="color:var(--purple)">AI DIAGNOSTIC ASSISTANT (OLLAMA)</div>
     <div style="font-size:9px;color:var(--tm);margin-bottom:8px">Local LLM — runs on your laptop/Pi via Ollama. No internet needed. Tell it what's wrong and it adjusts the system.</div>
-    <div style="display:flex;gap:4px;margin-bottom:6px;align-items:center">
-      <span style="font-size:7px;color:var(--td);white-space:nowrap">OLLAMA:</span>
-      <input type="text" id="ollamaUrl" value="http://localhost:11434" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
-      <input type="text" id="ollamaModel" value="phi3:mini" placeholder="model" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+    <div style="font-size:8px;font-weight:700;color:var(--td);margin-bottom:3px">LLM BACKEND</div>
+    <div style="display:flex;gap:4px;margin-bottom:4px;align-items:center">
+      <select id="aiBackend" style="background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:3px;border-radius:2px">
+        <option value="ollama">Ollama (local)</option>
+        <option value="claude">Claude API</option>
+      </select>
+      <input type="text" id="ollamaUrl" value="http://localhost:11434" placeholder="Ollama URL" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+      <input type="text" id="ollamaModel" value="phi3:mini" placeholder="model" style="width:70px;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
       <button class="btn btn-cyan" onclick="V.aiPing()" style="font-size:7px;padding:4px 8px">TEST</button>
     </div>
-    <div id="aiStatus" style="font-size:8px;color:var(--td);margin-bottom:6px"><span class="sdot off"></span> Not connected</div>
+    <div style="display:flex;gap:4px;margin-bottom:4px;align-items:center">
+      <span style="font-size:7px;color:var(--td);white-space:nowrap">CLAUDE KEY:</span>
+      <input type="password" id="claudeKey" placeholder="sk-ant-..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+      <input type="text" id="claudeModel" value="claude-sonnet-4-6" placeholder="model" style="width:100px;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+    </div>
+    <div id="aiStatus" style="font-size:8px;color:var(--td);margin-bottom:6px"><span class="sdot off"></span> Not connected — choose Ollama or Claude API</div>
   </div>
   <div class="card">
     <div class="card-title">TELL THE AI WHAT'S WRONG</div>
@@ -4516,9 +4537,27 @@ function exportTowers(){TOWER_CAPTURE.exportCSV();}
 function clearCaptured(){TOWER_CAPTURE.clear();}
 function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
 // ═══════════════════════════════════════
-// AI DIAGNOSTIC ASSISTANT — Ollama LLM integration
-// Runs locally, no internet. Analyzes sensors, takes user feedback,
-// outputs parameter corrections as structured JSON.
+// MAP LAYER TOGGLES
+// ═══════════════════════════════════════
+const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true};
+function toggleMapLayer(layer){
+  MAP_LAYERS[layer]=!MAP_LAYERS[layer];
+  const on=MAP_LAYERS[layer];
+  // Hide/show existing markers
+  try{
+    if(layer==='towers'){towerMapMarkers.forEach(m=>{if(on)m.addTo(map);else map.removeLayer(m);});towerMapLines.forEach(l=>{if(on)l.addTo(map);else map.removeLayer(l);});}
+    if(layer==='tri'){if(UTIN._marker){if(on)UTIN._marker.addTo(map);else map.removeLayer(UTIN._marker);}if(UTIN._circle){if(on)UTIN._circle.addTo(map);else map.removeLayer(UTIN._circle);}}
+    if(layer==='gps'){if(gpsLine){if(on)gpsLine.addTo(map);else map.removeLayer(gpsLine);}if(fullRouteLine){if(on)fullRouteLine.addTo(map);else map.removeLayer(fullRouteLine);}}
+    if(layer==='formulas'){F.forEach(f=>{if(f._mapDot){if(on)f._mapDot.addTo(map);else map.removeLayer(f._mapDot);}if(f.mapLine){if(on)f.mapLine.addTo(map);else map.removeLayer(f.mapLine);}});}
+    if(layer==='pue'&&PUE._circle){if(on)PUE._circle.addTo(map);else map.removeLayer(PUE._circle);}
+    if(layer==='route'&&ROUTE_NAV.routeLine){if(on)ROUTE_NAV.routeLine.addTo(map);else map.removeLayer(ROUTE_NAV.routeLine);}
+    if(layer==='predict'&&PREDICTOR._marker){if(on)PREDICTOR._marker.addTo(map);else map.removeLayer(PREDICTOR._marker);if(PREDICTOR._line){if(on)PREDICTOR._line.addTo(map);else map.removeLayer(PREDICTOR._line);}}
+    if(layer==='turns'){turnMarkers.forEach(m=>{if(on)m.addTo(map);else map.removeLayer(m);});}
+  }catch(e){}
+}
+
+// ═══════════════════════════════════════
+// AI DIAGNOSTIC ASSISTANT — Ollama + Claude API
 // ═══════════════════════════════════════
 let aiConnected=false;
 const AI_CORRECTIONS=[];
@@ -4534,18 +4573,34 @@ function aiAppendChat(role,text){
   chat.scrollTop=chat.scrollHeight;
 }
 
+function getBackend(){return $('aiBackend').value||'ollama';}
+
 function aiPing(){
   $('aiStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting...';
-  fetch(getOllamaUrl()+'/api/tags').then(r=>r.json()).then(d=>{
-    aiConnected=true;
-    const models=(d.models||[]).map(m=>m.name).join(', ');
-    $('aiStatus').innerHTML='<span class="sdot live"></span> Connected — models: '+models;
-    aiAppendChat('system','Ollama connected. Available models: '+models);
-  }).catch(e=>{
-    aiConnected=false;
-    $('aiStatus').innerHTML='<span class="sdot err"></span> Cannot reach Ollama — is it running? (ollama serve)';
-    aiAppendChat('error','Cannot reach '+getOllamaUrl()+' — start Ollama with: ollama serve');
-  });
+  if(getBackend()==='claude'){
+    const key=$('claudeKey').value.trim();
+    if(!key){$('aiStatus').innerHTML='<span class="sdot err"></span> Enter Claude API key (sk-ant-...)';return;}
+    // Test Claude API with a simple message
+    fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:$('claudeModel').value||'claude-sonnet-4-6',max_tokens:50,messages:[{role:'user',content:'Reply with just "connected"'}]})
+    }).then(r=>r.json()).then(d=>{
+      if(d.content){aiConnected=true;$('aiStatus').innerHTML='<span class="sdot live"></span> Claude API connected — '+($('claudeModel').value||'claude-sonnet-4-6');aiAppendChat('system','Claude API connected.');}
+      else{$('aiStatus').innerHTML='<span class="sdot err"></span> Claude error: '+(d.error&&d.error.message||JSON.stringify(d).substring(0,100));aiConnected=false;}
+    }).catch(e=>{aiConnected=false;$('aiStatus').innerHTML='<span class="sdot err"></span> Cannot reach Claude API: '+e.message;});
+  }else{
+    fetch(getOllamaUrl()+'/api/tags').then(r=>r.json()).then(d=>{
+      aiConnected=true;
+      const models=(d.models||[]).map(m=>m.name).join(', ');
+      $('aiStatus').innerHTML='<span class="sdot live"></span> Ollama connected — models: '+models;
+      aiAppendChat('system','Ollama connected. Models: '+models);
+    }).catch(e=>{
+      aiConnected=false;
+      $('aiStatus').innerHTML='<span class="sdot err"></span> Cannot reach Ollama — is it running? (ollama serve)';
+      aiAppendChat('error','Cannot reach '+getOllamaUrl()+' — start with: ollama serve');
+    });
+  }
 }
 
 // Build sensor snapshot for the AI
@@ -4619,27 +4674,47 @@ function aiDiagnose(){
 }
 
 function aiCall(prompt){
-  if(!aiConnected){aiAppendChat('error','Not connected to Ollama. Tap TEST first.');return;}
+  if(!aiConnected){aiAppendChat('error','Not connected. Tap TEST first.');return;}
   aiAppendChat('system','Thinking...');
-  fetch(getOllamaUrl()+'/api/generate',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({model:getOllamaModel(),prompt,stream:false})
-  }).then(r=>r.json()).then(d=>{
-    const resp=d.response||d.message||'No response';
-    aiAppendChat('ai',resp);
-    // Parse and apply JSON corrections
-    const jsonMatch=resp.match(/```json\s*([\s\S]*?)```/)||resp.match(/\{[\s\S]*"corrections"[\s\S]*\}/);
-    if(jsonMatch){
-      try{
-        const raw=jsonMatch[1]||jsonMatch[0];
-        const parsed=JSON.parse(raw);
-        if(parsed.corrections)applyAICorrections(parsed.corrections);
-      }catch(e){aiAppendChat('system','Could not parse correction JSON: '+e.message);}
-    }
-  }).catch(e=>{
-    aiAppendChat('error','Ollama error: '+e.message);
-  });
+
+  if(getBackend()==='claude'){
+    const key=$('claudeKey').value.trim();
+    fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({
+        model:$('claudeModel').value||'claude-sonnet-4-6',
+        max_tokens:500,
+        system:AI_SYSTEM_PROMPT,
+        messages:[{role:'user',content:prompt}]
+      })
+    }).then(r=>r.json()).then(d=>{
+      const resp=d.content?d.content.map(c=>c.text).join(''):(d.error?d.error.message:'No response');
+      aiAppendChat('ai',resp);
+      parseAndApplyCorrections(resp);
+    }).catch(e=>{aiAppendChat('error','Claude error: '+e.message);});
+  }else{
+    fetch(getOllamaUrl()+'/api/generate',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:getOllamaModel(),prompt,stream:false})
+    }).then(r=>r.json()).then(d=>{
+      const resp=d.response||d.message||'No response';
+      aiAppendChat('ai',resp);
+      parseAndApplyCorrections(resp);
+    }).catch(e=>{aiAppendChat('error','Ollama error: '+e.message);});
+  }
+}
+
+function parseAndApplyCorrections(resp){
+  const jsonMatch=resp.match(/```json\s*([\s\S]*?)```/)||resp.match(/\{[\s\S]*"corrections"[\s\S]*\}/);
+  if(jsonMatch){
+    try{
+      const raw=jsonMatch[1]||jsonMatch[0];
+      const parsed=JSON.parse(raw);
+      if(parsed.corrections)applyAICorrections(parsed.corrections);
+    }catch(e){aiAppendChat('system','Could not parse correction JSON: '+e.message);}
+  }
 }
 
 function applyAICorrections(corrections){
@@ -4950,7 +5025,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,aiPing,aiAsk,aiDiagnose,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,aiPing,aiAsk,aiDiagnose,toggleMapLayer,_getProfile};
 })();
 </script>
 </body>
