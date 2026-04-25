@@ -1086,16 +1086,18 @@ function processBoardData(d){
     $('srcCell4G').innerHTML=(c4ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
     $('srcCell4Gd').textContent=(d.cell4g.inet?'4G inet':'no inet')+(d.cell4g.cid?' CID:'+d.cell4g.cid:'');
     $('srcCell4GBox').className='src '+(c4ok?'on':'off');
+    // 4G rssi from board is CSQ (0-31) not dBm. Convert: dBm = -113 + CSQ*2
+    const rssi4g=d.cell4g.rssi>0&&d.cell4g.rssi<=31?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
     if(d.cell4g.cid&&TOWER_CID_IDX){
       const t=TOWER_CID_IDX.get(d.cell4g.cid);
-      if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:d.cell4g.rssi||-80,dist:0,gen:'4G'});cidHits++;}
+      if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi4g,dist:0,gen:'4G'});cidHits++;}
       else{
-        // CID not in local DB — try live OpenCellID API lookup
         const mcc=d.cell4g.mcc||404;const mnc=d.cell4g.mnc||84;const lac=d.cell4g.tac||d.cell4g.lac||0;
-        const online=lookupCIDOnline(mcc,mnc,lac,d.cell4g.cid,d.cell4g.rssi||-80);
-        if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid:d.cell4g.cid,signal:d.cell4g.rssi||-80,dist:0,gen:'4G-API'});
+        const online=lookupCIDOnline(mcc,mnc,lac,d.cell4g.cid,rssi4g);
+        if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid:d.cell4g.cid,signal:rssi4g,dist:0,gen:'4G-API'});
         else{
-          const fb=lookupTowerFallback(mnc,d.cell4g.rssi||-80,refLat,refLon);
+          const fb=lookupTowerFallback(mnc,rssi4g,refLat,refLon);
+          if(fb)boardTowerList.push(fb);
           if(fb)boardTowerList.push(fb);
         }
         cidMisses++;
@@ -1108,8 +1110,10 @@ function processBoardData(d){
     $('srcCell2G').innerHTML=(c2ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
     $('srcCell2Gd').textContent=cellTowers2G+'t'+(cidHits>0?' ('+cidHits+' exact)':'')+(cidMisses>0?' ('+cidMisses+' area)':'');
     $('srcCell2GBox').className='src '+(c2ok?'on':'off');
-    if(d.cell2g.list&&Array.isArray(d.cell2g.list)&&TOWER_CID_IDX){
-      d.cell2g.list.forEach(c=>{
+    // Board sends cell2g.data (not .list) — array of {cid,lac,mcc,mnc,rssi}
+    const c2list=d.cell2g.data||d.cell2g.list;
+    if(c2list&&Array.isArray(c2list)&&TOWER_CID_IDX){
+      c2list.forEach(c=>{
         const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;const mnc=c.mnc||c.MNC||84;
         if(cid){
           const t=TOWER_CID_IDX.get(cid);
