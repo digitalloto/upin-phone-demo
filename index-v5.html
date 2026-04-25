@@ -549,10 +549,17 @@ const CID_CACHE_KEY='upin_cid_cache';
 let cidCache={}; // {mcc-mnc-lac-cid: {lat,lon,range,ts}}
 let cidPending=new Set(); // CIDs currently being looked up (avoid duplicate requests)
 let cidLookups=0,cidCacheHits=0;
-const OPENCELLID_TOKEN='pk.e3891cf93763ba8e2a235fb5d87d5383';
+const OPENCELLID_TOKEN='pk.368752c41cec0c887116526b9ee678cd';
 
 function initCIDCache(){
-  try{const d=localStorage.getItem(CID_CACHE_KEY);if(d)cidCache=JSON.parse(d);}catch(e){}
+  try{
+    const d=localStorage.getItem(CID_CACHE_KEY);
+    if(d){
+      const parsed=JSON.parse(d);
+      // Keep successful lookups, drop misses so they retry with new API key
+      Object.entries(parsed).forEach(([k,v])=>{if(v&&v.lat&&!v.miss)cidCache[k]=v;});
+    }
+  }catch(e){}
 }
 function saveCIDCache(){
   try{localStorage.setItem(CID_CACHE_KEY,JSON.stringify(cidCache));}catch(e){}
