@@ -1620,19 +1620,28 @@ const FORMULAS=F;
 function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
+  // When stationary, use frozen position as truth (GPS jitters ±15m even when still)
+  const truth=isStationary&&frozenPos?frozenPos:gps;
   F.forEach(f=>{
-    if(!f.pos)f.pos={lat:gps.lat,lon:gps.lon};
+    if(!f.pos)f.pos={lat:truth.lat,lon:truth.lon};
     const predicted=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
     if(predicted){
-      f.err=hav(predicted,gps);
+      f.err=hav(predicted,truth);
+      // When stationary: any formula predicting movement is WRONG.
+      // Penalize distance from frozen position, not GPS jitter.
+      if(isStationary&&frozenPos){
+        const moveDist=hav(predicted,frozenPos);
+        if(moveDist>2)f.err=moveDist; // you moved when you shouldn't have
+      }
       f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();
       f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
-      // SELF-CORRECT: learn from the error
-      f.learnFromGPS(predicted,gps);
+      f.learnFromGPS(predicted,truth);
+      // Store the prediction for display (not the reset position)
+      f._lastPredLat=predicted.lat;f._lastPredLon=predicted.lon;
     }
-    f.pos={lat:gps.lat,lon:gps.lon};
+    f.pos={lat:truth.lat,lon:truth.lon};
   });
-  FISH.scoreAll(gps);
+  FISH.scoreAll(truth);
 }
 
 // ═══════════════════════════════════════
@@ -3888,6 +3897,10 @@ function tick(){
     updateStationaryDetect(gpsSys.speed||0);
     if(isStationary&&frozenPos){
       gpsSys.lat=frozenPos.lat;gpsSys.lon=frozenPos.lon;gpsSys.speed=0;
+      // Continuous still-calibration: refine accel/gyro bias every tick while stationary
+      // This is FREE calibration time — the device isn't moving, so we know
+      // any accelerometer reading ≠ [0,0,9.8] is pure bias
+      if(uiFrame%5===0)CAL.addStillSample(accel,gyro);
     }
     DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
     if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
@@ -4181,7 +4194,7 @@ function tick(){
       el.style.color=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)';
       $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'err');
       // Lat/Lon column
-      const fp=$('fp'+i);if(fp)fp.textContent=f.pos?f.pos.lat.toFixed(6)+','+f.pos.lon.toFixed(6):'--';
+      const fp=$('fp'+i);if(fp)fp.textContent=f._lastPredLat?f._lastPredLat.toFixed(6)+','+f._lastPredLon.toFixed(6):(f.pos?f.pos.lat.toFixed(6)+','+f.pos.lon.toFixed(6):'--');
       // Status: RUNNING/BEST/WAITING + agent tuning info
       const fs=$('fs'+i);const running=f.errAvg<999;
       // Show agent-tuned error if available
