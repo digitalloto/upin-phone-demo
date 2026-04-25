@@ -1131,14 +1131,30 @@ function processBoardData(d){
           }
         }
       });
-    }else if(cellTowers2G>0&&TOWER_MNC_IDX){
-      // Board sends tower COUNT but no individual list — use MNC-area fallback
-      // Find nearest towers of MNC=84 (Jio, most common) as area estimate
-      const mncTowers=TOWER_MNC_IDX.get(84)||TOWER_MNC_IDX.get(41)||[];
+    }
+  }
+  // GUARANTEED FALLBACK: if all CID lookups missed but we KNOW towers exist,
+  // use nearest towers from DB by MNC. This ensures we ALWAYS get markers on the map.
+  if(boardTowerList.length<2&&(cellTowers4G+cellTowers2G)>=2&&TOWER_MNC_IDX){
+    const mnc=84; // Jio is dominant in Chennai
+    const mncTowers=TOWER_MNC_IDX.get(mnc)||TOWER_MNC_IDX.get(41)||[];
+    if(mncTowers.length>0){
+      const nTowers=Math.min(cellTowers4G+cellTowers2G,7);
+      // Use real RSSI from board data for weighting
+      const realRSSI=[];
+      if(d.cell4g)realRSSI.push(d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80));
+      const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
+      if(c2d&&Array.isArray(c2d))c2d.forEach(c=>realRSSI.push(c.rssi||-90));
       const nearby=mncTowers.map(t=>({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,
         dist:hav({lat:refLat,lon:refLon},{lat:t.l,lon:t.o}),signal:-85
-      })).sort((a,b)=>a.dist-b.dist).slice(0,Math.min(cellTowers2G,5));
-      nearby.forEach(t=>{if(t.dist<10000)boardTowerList.push(t);}); // within 10km
+      })).sort((a,b)=>a.dist-b.dist).slice(0,nTowers);
+      boardTowerList=[];
+      nearby.forEach((t,i)=>{
+        t.signal=realRSSI[i]||t.signal; // use real RSSI if available
+        t.gen='area';
+        if(t.dist<15000)boardTowerList.push(t); // within 15km
+      });
+      if(bleGoodPkts<=5)log('Fallback: using '+boardTowerList.length+' nearest MNC='+mnc+' towers (dist: '+nearby.slice(0,3).map(t=>Math.round(t.dist)+'m').join(', ')+')','var(--amber)');
     }
   }
   // Feed real tower data (or area-matched) into UTIN
