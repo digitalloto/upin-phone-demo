@@ -434,6 +434,8 @@ function switchTab(idx){
 // STATE
 // ═══════════════════════════════════════
 let map,marker,circle,gpsLine,drLine,fullRouteLine;
+let towerMapMarkers=[]; // individual tower markers on map
+let towerMapLines=[];   // lines from towers to tri position
 const MAX_TRAIL=200;
 let gpsTrail=[],drTrail=[],fullRoute=[];
 let turnMarkers=[];
@@ -1080,32 +1082,69 @@ function processBoardData(d){
   if(boardTowerList.length>=2){
     UTIN.recordBoardScan(boardTowerList);
     if(ML_TOGGLE.doppler)try{DOPPLER.record(boardTowerList,performance.now());}catch(e){}
-    // Show cell triangulation on map IMMEDIATELY (don't wait for tick/recording)
+    // Show cell triangulation + individual towers on map
     try{
-      const cellFix=UTIN.predict();
-      if(cellFix&&typeof L!=='undefined'&&map){
-        const cll=[cellFix.lat,cellFix.lon];
-        const cAcc=cellFix.acc||200;
-        if(!UTIN._marker){
-          UTIN._marker=L.circleMarker(cll,{radius:6,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.8,weight:2}).addTo(map);
-          UTIN._marker.bindTooltip('Cell Tri: '+cAcc+'m ('+boardTowerList.length+' towers)',{permanent:false,direction:'top'});
-          UTIN._circle=L.circle(cll,{radius:cAcc,color:'#e8a832',fillOpacity:.05,weight:1,dashArray:'4,4'}).addTo(map);
-        }else{
-          UTIN._marker.setLatLng(cll);
-          UTIN._marker.setTooltipContent('Cell Tri: '+cAcc+'m ('+boardTowerList.length+' towers)');
-          UTIN._circle.setLatLng(cll);UTIN._circle.setRadius(cAcc);
-        }
-        // If no GPS fix yet, use cell tri to center the map
-        if(!gpsTrue&&!marker){
-          map.setView(cll,15);
-          $('bStart').disabled=false;$('bStart').style.opacity='1';
+      if(typeof L!=='undefined'&&map){
+        // ── Individual tower markers (different colors by signal strength) ──
+        // Clear old tower markers
+        towerMapMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+        towerMapLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
+        towerMapMarkers=[];towerMapLines=[];
+
+        const cellFix=UTIN.predict();
+        // Signal strength → color: strong=green, medium=cyan, weak=amber, very weak=red
+        boardTowerList.forEach((t,i)=>{
+          const sig=t.signal||-90;
+          const color=sig>-65?'#3dcc6e':sig>-75?'#4da6ff':sig>-85?'#e8a832':'#f06060';
+          const radius=sig>-65?8:sig>-75?6:sig>-85?5:4;
+          const op={40:'Airtel',41:'Airtel',43:'Vi',44:'Vi',84:'Jio',86:'Jio',64:'BSNL'}[t.mnc]||'Op'+t.mnc;
+          const mkr=L.circleMarker([t.lat,t.lon],{
+            radius:radius,color:color,fillColor:color,fillOpacity:0.6,weight:2
+          }).addTo(map);
+          mkr.bindTooltip(
+            op+' '+(t.gen||'?')+' CID:'+t.cid+'<br>RSSI: '+Math.round(sig)+'dBm',
+            {permanent:false,direction:'top'}
+          );
+          towerMapMarkers.push(mkr);
+
+          // Draw line from tower to triangulated position
+          if(cellFix){
+            const line=L.polyline([[t.lat,t.lon],[cellFix.lat,cellFix.lon]],{
+              color:color,weight:1,opacity:0.4,dashArray:'4,4'
+            }).addTo(map);
+            towerMapLines.push(line);
+          }
+        });
+
+        // ── Triangulated position (amber diamond) ──
+        if(cellFix){
+          const cll=[cellFix.lat,cellFix.lon];
+          const cAcc=cellFix.acc||200;
+          if(!UTIN._marker){
+            UTIN._marker=L.circleMarker(cll,{radius:7,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.9,weight:2}).addTo(map);
+            UTIN._marker.bindTooltip('CELL TRI: ±'+cAcc+'m ('+boardTowerList.length+' towers)',{permanent:false,direction:'top'});
+            UTIN._circle=L.circle(cll,{radius:cAcc,color:'#e8a832',fillOpacity:.05,weight:1,dashArray:'4,4'}).addTo(map);
+          }else{
+            UTIN._marker.setLatLng(cll);
+            UTIN._marker.setTooltipContent('CELL TRI: ±'+cAcc+'m ('+boardTowerList.length+' towers)');
+            UTIN._circle.setLatLng(cll);UTIN._circle.setRadius(cAcc);
+          }
+          if(!gpsTrue&&!marker){
+            map.setView(cll,15);
+            $('bStart').disabled=false;$('bStart').style.opacity='1';
+          }
         }
       }
     }catch(e){}
+  }else{
+    // Less than 2 towers — clear tower markers
+    towerMapMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+    towerMapLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
+    towerMapMarkers=[];towerMapLines=[];
   }
   // Log tower lookup stats every 20 BLE packets
   if(bleGoodPkts%20===0&&boardTowerList.length>0){
-    log('Towers: '+boardTowerList.length+' matched ('+cidHits+' exact, '+cidMisses+' area/API) → '+(UTIN.predict()?'TRI FIX':'no fix'),'var(--cyan)');
+    log('Towers: '+boardTowerList.length+' matched ('+cidHits+' exact, '+cidMisses+' area/API) → '+(UTIN.predict()?'TRI FIX ±'+(UTIN.predict().acc||'?')+'m':'no fix'),'var(--cyan)');
   }
   // WiFi APs
   if(d.wifi){
