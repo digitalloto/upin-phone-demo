@@ -2132,31 +2132,44 @@ F.push(mkF('MACD',(pos,dt)=>{
   return{lat:pos.lat+(fastLat+macdLat*0.5)*dt,lon:pos.lon+(fastLon+macdLon*0.5)*dt};
 }));
 
-// F36: Bollinger — SMA(20) position + mean reversion pull
-F.push(mkF('Bollinger',(pos,dt)=>{
-  if(!pos||DATA.samples.length<10)return pos;
-  const pts=DATA.samples.slice(-20);
-  const mLat=pts.reduce((s,p)=>s+p.lat,0)/pts.length;
-  const mLon=pts.reduce((s,p)=>s+p.lon,0)/pts.length;
-  const vLat=getVelLatHist(),vLon=getVelLonHist();
-  const vL=vLat.length?vLat[vLat.length-1]:0,vO=vLon.length?vLon[vLon.length-1]:0;
-  const pull=0.02;
-  return{lat:pos.lat+vL*dt+(mLat-pos.lat)*pull,lon:pos.lon+vO*dt+(mLon-pos.lon)*pull};
+// F36: Bollinger — treat SPEED as price chart, detect overbought/oversold speed
+// Upper band = speed too high (likely GPS noise), lower band = speed too low
+F.push(mkF('Bollinger',function(pos,dt){
+  if(!pos||DATA.samples.length<20)return pos;
+  const spds=getSpeedHist().slice(-20);
+  if(spds.length<10)return pos;
+  const mean=spds.reduce((s,v)=>s+v,0)/spds.length;
+  const std=Math.sqrt(spds.reduce((s,v)=>s+(v-mean)**2,0)/spds.length);
+  const curSpd=spds[spds.length-1];
+  // If speed is above upper band (mean+2σ) → probably GPS noise, clamp down
+  // If below lower band (mean-2σ) → probably real slow movement
+  const upper=mean+2*std,lower=Math.max(0,mean-2*std);
+  let adjSpd=curSpd;
+  if(curSpd>upper)adjSpd=mean; // revert to mean — noise
+  else if(curSpd<lower)adjSpd=lower; // at least move at lower band
+  // Also use accel energy as "volume" — high energy confirms the speed is real
+  const energy=Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81);
+  if(energy<0.3)adjSpd*=0.5; // low energy = not really moving, halve speed
+  const hdg=ema(getHeadingHist(),0.1)*Math.PI/180;
+  return{lat:pos.lat+(adjSpd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(adjSpd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
 }));
 
-// F37: VWMA — confidence-weighted position average
-F.push(mkF('VWMA',(pos,dt)=>{
+// F37: VWMA — volume-weighted moving average (volume = accel energy)
+// High accel energy = confident the movement is real → weight that sample more
+F.push(mkF('VWMA',function(pos,dt){
   if(!pos||DATA.samples.length<10)return pos;
   const pts=DATA.samples.slice(-20);
-  // Weight by speed (higher speed = more confident GPS reading)
-  let sLat=0,sLon=0,sW=0;
-  pts.forEach(p=>{const w=Math.max(0.1,p.speed);sLat+=p.lat*w;sLon+=p.lon*w;sW+=w;});
-  if(sW<0.1)return pos;
-  const vL=getVelLatHist(),vO=getVelLonHist();
-  const vLat=vL.length?vL[vL.length-1]:0,vLon=vO.length?vO[vO.length-1]:0;
-  // Blend VWMA position trend with velocity
-  const vwLat=sLat/sW,vwLon=sLon/sW;
-  return{lat:pos.lat+vLat*dt*0.7+(vwLat-pos.lat)*0.02,lon:pos.lon+vLon*dt*0.7+(vwLon-pos.lon)*0.02};
+  // "Volume" = accel energy. High energy readings are more trustworthy for speed.
+  let wSpd=0,wHdg=0,wTotal=0;
+  pts.forEach(p=>{
+    const energy=Math.abs(Math.sqrt(p.ax**2+p.ay**2+p.az**2)-9.81);
+    const vol=Math.max(0.01,energy); // volume = accel energy
+    wSpd+=p.speed*vol;wHdg+=p.heading*vol;wTotal+=vol;
+  });
+  if(wTotal<0.01)return pos;
+  const spd=wSpd/wTotal;
+  const hdg=(wHdg/wTotal)*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
 }));
 
 // F38: RSI Heading — heading consistency (straight vs turning)
