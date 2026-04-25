@@ -1055,6 +1055,32 @@ function processBoardData(d){
   if(boardTowerList.length>=2){
     UTIN.recordBoardScan(boardTowerList);
     if(ML_TOGGLE.doppler)try{DOPPLER.record(boardTowerList,performance.now());}catch(e){}
+    // Show cell triangulation on map IMMEDIATELY (don't wait for tick/recording)
+    try{
+      const cellFix=UTIN.predict();
+      if(cellFix&&typeof L!=='undefined'&&map){
+        const cll=[cellFix.lat,cellFix.lon];
+        const cAcc=cellFix.acc||200;
+        if(!UTIN._marker){
+          UTIN._marker=L.circleMarker(cll,{radius:6,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.8,weight:2}).addTo(map);
+          UTIN._marker.bindTooltip('Cell Tri: '+cAcc+'m ('+boardTowerList.length+' towers)',{permanent:false,direction:'top'});
+          UTIN._circle=L.circle(cll,{radius:cAcc,color:'#e8a832',fillOpacity:.05,weight:1,dashArray:'4,4'}).addTo(map);
+        }else{
+          UTIN._marker.setLatLng(cll);
+          UTIN._marker.setTooltipContent('Cell Tri: '+cAcc+'m ('+boardTowerList.length+' towers)');
+          UTIN._circle.setLatLng(cll);UTIN._circle.setRadius(cAcc);
+        }
+        // If no GPS fix yet, use cell tri to center the map
+        if(!gpsTrue&&!marker){
+          map.setView(cll,15);
+          $('bStart').disabled=false;$('bStart').style.opacity='1';
+        }
+      }
+    }catch(e){}
+  }
+  // Log tower lookup stats every 20 BLE packets
+  if(bleGoodPkts%20===0&&boardTowerList.length>0){
+    log('Towers: '+boardTowerList.length+' matched ('+cidHits+' exact, '+cidMisses+' area/API) → '+(UTIN.predict()?'TRI FIX':'no fix'),'var(--cyan)');
   }
   // WiFi APs
   if(d.wifi){
