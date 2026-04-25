@@ -1195,9 +1195,11 @@ function processBoardData(d){
     towerMapLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
     towerMapMarkers=[];towerMapLines=[];
   }
-  // Log tower lookup stats every 20 BLE packets
-  if(bleGoodPkts%20===0&&boardTowerList.length>0){
-    log('Towers: '+boardTowerList.length+' matched ('+cidHits+' exact, '+cidMisses+' area/API) → '+(UTIN.predict()?'TRI FIX ±'+(UTIN.predict().acc||'?')+'m':'no fix'),'var(--cyan)');
+  // Log tower debug — ALWAYS log first 5 packets so we can see what board sends
+  if(bleGoodPkts<=5||(bleGoodPkts%50===0)){
+    const c4=d.cell4g?JSON.stringify(d.cell4g).substring(0,100):'none';
+    const c2=d.cell2g?JSON.stringify(d.cell2g).substring(0,100):'none';
+    log('CELL DEBUG pkt#'+bleGoodPkts+': 4G='+c4+' | 2G='+c2+' | matched='+boardTowerList.length+' (hits:'+cidHits+' miss:'+cidMisses+') | UTIN='+(UTIN.predict()?'FIX':'null')+' | TOWER_CID_IDX='+(TOWER_CID_IDX?TOWER_CID_IDX.size:'not built'),'var(--amber)');
   }
   // WiFi APs
   if(d.wifi){
