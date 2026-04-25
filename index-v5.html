@@ -1014,6 +1014,12 @@ function usePhone(){
 // Process board sensor data (from HTTP polling)
 function processBoardData(d){
   if(!d)return;
+  // DEBUG: show what keys the board sends (first 3 good packets)
+  if(bleGoodPkts<=3){
+    const keys=Object.keys(d).join(',');
+    const raw=JSON.stringify(d).substring(0,200);
+    log('BOARD PKT#'+bleGoodPkts+' keys=['+keys+'] → '+raw,'var(--amber)');
+  }
   // IMU (MPU9250)
   if(d.imu&&d.imu.ok){
     accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
