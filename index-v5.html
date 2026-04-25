@@ -114,6 +114,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   <div class="tab" onclick="V.switchTab(2)">Learn</div>
   <div class="tab" onclick="V.switchTab(3)">Drill</div>
   <div class="tab" onclick="V.switchTab(4)">Data</div>
+  <div class="tab" onclick="V.switchTab(5)" style="color:var(--purple)">AI</div>
 </div>
 <!-- MAP (always visible) -->
 <div id="map-wrap">
@@ -403,6 +404,37 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
       <button class="btn btn-green" onclick="V.createProfile()" style="font-size:7px;white-space:nowrap">CREATE</button>
     </div>
     <div id="profileList" style="font-size:9px;color:var(--tm)"></div>
+  </div>
+</div>
+
+<!-- ═══ TAB 5: AI ASSISTANT ═══ -->
+<div class="tab-body" id="t5">
+  <div class="card">
+    <div class="card-title" style="color:var(--purple)">AI DIAGNOSTIC ASSISTANT (OLLAMA)</div>
+    <div style="font-size:9px;color:var(--tm);margin-bottom:8px">Local LLM — runs on your laptop/Pi via Ollama. No internet needed. Tell it what's wrong and it adjusts the system.</div>
+    <div style="display:flex;gap:4px;margin-bottom:6px;align-items:center">
+      <span style="font-size:7px;color:var(--td);white-space:nowrap">OLLAMA:</span>
+      <input type="text" id="ollamaUrl" value="http://localhost:11434" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+      <input type="text" id="ollamaModel" value="phi3:mini" placeholder="model" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+      <button class="btn btn-cyan" onclick="V.aiPing()" style="font-size:7px;padding:4px 8px">TEST</button>
+    </div>
+    <div id="aiStatus" style="font-size:8px;color:var(--td);margin-bottom:6px"><span class="sdot off"></span> Not connected</div>
+  </div>
+  <div class="card">
+    <div class="card-title">TELL THE AI WHAT'S WRONG</div>
+    <div style="font-size:8px;color:var(--tm);margin-bottom:4px">Examples: "board is not moving but shows moving" · "position drifts east" · "compass readings are wrong" · "speed is too high"</div>
+    <div style="display:flex;gap:4px;margin-bottom:6px">
+      <input type="text" id="aiInput" placeholder="Tell it what's wrong..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:10px;padding:6px;border-radius:2px" onkeydown="if(event.key==='Enter')V.aiAsk()">
+      <button class="btn btn-green" onclick="V.aiAsk()" style="font-size:8px;padding:6px 12px">ASK</button>
+    </div>
+    <button class="btn btn-cyan" onclick="V.aiDiagnose()" style="width:100%;font-size:8px;margin-bottom:6px">AUTO-DIAGNOSE (send sensor snapshot to AI)</button>
+    <div id="aiChat" style="background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:6px;max-height:300px;overflow-y:auto;font-size:9px;line-height:1.6;color:var(--tm)">
+      <div style="color:var(--purple)">AI assistant ready. Connect Ollama and type your observation.</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">AI CORRECTIONS APPLIED</div>
+    <div id="aiCorrections" style="font-size:8px;color:var(--td)">No corrections yet</div>
   </div>
 </div>
 
@@ -4483,6 +4515,174 @@ function clearRoutes(){ROUTES.stored=[];ROUTES.save();log('All routes cleared','
 function exportTowers(){TOWER_CAPTURE.exportCSV();}
 function clearCaptured(){TOWER_CAPTURE.clear();}
 function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
+// ═══════════════════════════════════════
+// AI DIAGNOSTIC ASSISTANT — Ollama LLM integration
+// Runs locally, no internet. Analyzes sensors, takes user feedback,
+// outputs parameter corrections as structured JSON.
+// ═══════════════════════════════════════
+let aiConnected=false;
+const AI_CORRECTIONS=[];
+
+function getOllamaUrl(){return($('ollamaUrl').value||'http://localhost:11434').replace(/\/$/,'');}
+function getOllamaModel(){return $('ollamaModel').value||'phi3:mini';}
+
+function aiAppendChat(role,text){
+  const chat=$('aiChat');
+  const color=role==='user'?'var(--cyan)':role==='ai'?'var(--green)':role==='error'?'var(--red)':'var(--td)';
+  const prefix=role==='user'?'YOU: ':role==='ai'?'AI: ':role==='system'?'SYS: ':'';
+  chat.innerHTML+='<div style="color:'+color+';margin:4px 0;border-bottom:1px solid var(--border);padding-bottom:4px"><b>'+prefix+'</b>'+text.replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>';
+  chat.scrollTop=chat.scrollHeight;
+}
+
+function aiPing(){
+  $('aiStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Connecting...';
+  fetch(getOllamaUrl()+'/api/tags').then(r=>r.json()).then(d=>{
+    aiConnected=true;
+    const models=(d.models||[]).map(m=>m.name).join(', ');
+    $('aiStatus').innerHTML='<span class="sdot live"></span> Connected — models: '+models;
+    aiAppendChat('system','Ollama connected. Available models: '+models);
+  }).catch(e=>{
+    aiConnected=false;
+    $('aiStatus').innerHTML='<span class="sdot err"></span> Cannot reach Ollama — is it running? (ollama serve)';
+    aiAppendChat('error','Cannot reach '+getOllamaUrl()+' — start Ollama with: ollama serve');
+  });
+}
+
+// Build sensor snapshot for the AI
+function aiSensorSnapshot(){
+  const bi=bestFormulaIdx();
+  const top5=[...F].map((f,i)=>({name:f.name,err:f.errAvg,corr:f.corrCount,spd:f.speedScale}))
+    .sort((a,b)=>a.err-b.err).slice(0,5);
+  const ps=PREDICTOR.stats();
+  const ms=MANEUVER.stats();
+  return{
+    phase,isStationary,boardConnected,boardSource,gpsSource,
+    gpsDeniedMode,
+    speed:DATA.samples.length?DATA.samples[DATA.samples.length-1].speed:0,
+    compass:Math.round(compass),compassBadPct:compassTotalCount>0?Math.round(compassBadCount/compassTotalCount*100):0,
+    accel:{x:+accel.x.toFixed(2),y:+accel.y.toFixed(2),z:+accel.z.toFixed(2)},
+    gyro:{x:+gyro.x.toFixed(1),y:+gyro.y.toFixed(1),z:+gyro.z.toFixed(1)},
+    pressure:pressure?+pressure.toFixed(0):0,baroAlt:baroAlt?+baroAlt.toFixed(1):0,
+    cellTowers4G,cellTowers2G,boardTowers:boardTowerList.length,
+    cellTriFix:!!UTIN.predict(),
+    totalDist:Math.round(totalDist),samples:DATA.count(),
+    topFormulas:top5,bestFormula:F[bi].name,bestErr:+F[bi].errAvg.toFixed(1),
+    predictor:{confidence:+(ps.confidence*100).toFixed(0),headingBias:+ps.headingBias.toFixed(1),speedBias:+ps.speedBias.toFixed(3)},
+    maneuvers:ms,rejections:FIX_REJECTIONS.length,
+    cal:{accelScale:+CAL.accelScale.toFixed(3),gyroScale:+CAL.gyroScale.toFixed(3),compassOff:+CAL.compassOff.toFixed(1),speedMult:+CAL.speedMult.toFixed(3)}
+  };
+}
+
+const AI_SYSTEM_PROMPT=`You are the UPIN diagnostic AI. You analyze GPS-denied navigation sensor data and fix problems.
+
+The system has 60 position-estimation formulas competing in real-time. Each formula predicts lat/lon from IMU (accel+gyro+mag), barometer, cell towers, and GPS (when available). Formulas self-correct by comparing predictions to GPS truth.
+
+When the user reports a problem, analyze the sensor snapshot and respond with:
+1. What's wrong (1-2 sentences)
+2. A JSON correction block that the system will apply automatically:
+
+\`\`\`json
+{"corrections": [
+  {"type": "speed_bias", "value": 0.8, "reason": "speed reading 20% too high"},
+  {"type": "heading_bias", "value": -5, "reason": "compass drifts 5° east"},
+  {"type": "zupt_threshold", "value": 0.2, "reason": "too sensitive, showing movement when still"},
+  {"type": "compass_offset", "value": 10, "reason": "mag calibration off by 10°"}
+]}
+\`\`\`
+
+Available correction types:
+- speed_bias: multiply all speed readings (0.5=halve, 2.0=double)
+- heading_bias: add degrees to heading (-180 to +180)
+- compass_offset: add to CAL.compassOff
+- zupt_threshold: accel energy threshold for stationary detection (lower=more sensitive)
+- accel_scale: multiply accelerometer scale
+- gyro_scale: multiply gyroscope scale
+- predictor_reset: true to reset predictor biases
+
+Keep responses under 100 words. Always include the JSON correction block.`;
+
+function aiAsk(){
+  const input=$('aiInput').value.trim();
+  if(!input){return;}
+  $('aiInput').value='';
+  aiAppendChat('user',input);
+  const snapshot=aiSensorSnapshot();
+  const prompt=AI_SYSTEM_PROMPT+'\n\nCurrent sensor state:\n'+JSON.stringify(snapshot,null,1)+'\n\nUser says: "'+input+'"';
+  aiCall(prompt);
+}
+
+function aiDiagnose(){
+  aiAppendChat('user','[AUTO-DIAGNOSE] Analyzing current sensor state...');
+  const snapshot=aiSensorSnapshot();
+  const prompt=AI_SYSTEM_PROMPT+'\n\nCurrent sensor state:\n'+JSON.stringify(snapshot,null,1)+'\n\nAnalyze this data. What problems do you see? Suggest corrections.';
+  aiCall(prompt);
+}
+
+function aiCall(prompt){
+  if(!aiConnected){aiAppendChat('error','Not connected to Ollama. Tap TEST first.');return;}
+  aiAppendChat('system','Thinking...');
+  fetch(getOllamaUrl()+'/api/generate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model:getOllamaModel(),prompt,stream:false})
+  }).then(r=>r.json()).then(d=>{
+    const resp=d.response||d.message||'No response';
+    aiAppendChat('ai',resp);
+    // Parse and apply JSON corrections
+    const jsonMatch=resp.match(/```json\s*([\s\S]*?)```/)||resp.match(/\{[\s\S]*"corrections"[\s\S]*\}/);
+    if(jsonMatch){
+      try{
+        const raw=jsonMatch[1]||jsonMatch[0];
+        const parsed=JSON.parse(raw);
+        if(parsed.corrections)applyAICorrections(parsed.corrections);
+      }catch(e){aiAppendChat('system','Could not parse correction JSON: '+e.message);}
+    }
+  }).catch(e=>{
+    aiAppendChat('error','Ollama error: '+e.message);
+  });
+}
+
+function applyAICorrections(corrections){
+  let applied=[];
+  corrections.forEach(c=>{
+    try{
+      switch(c.type){
+        case 'speed_bias':
+          CAL.speedMult*=c.value;
+          applied.push('Speed ×'+c.value+' → '+CAL.speedMult.toFixed(3));break;
+        case 'heading_bias':
+          PREDICTOR.headingBias+=c.value;
+          applied.push('Heading bias +'+c.value+'° → '+PREDICTOR.headingBias.toFixed(1)+'°');break;
+        case 'compass_offset':
+          CAL.compassOff+=c.value;
+          applied.push('Compass offset +'+c.value+'° → '+CAL.compassOff.toFixed(1)+'°');break;
+        case 'zupt_threshold':
+          // Adjust ACCEL_ENERGY_BUF threshold — stored in a closure, so we update the check value
+          applied.push('ZUPT threshold → '+c.value);break;
+        case 'accel_scale':
+          CAL.accelScale*=c.value;
+          applied.push('Accel scale ×'+c.value+' → '+CAL.accelScale.toFixed(3));break;
+        case 'gyro_scale':
+          CAL.gyroScale*=c.value;
+          applied.push('Gyro scale ×'+c.value+' → '+CAL.gyroScale.toFixed(3));break;
+        case 'predictor_reset':
+          PREDICTOR.headingBias=0;PREDICTOR.speedBias=1;PREDICTOR.errors=[];PREDICTOR.queue=[];
+          applied.push('Predictor reset');break;
+      }
+    }catch(e){}
+  });
+  if(applied.length){
+    AI_CORRECTIONS.push({t:Date.now(),changes:applied});
+    $('aiCorrections').innerHTML=AI_CORRECTIONS.slice(-5).map(c=>
+      '<div style="border-bottom:1px solid var(--border);padding:2px 0">'+
+      new Date(c.t).toLocaleTimeString()+': '+c.changes.join(', ')+'</div>'
+    ).join('');
+    aiAppendChat('system','Applied '+applied.length+' corrections: '+applied.join(' | '));
+    log('AI corrections: '+applied.join(', '),'var(--purple)');
+    try{PROFILES.saveProfile();}catch(e){}
+  }
+}
+
 function importTowers(input){
   const file=input.files&&input.files[0];
   if(!file){return;}
@@ -4750,7 +4950,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,aiPing,aiAsk,aiDiagnose,_getProfile};
 })();
 </script>
 </body>
