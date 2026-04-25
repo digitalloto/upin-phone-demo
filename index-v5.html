@@ -1202,15 +1202,43 @@ function processBoardData(d){
       });
     }
   }
-  // REAL DATA ONLY: no fake tower positions.
-  // If CID lookups missed, the OpenCellID API is looking them up async.
-  // On next BLE packet the cache will have results → real positions.
-  // Log what's pending so user knows the system is working on it.
+  // If no towers matched by CID, try LAC-level geolocation
+  // LAC (Location Area Code) covers ~5-10km — gives area-level position
   if(boardTowerList.length<2&&(cellTowers4G+cellTowers2G)>=2){
-    const pending=cidPending.size;
-    const cached=Object.keys(cidCache).filter(k=>!cidCache[k].miss).length;
+    const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
+    // Collect unique LACs from board data
+    const lacs=new Set();
+    if(d.cell4g&&d.cell4g.tac)lacs.add(d.cell4g.tac);
+    if(c2d&&Array.isArray(c2d))c2d.forEach(c=>{if(c.lac)lacs.add(c.lac);});
+    // Look up each LAC (without CID → returns area center)
+    lacs.forEach(lac=>{
+      const lacKey='lac-404-84-'+lac;
+      if(cidCache[lacKey]&&!cidCache[lacKey].miss){
+        // LAC area already known — add as a tower position
+        boardTowerList.push({lat:cidCache[lacKey].lat,lon:cidCache[lacKey].lon,mnc:84,cid:0,signal:-85,dist:0,gen:'LAC-'+lac});
+      }else if(!cidCache[lacKey]&&!cidPending.has(lacKey)){
+        // Look up LAC area via API
+        cidPending.add(lacKey);
+        const uwUrl='https://us1.unwiredlabs.com/v2/process';
+        const uwBody={token:OPENCELLID_TOKEN,radio:'gsm',mcc:404,mnc:84,cells:[{lac,cid:0}],address:0};
+        const proxy='https://corsproxy.io/?'+encodeURIComponent(uwUrl);
+        fetch(proxy,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(uwBody)})
+        .then(r=>r.json()).then(r=>{
+          cidPending.delete(lacKey);
+          if(r.status==='ok'&&r.lat&&r.lon){
+            cidCache[lacKey]={lat:r.lat,lon:r.lon,range:r.accuracy||5000,ts:Date.now()};
+            saveCIDCache();
+            log('LAC area found: LAC '+lac+' → '+r.lat.toFixed(4)+','+r.lon.toFixed(4)+' (±'+Math.round(r.accuracy||5000)+'m)','var(--green)');
+            try{$('ctApiLog').innerHTML+='<div style="color:var(--green)">✓ LAC '+lac+' → '+r.lat.toFixed(4)+','+r.lon.toFixed(4)+' (area)</div>';}catch(e){}
+          }else{
+            cidCache[lacKey]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};saveCIDCache();
+            log('LAC '+lac+' not found in API','var(--red)');
+          }
+        }).catch(()=>{cidPending.delete(lacKey);});
+      }
+    });
     if(bleGoodPkts<=5||bleGoodPkts%50===0){
-      log('Towers: '+cidMisses+' CIDs not in local DB. API lookups: '+pending+' pending, '+cached+' cached. Waiting for real positions...','var(--amber)');
+      log('Towers: '+boardTowerList.length+' positioned / '+(cellTowers4G+cellTowers2G)+' detected. LACs: '+[...lacs].join(',')+'. API: '+cidPending.size+' pending','var(--amber)');
     }
   }
   // Feed real tower data (or area-matched) into UTIN
