@@ -534,6 +534,7 @@ function switchTab(idx){
 let map,marker,circle,gpsLine,drLine,fullRouteLine;
 let towerMapMarkers=[]; // individual tower markers on map
 let towerMapLines=[];   // lines from towers to tri position
+let nearbyDbMarkers=[]; // ALL towers from local DB within radius
 const MAX_TRAIL=200;
 let gpsTrail=[],drTrail=[],fullRoute=[];
 let turnMarkers=[];
@@ -1246,6 +1247,60 @@ function processBoardData(d){
       log('Towers: '+boardTowerList.length+' positioned / '+(cellTowers4G+cellTowers2G)+' detected. '+lacList+'. API: '+cidPending.size+' pending','var(--amber)');
     }
   }
+  // ═══ SHOW ALL DB TOWERS WITHIN 2KM + SIGNAL-MATCH ═══
+  // This shows every tower from our 44k DB near the user's position,
+  // regardless of operator. Then matches board's RSSI to nearest towers.
+  try{
+    const refP=gpsTrue||lastGoodFix;
+    if(refP&&typeof TOWERS!=='undefined'&&typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
+      // Clear old nearby markers
+      nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+      nearbyDbMarkers=[];
+      // Find all towers within 2km of current position
+      const RADIUS=2000; // meters
+      const nearbyTowers=[];
+      TOWERS.forEach(t=>{
+        const d=hav({lat:refP.lat,lon:refP.lon},{lat:t.l,lon:t.o});
+        if(d<RADIUS)nearbyTowers.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,dist:d});
+      });
+      // Draw each nearby DB tower as a small grey circle
+      const op={40:'Airtel',41:'Airtel',43:'Vi',44:'Vi',45:'Airtel',49:'Airtel',84:'Jio',86:'Jio',64:'BSNL',10:'AirTel',20:'Vi',92:'AirTel'};
+      nearbyTowers.forEach(t=>{
+        // Check if this tower matches any board signal by distance
+        // Board's RSSI → estimated distance via path-loss model
+        let matched=false;let matchColor='rgba(100,100,120,0.3)';
+        const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
+        if(c2d&&Array.isArray(c2d)){
+          c2d.forEach(c=>{
+            const estDist=100*Math.pow(10,(c.rssi+50)/-35); // RSSI → distance
+            // If DB tower distance ≈ estimated distance from RSSI (within 30%), likely match
+            if(Math.abs(t.dist-estDist)/Math.max(estDist,100)<0.4&&t.mnc===(c.mnc||84)){
+              matched=true;
+              matchColor=c.rssi>-75?'#3dcc6e':c.rssi>-85?'#4da6ff':c.rssi>-95?'#e8a832':'#f06060';
+            }
+          });
+        }
+        const mkr=L.circleMarker([t.lat,t.lon],{
+          radius:matched?6:3,
+          color:matchColor,fillColor:matchColor,
+          fillOpacity:matched?0.7:0.2,weight:matched?2:1
+        }).addTo(map);
+        mkr.bindTooltip((op[t.mnc]||'Op'+t.mnc)+' CID:'+t.cid+'<br>'+Math.round(t.dist)+'m away'+(matched?'<br><b style="color:#3dcc6e">SIGNAL MATCH</b>':''),{direction:'top'});
+        nearbyDbMarkers.push(mkr);
+        // If matched, also add to boardTowerList for triangulation!
+        if(matched&&!boardTowerList.find(bt=>bt.cid===t.cid)){
+          const bestRssi=c2d.reduce((best,c)=>{
+            const ed=100*Math.pow(10,(c.rssi+50)/-35);
+            return Math.abs(t.dist-ed)<Math.abs(t.dist-(best.ed||99999))?{rssi:c.rssi,ed}:best;
+          },{rssi:-90,ed:99999});
+          boardTowerList.push({lat:t.lat,lon:t.lon,mnc:t.mnc,cid:t.cid,signal:bestRssi.rssi,dist:t.dist,gen:'matched'});
+        }
+      });
+      // Update tower tab with nearby count
+      try{$('ctTriDetail').innerHTML=($('ctTriDetail').innerHTML||'')+'<div style="margin-top:4px;color:var(--cyan)">DB towers within 2km: <b>'+nearbyTowers.length+'</b> ('+nearbyTowers.filter(t=>nearbyDbMarkers.some(m=>m.options.fillOpacity>0.5)).length+' signal-matched)</div>';}catch(e){}
+    }
+  }catch(e){}
+
   // Feed real tower data (or area-matched) into UTIN
   if(boardTowerList.length>=2){
     UTIN.recordBoardScan(boardTowerList);
