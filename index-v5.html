@@ -449,6 +449,31 @@ let lastValidCompass=0; // FIX 6: compass fallback
 let pressure=0,temp=0,baroAlt=0,laserMm=0;
 let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
 let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
+
+// STATIONARY DETECTION — freeze position when not moving
+let isStationary=false;
+let stationaryCount=0;
+let frozenPos=null; // lat/lon when we froze
+const ACCEL_ENERGY_BUF=[];
+function updateStationaryDetect(speed){
+  const energy=Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81);
+  ACCEL_ENERGY_BUF.push(energy);
+  if(ACCEL_ENERGY_BUF.length>20)ACCEL_ENERGY_BUF.shift();
+  const avgEnergy=ACCEL_ENERGY_BUF.reduce((s,v)=>s+v,0)/ACCEL_ENERGY_BUF.length;
+  // Stationary if: low accel energy AND low/zero speed for 3+ ticks
+  if(avgEnergy<0.4&&(speed||0)<0.5){
+    stationaryCount++;
+    if(stationaryCount>=3&&!isStationary){
+      isStationary=true;
+      frozenPos=gpsTrue?{lat:gpsTrue.lat,lon:gpsTrue.lon}:null;
+    }
+  }else{
+    stationaryCount=0;
+    isStationary=false;
+    frozenPos=null;
+  }
+  return isStationary;
+}
 let drills=[],stepCount=0,lastStepT=0;
 let tickIv=null,alertIv=null,simStep=0,uiFrame=0;
 let _lastPan=null,_lastMarker=null;
@@ -3693,6 +3718,11 @@ function tick(){
   }
 
   if(phase==='recording'&&gpsSys){
+    // STATIONARY DETECTION: freeze position when not moving
+    updateStationaryDetect(gpsSys.speed||0);
+    if(isStationary&&frozenPos){
+      gpsSys.lat=frozenPos.lat;gpsSys.lon=frozenPos.lon;gpsSys.speed=0;
+    }
     DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
     if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
     if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
@@ -3971,9 +4001,10 @@ function tick(){
     $('mPrs').textContent=pressure?pressure.toFixed(0):'--';$('mTmp').textContent=temp?temp.toFixed(1):'--';$('mLsr').textContent=laserMm||'--';
     $('mSmp').textContent=DATA.count();$('mDst').textContent=Math.round(totalDist);
     if(startTime)$('mTime').textContent=fmt((now-startTime)/1000);
-    if(DATA.samples.length>1){const l=DATA.samples[DATA.samples.length-1];$('mSpd').textContent=Math.round(l.speed*3.6);$('mHdg').textContent=Math.round(l.heading)+'°';}
+    if(isStationary){$('mSpd').textContent='0';$('mHdg').textContent=Math.round(compass)+'° STOP';}
+    else if(DATA.samples.length>1){const l=DATA.samples[DATA.samples.length-1];$('mSpd').textContent=Math.round(l.speed*3.6);$('mHdg').textContent=Math.round(l.heading)+'°';}
     $('mAlt').textContent=baroAlt?baroAlt.toFixed(1):'--';
-    $('ovSrc').textContent=boardConnected?(boardSource==='ble'?'BLE':'WiFi'):'PHONE';
+    $('ovSrc').textContent=(isStationary?'STOP ':'')+( boardConnected?(boardSource==='ble'?'BLE':'WiFi'):'PHONE');
     // Formula table + map overlay
     const bi=bestFormulaIdx();
     $('ovBest').textContent=F[bi].name+' '+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m':'--');
