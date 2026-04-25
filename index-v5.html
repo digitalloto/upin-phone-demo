@@ -1238,7 +1238,6 @@ function processBoardData(d){
             cidCache[lacKey]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};saveCIDCache();
             log('LAC MNC:'+le.mnc+' LAC:'+le.lac+' not found','var(--red)');
           }
-          }
         }).catch(()=>{cidPending.delete(lacKey);});
       }
     });
