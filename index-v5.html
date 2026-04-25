@@ -114,7 +114,8 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   <div class="tab" onclick="V.switchTab(2)">Learn</div>
   <div class="tab" onclick="V.switchTab(3)">Drill</div>
   <div class="tab" onclick="V.switchTab(4)">Data</div>
-  <div class="tab" onclick="V.switchTab(5)" style="color:var(--purple)">AI</div>
+  <div class="tab" onclick="V.switchTab(5)" style="color:var(--amber)">Towers</div>
+  <div class="tab" onclick="V.switchTab(6)" style="color:var(--purple)">AI</div>
 </div>
 <!-- MAP (always visible) -->
 <div id="map-wrap">
@@ -430,8 +431,41 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   </div>
 </div>
 
-<!-- ═══ TAB 5: AI ASSISTANT ═══ -->
+<!-- ═══ TAB 5: CELL TOWERS ═══ -->
 <div class="tab-body" id="t5">
+  <div class="card">
+    <div class="card-title" style="color:var(--amber)">LIVE CELL TOWER DATA FROM BOARD</div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">4G Towers</div><div class="mv" id="ct4g">0</div><div class="mu">detected</div></div>
+      <div class="mc"><div class="ml">2G Towers</div><div class="mv" id="ct2g">0</div><div class="mu">detected</div></div>
+      <div class="mc"><div class="ml">Matched</div><div class="mv" id="ctMatched">0</div><div class="mu">with position</div></div>
+    </div>
+    <div class="row row3">
+      <div class="mc"><div class="ml">Tri Fix</div><div class="mv" id="ctTriFix">NO</div><div class="mu">&nbsp;</div></div>
+      <div class="mc"><div class="ml">API Cached</div><div class="mv" id="ctCached">0</div><div class="mu">towers</div></div>
+      <div class="mc"><div class="ml">API Pending</div><div class="mv" id="ctPending">0</div><div class="mu">lookups</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">4G TOWER (PRIMARY)</div>
+    <div id="ct4gDetail" style="font-size:9px;color:var(--tm)">No data — connect board</div>
+  </div>
+  <div class="card">
+    <div class="card-title">2G TOWERS (NEIGHBOR LIST)</div>
+    <div id="ct2gDetail" style="font-size:9px;color:var(--tm)">No data — connect board</div>
+  </div>
+  <div class="card">
+    <div class="card-title">TRIANGULATION STATUS</div>
+    <div id="ctTriDetail" style="font-size:9px;color:var(--tm)">Need ≥2 towers with known positions to triangulate</div>
+  </div>
+  <div class="card">
+    <div class="card-title">API LOOKUP LOG</div>
+    <div id="ctApiLog" style="font-size:8px;color:var(--td);max-height:120px;overflow-y:auto">Waiting for tower data...</div>
+  </div>
+</div>
+
+<!-- ═══ TAB 6: AI ASSISTANT ═══ -->
+<div class="tab-body" id="t6">
   <div class="card">
     <div class="card-title" style="color:var(--purple)">AI DIAGNOSTIC ASSISTANT (OLLAMA)</div>
     <div style="font-size:9px;color:var(--tm);margin-bottom:8px">Local LLM — runs on your laptop/Pi via Ollama. No internet needed. Tell it what's wrong and it adjusts the system.</div>
@@ -591,23 +625,40 @@ function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
   // Try direct API first, then CORS proxy if blocked
   const apiUrl='https://opencellid.org/cell/get?key='+OPENCELLID_TOKEN+'&mcc='+mcc+'&mnc='+mnc+'&lac='+lac+'&cellid='+cid+'&format=json';
   const proxyUrl='https://corsproxy.io/?'+encodeURIComponent(apiUrl);
-  // Try proxy (most browsers block direct API calls due to CORS)
-  fetch(proxyUrl).then(r=>r.json()).then(d=>{
+  // Try unwiredlabs geolocation API (more complete than opencellid cell/get)
+  const uwUrl='https://us1.unwiredlabs.com/v2/process';
+  const uwBody={token:OPENCELLID_TOKEN,radio:lac>0?'gsm':'lte',mcc,mnc,
+    cells:[{lac,cid,signal:rssi||0}],address:0};
+  const uwProxy='https://corsproxy.io/?'+encodeURIComponent(uwUrl);
+  fetch(uwProxy,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(uwBody)})
+  .then(r=>r.json()).then(d=>{
     cidPending.delete(key);
-    if(d.lat&&d.lon&&d.lat!==0){
-      cidCache[key]={lat:d.lat,lon:d.lon,range:d.range||500,ts:Date.now()};
+    if(d.status==='ok'&&d.lat&&d.lon){
+      cidCache[key]={lat:d.lat,lon:d.lon,range:d.accuracy||500,ts:Date.now()};
       saveCIDCache();
-      // Also add to our runtime CID index for instant lookup next time
       if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:d.lat,o:d.lon,m:mnc,c:cid});
-      log('Tower found: CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+' ('+d.range+'m)','var(--green)');
+      log('Tower found: CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+' (±'+Math.round(d.accuracy||500)+'m)','var(--green)');
+      try{$('ctApiLog').innerHTML+='<div style="color:var(--green)">✓ CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+'</div>';}catch(e){}
     }else{
       cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};
       saveCIDCache();
-      log('Tower NOT found in OpenCellID: CID '+cid+' (MCC:'+mcc+' MNC:'+mnc+' LAC:'+lac+')','var(--red)');
+      const reason=d.message||d.status||'unknown';
+      log('Tower NOT found: CID '+cid+' ('+reason+')','var(--red)');
+      try{$('ctApiLog').innerHTML+='<div style="color:var(--red)">✗ CID '+cid+' — '+reason+'</div>';}catch(e){}
     }
   }).catch(e=>{
     cidPending.delete(key);
-    log('API error for CID '+cid+': '+e.message,'var(--red)');
+    // Fallback: try opencellid direct
+    fetch(proxyUrl).then(r=>r.json()).then(d=>{
+      if(d.lat&&d.lon&&d.lat!==0){
+        cidCache[key]={lat:d.lat,lon:d.lon,range:d.range||500,ts:Date.now()};
+        saveCIDCache();
+        if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:d.lat,o:d.lon,m:mnc,c:cid});
+        log('Tower found (OpenCellID): CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4),'var(--green)');
+      }else{
+        cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};saveCIDCache();
+      }
+    }).catch(()=>{cidPending.delete(key);});
   });
   return null; // not available yet — will be on next packet
 }
@@ -1237,6 +1288,36 @@ function processBoardData(d){
     const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
     if(c2d&&Array.isArray(c2d))c2d.forEach(c=>{if(c.cid)allCids.push(c.cid);});
     try{$('boardCids').textContent=allCids.join(', ');}catch(e){}
+    // Update Tower tab
+    try{
+      $('ct4g').textContent=cellTowers4G;$('ct2g').textContent=cellTowers2G;
+      $('ctMatched').textContent=boardTowerList.length;
+      $('ctPending').textContent=cidPending.size;
+      $('ctCached').textContent=Object.keys(cidCache).filter(k=>!cidCache[k].miss).length;
+      const triFix=UTIN.predict();
+      $('ctTriFix').textContent=triFix?'YES':'NO';$('ctTriFix').style.color=triFix?'var(--green)':'var(--red)';
+      // 4G detail
+      if(d.cell4g)$('ct4gDetail').innerHTML='<div style="padding:2px 0">MCC:<b>'+d.cell4g.mcc+'</b> MNC:<b>'+d.cell4g.mnc+'</b> TAC:<b>'+d.cell4g.tac+'</b> CID:<b style="color:var(--cyan)">'+d.cell4g.cid+'</b> RSSI:<b>'+(d.cell4g.rssi>0?-113+d.cell4g.rssi*2:d.cell4g.rssi)+'dBm</b> (CSQ:'+d.cell4g.rssi+')'+(cidCache['404-84-'+(d.cell4g.tac||0)+'-'+d.cell4g.cid]&&!cidCache['404-84-'+(d.cell4g.tac||0)+'-'+d.cell4g.cid].miss?' <span style="color:var(--green)">POSITION KNOWN</span>':' <span style="color:var(--red)">POSITION UNKNOWN</span>')+'</div>';
+      // 2G detail
+      const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
+      if(c2d&&Array.isArray(c2d)){
+        $('ct2gDetail').innerHTML=c2d.map((c,i)=>{
+          const k='404-84-'+(c.lac||0)+'-'+c.cid;
+          const cached=cidCache[k]&&!cidCache[k].miss;
+          const barW=Math.max(5,Math.min(100,(c.rssi+110)*2))+'%';
+          return'<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">'+
+            '<span style="color:var(--td);width:15px">'+(i+1)+'</span>'+
+            '<span style="flex:1"><b style="color:var(--cyan)">CID:'+c.cid+'</b> LAC:'+c.lac+' MNC:'+c.mnc+'</span>'+
+            '<span style="width:50px;text-align:right;color:'+(c.rssi>-80?'var(--green)':c.rssi>-90?'var(--amber)':'var(--red)')+'"><b>'+c.rssi+'</b>dBm</span>'+
+            '<div style="width:60px;height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+barW+';background:'+(c.rssi>-80?'var(--green)':c.rssi>-90?'var(--amber)':'var(--red)')+'"></div></div>'+
+            '<span style="width:60px;text-align:right;font-size:7px;color:'+(cached?'var(--green)':'var(--red)')+'">'+(cached?'POS OK':'NO POS')+'</span>'+
+          '</div>';
+        }).join('');
+      }
+      // Tri detail
+      if(triFix)$('ctTriDetail').innerHTML='<div style="color:var(--green);font-weight:700">TRIANGULATION FIX</div><div>Lat: '+triFix.lat.toFixed(6)+' Lon: '+triFix.lon.toFixed(6)+'</div><div>Accuracy: ±'+triFix.acc+'m | Towers used: '+triFix.towers+'</div>';
+      else $('ctTriDetail').innerHTML='<div style="color:var(--red)">NO FIX — need ≥2 towers with known positions</div><div style="color:var(--td);font-size:8px">Matched: '+boardTowerList.length+' | CIDs in local DB: 0 | API status: '+(cidPending.size>0?cidPending.size+' pending':'all checked')+'</div>';
+    }catch(e){}
   }
   // WiFi APs
   if(d.wifi){
