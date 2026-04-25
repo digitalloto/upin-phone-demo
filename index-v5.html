@@ -580,10 +580,14 @@ function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
       if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:d.lat,o:d.lon,m:mnc,c:cid});
       log('Tower found: CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+' ('+d.range+'m)','var(--green)');
     }else{
-      cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true}; // mark as not found
+      cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};
       saveCIDCache();
+      log('Tower NOT found in OpenCellID: CID '+cid+' (MCC:'+mcc+' MNC:'+mnc+' LAC:'+lac+')','var(--red)');
     }
-  }).catch(e=>{cidPending.delete(key);});
+  }).catch(e=>{
+    cidPending.delete(key);
+    log('API error for CID '+cid+': '+e.message,'var(--red)');
+  });
   return null; // not available yet — will be on next packet
 }
 
@@ -1095,11 +1099,7 @@ function processBoardData(d){
         const mcc=d.cell4g.mcc||404;const mnc=d.cell4g.mnc||84;const lac=d.cell4g.tac||d.cell4g.lac||0;
         const online=lookupCIDOnline(mcc,mnc,lac,d.cell4g.cid,rssi4g);
         if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid:d.cell4g.cid,signal:rssi4g,dist:0,gen:'4G-API'});
-        else{
-          const fb=lookupTowerFallback(mnc,rssi4g,refLat,refLon);
-          if(fb)boardTowerList.push(fb);
-          if(fb)boardTowerList.push(fb);
-        }
+        // No fake fallback — wait for real API result
         cidMisses++;
       }
     }
@@ -1123,38 +1123,22 @@ function processBoardData(d){
             const mcc=c.mcc||c.MCC||404;const lac=c.lac||c.LAC||0;
             const online=lookupCIDOnline(mcc,mnc,lac,cid,rssi);
             if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid,signal:rssi,dist:0,gen:'2G-API'});
-            else{
-              const fb=lookupTowerFallback(mnc,rssi,refLat,refLon);
-              if(fb)boardTowerList.push(fb);
-            }
+            // No fake fallback — wait for real API result
             cidMisses++;
           }
         }
       });
     }
   }
-  // GUARANTEED FALLBACK: if all CID lookups missed but we KNOW towers exist,
-  // use nearest towers from DB by MNC. This ensures we ALWAYS get markers on the map.
-  if(boardTowerList.length<2&&(cellTowers4G+cellTowers2G)>=2&&TOWER_MNC_IDX){
-    const mnc=84; // Jio is dominant in Chennai
-    const mncTowers=TOWER_MNC_IDX.get(mnc)||TOWER_MNC_IDX.get(41)||[];
-    if(mncTowers.length>0){
-      const nTowers=Math.min(cellTowers4G+cellTowers2G,7);
-      // Use real RSSI from board data for weighting
-      const realRSSI=[];
-      if(d.cell4g)realRSSI.push(d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80));
-      const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
-      if(c2d&&Array.isArray(c2d))c2d.forEach(c=>realRSSI.push(c.rssi||-90));
-      const nearby=mncTowers.map(t=>({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,
-        dist:hav({lat:refLat,lon:refLon},{lat:t.l,lon:t.o}),signal:-85
-      })).sort((a,b)=>a.dist-b.dist).slice(0,nTowers);
-      boardTowerList=[];
-      nearby.forEach((t,i)=>{
-        t.signal=realRSSI[i]||t.signal; // use real RSSI if available
-        t.gen='area';
-        if(t.dist<15000)boardTowerList.push(t); // within 15km
-      });
-      if(bleGoodPkts<=5)log('Fallback: using '+boardTowerList.length+' nearest MNC='+mnc+' towers (dist: '+nearby.slice(0,3).map(t=>Math.round(t.dist)+'m').join(', ')+')','var(--amber)');
+  // REAL DATA ONLY: no fake tower positions.
+  // If CID lookups missed, the OpenCellID API is looking them up async.
+  // On next BLE packet the cache will have results → real positions.
+  // Log what's pending so user knows the system is working on it.
+  if(boardTowerList.length<2&&(cellTowers4G+cellTowers2G)>=2){
+    const pending=cidPending.size;
+    const cached=Object.keys(cidCache).filter(k=>!cidCache[k].miss).length;
+    if(bleGoodPkts<=5||bleGoodPkts%50===0){
+      log('Towers: '+cidMisses+' CIDs not in local DB. API lookups: '+pending+' pending, '+cached+' cached. Waiting for real positions...','var(--amber)');
     }
   }
   // Feed real tower data (or area-matched) into UTIN
