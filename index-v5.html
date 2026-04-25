@@ -3301,8 +3301,82 @@ F.push(mkF('Route Nav',function(pos,dt){
   return p;
 }));
 
-// ═══════════════════════════════════════
-// PREDICTIVE POSITIONER — "Where will I BE in 5s?" then validate
+// F58: Tower-Confirmed Predictor — cross-validates PREDICTOR heading with
+// tower RSSI changes. If Doppler says "moving north" and PREDICTOR says
+// "moving north", confidence is HIGH. If they disagree, trust the one
+// with more evidence and dampen the other.
+F.push(mkF('Tower+Predict',function(pos,dt){
+  if(!pos||DATA.samples.length<3)return pos;
+  // Get PREDICTOR's estimate
+  const predP=PREDICTOR.predict(pos,dt);
+  // Get Doppler's velocity estimate from tower RSSI changes
+  const dop=DOPPLER.lastVelocity;
+  // Get cell tri position
+  const cellP=UTIN.predict();
+  // Base velocity prediction
+  const v=velFromGPS(5);
+  const base=v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+
+  // Count how many sources agree on direction
+  let sources=[];
+  if(predP)sources.push({lat:predP.lat,lon:predP.lon,name:'predictor',w:PREDICTOR.confidence()||0.3});
+  if(dop)sources.push({lat:pos.lat+dop.vLat*dt,lon:pos.lon+dop.vLon*dt,name:'doppler',w:0.4});
+  if(cellP)sources.push({lat:cellP.lat,lon:cellP.lon,name:'cell',w:0.3});
+
+  if(sources.length<2)return predP||base;
+
+  // Weighted average of all agreeing sources
+  let sL=0,sO=0,sW=0;
+  sources.forEach(s=>{sL+=s.lat*s.w;sO+=s.lon*s.w;sW+=s.w;});
+  if(sW<=0)return base;
+  const fused={lat:sL/sW,lon:sO/sW};
+
+  // Check agreement: how close are the sources to each other?
+  const spread=sources.length>1?Math.max(...sources.map(s=>hav(s,fused))):999;
+  // If sources agree within 50m → high confidence blend
+  // If they disagree → dampen toward the one with most weight
+  this._agreement=spread;
+  if(spread<50)return fused; // all agree — use fused position
+  // Disagreement — trust the strongest source
+  sources.sort((a,b)=>b.w-a.w);
+  return{lat:sources[0].lat,lon:sources[0].lon};
+}));
+
+// F59: Cell Direction — uses individual tower signal changes to estimate
+// movement direction even without GPS. If tower A gets stronger and tower B
+// gets weaker, you're moving from B toward A.
+F.push(mkF('Cell Direction',function(pos,dt){
+  if(!pos||!UTIN.lastTowers||UTIN.lastTowers.length<2)return pos;
+  if(!this._prevSignals)this._prevSignals=new Map();
+  const spd=avgSpeed(5)||0;
+  let vLat=0,vLon=0,wTotal=0;
+
+  UTIN.lastTowers.forEach(t=>{
+    const key=t.cid||t.lat.toFixed(4);
+    const prev=this._prevSignals.get(key);
+    this._prevSignals.set(key,t.signal);
+    if(prev===undefined)return;
+    const dRSSI=t.signal-prev; // positive = getting closer
+    if(Math.abs(dRSSI)<0.5)return; // noise floor
+    // Direction toward/away from tower
+    const dLat=t.lat-pos.lat;const dLon=t.lon-pos.lon;
+    const dist=Math.sqrt(dLat*dLat+dLon*dLon);
+    if(dist<0.0001)return;
+    // Normalize direction vector and weight by RSSI change
+    const w=dRSSI; // positive = moving toward this tower
+    vLat+=w*dLat/dist;vLon+=w*dLon/dist;wTotal+=Math.abs(w);
+  });
+
+  if(wTotal<0.5)return pos;
+  // Scale the direction vector by speed
+  const scale=spd*dt/(111320*Math.max(0.01,wTotal));
+  return{
+    lat:pos.lat+vLat*scale,
+    lon:pos.lon+vLon*scale/(Math.cos(pos.lat*Math.PI/180)||1)
+  };
+}));
+
+
 // Predicts T+5, scores against reality when it arrives, learns heading/speed bias.
 // A validated predictor earns confidence: during GPS-denial the last N validated
 // predictions prove the model works, so prediction #N+1 is trustworthy.
