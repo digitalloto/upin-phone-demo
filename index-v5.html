@@ -377,6 +377,17 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
       <div style="font-size:7px;color:var(--td);margin-bottom:4px">Upload a CSV with columns: mcc,mnc,lac,cid,lat,lon (or lon,lat). Adds towers to the live lookup cache — no firmware change needed.</div>
       <input type="file" id="towerFileInput" accept=".csv,.txt" onchange="V.importTowers(this)" style="font-size:8px;color:var(--tm);width:100%">
       <div id="importStatus" style="font-size:7px;color:var(--td);margin-top:3px"></div>
+      <div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
+        <div style="font-size:8px;font-weight:700;color:var(--green);letter-spacing:1px;margin-bottom:4px">ADD TOWER MANUALLY</div>
+        <div style="font-size:7px;color:var(--td);margin-bottom:4px">Look up your CIDs on <b>cellmapper.net</b> → enter position here</div>
+        <div style="display:flex;gap:3px;margin-bottom:4px">
+          <input type="text" id="manCid" placeholder="CID" style="width:70px;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:3px;border-radius:2px">
+          <input type="text" id="manLat" placeholder="Lat" style="width:70px;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:3px;border-radius:2px">
+          <input type="text" id="manLon" placeholder="Lon" style="width:70px;background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:3px;border-radius:2px">
+          <button class="btn btn-green" onclick="V.addManualTower()" style="font-size:7px;padding:3px 6px">ADD</button>
+        </div>
+        <div style="font-size:7px;color:var(--td)">Your board CIDs: <span id="boardCids" style="color:var(--amber)">connect board to see</span></div>
+      </div>
     </div>
   </div>
   <div class="card">
@@ -577,8 +588,11 @@ function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
   // Fire async lookup
   cidPending.add(key);
   cidLookups++;
-  const url='https://opencellid.org/cell/get?key='+OPENCELLID_TOKEN+'&mcc='+mcc+'&mnc='+mnc+'&lac='+lac+'&cellid='+cid+'&format=json';
-  fetch(url).then(r=>r.json()).then(d=>{
+  // Try direct API first, then CORS proxy if blocked
+  const apiUrl='https://opencellid.org/cell/get?key='+OPENCELLID_TOKEN+'&mcc='+mcc+'&mnc='+mnc+'&lac='+lac+'&cellid='+cid+'&format=json';
+  const proxyUrl='https://corsproxy.io/?'+encodeURIComponent(apiUrl);
+  // Try proxy (most browsers block direct API calls due to CORS)
+  fetch(proxyUrl).then(r=>r.json()).then(d=>{
     cidPending.delete(key);
     if(d.lat&&d.lon&&d.lat!==0){
       cidCache[key]={lat:d.lat,lon:d.lon,range:d.range||500,ts:Date.now()};
@@ -1216,7 +1230,13 @@ function processBoardData(d){
   if(bleGoodPkts<=5||(bleGoodPkts%50===0)){
     const c4=d.cell4g?JSON.stringify(d.cell4g).substring(0,100):'none';
     const c2=d.cell2g?JSON.stringify(d.cell2g).substring(0,100):'none';
-    log('CELL DEBUG pkt#'+bleGoodPkts+': 4G='+c4+' | 2G='+c2+' | matched='+boardTowerList.length+' (hits:'+cidHits+' miss:'+cidMisses+') | UTIN='+(UTIN.predict()?'FIX':'null')+' | TOWER_CID_IDX='+(TOWER_CID_IDX?TOWER_CID_IDX.size:'not built'),'var(--amber)');
+    log('CELL pkt#'+bleGoodPkts+': matched='+boardTowerList.length+'/'+cidMisses+' | UTIN='+(UTIN.predict()?'FIX':'waiting'),'var(--amber)');
+    // Show board CIDs in Data tab so user can look them up on cellmapper.net
+    const allCids=[];
+    if(d.cell4g&&d.cell4g.cid)allCids.push(d.cell4g.cid);
+    const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
+    if(c2d&&Array.isArray(c2d))c2d.forEach(c=>{if(c.cid)allCids.push(c.cid);});
+    try{$('boardCids').textContent=allCids.join(', ');}catch(e){}
   }
   // WiFi APs
   if(d.wifi){
@@ -4803,6 +4823,18 @@ function applyAICorrections(corrections){
   }
 }
 
+function addManualTower(){
+  const cid=parseInt($('manCid').value);
+  const lat=parseFloat($('manLat').value);
+  const lon=parseFloat($('manLon').value);
+  if(!cid||!isFinite(lat)||!isFinite(lon)){log('Enter CID, lat, lon','var(--red)');return;}
+  buildCIDIndex();
+  if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:lat,o:lon,m:84,c:cid});
+  cidCache['404-84-0-'+cid]={lat,lon,range:500,ts:Date.now()};
+  saveCIDCache();
+  log('Tower added: CID '+cid+' → '+lat.toFixed(4)+','+lon.toFixed(4),'var(--green)');
+  $('manCid').value='';$('manLat').value='';$('manLon').value='';
+}
 function importTowers(input){
   const file=input.files&&input.files[0];
   if(!file){return;}
@@ -5070,7 +5102,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,aiPing,aiAsk,aiDiagnose,toggleMapLayer,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,aiPing,aiAsk,aiDiagnose,toggleMapLayer,_getProfile};
 })();
 </script>
 </body>
