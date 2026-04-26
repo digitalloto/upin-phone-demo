@@ -555,6 +555,7 @@ let lastValidCompass=0; // FIX 6: compass fallback
 let pressure=0,temp=0,baroAlt=0,laserMm=0;
 let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
 let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
+let calGpsPos=null; // GPS position at calibration time — defines the "city"
 
 // STATIONARY DETECTION — freeze position when not moving
 let isStationary=false;
@@ -1216,84 +1217,104 @@ function processBoardData(d){
     $('srcLaser').innerHTML='<span class="sdot live"></span>'+laserMm+'mm';
     $('srcLaserd').textContent=(laserMm/1000).toFixed(2)+'m';
   }
-  // FIX 3: Cell towers — parse CIDs, look up in DB, fallback to MNC-area matching
+  // ═══ COMPREHENSIVE TOWER SEARCH — check ALL fields, verify same city ═══
   buildCIDIndex();
   boardTowerList=[];
-  const refPos=gpsTrue||lastGoodFix; // for MNC fallback proximity search
-  const refLat=refPos?refPos.lat:13.08;
-  const refLon=refPos?refPos.lon:80.27;
+  const cityRef=calGpsPos||gpsTrue||lastGoodFix; // calibration city is priority
+  const CITY_RADIUS=50000; // 50km — anything farther is a different city
   let cidHits=0,cidMisses=0;
+
+  // Multi-field tower search: tries CID → LAC → MCC+MNC+proximity → API
+  function findTowerInDB(mcc,mnc,lac,cid,rssi){
+    // Level 1: exact CID match (verify same city)
+    if(TOWER_CID_IDX){
+      const t=TOWER_CID_IDX.get(cid);
+      if(t){
+        // Verify: same MNC AND same city
+        if(t.m===mnc&&(!cityRef||!cityRef.lat||hav({lat:t.l,lon:t.o},cityRef)<CITY_RADIUS))
+          return{lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'CID',match:'exact CID'};
+        // CID collision — different city
+        if(cityRef&&cityRef.lat&&hav({lat:t.l,lon:t.o},cityRef)>=CITY_RADIUS){
+          if(bleGoodPkts<=3)log('CID '+cid+' collision: '+Math.round(hav({lat:t.l,lon:t.o},cityRef)/1000)+'km away — skipped','var(--red)');
+        }
+      }
+    }
+    // Level 2: LAC match (same MNC + same LAC = same area)
+    if(TOWER_LAC_IDX&&lac){
+      const lacKey=mnc+'-'+lac;
+      const lacTowers=TOWER_LAC_IDX.get(lacKey);
+      if(lacTowers&&lacTowers.length>0){
+        // Pick nearest tower in this LAC to our city reference
+        const ref=cityRef||{lat:13.08,lon:80.27};
+        const nearest=lacTowers.map(lt=>({lat:lt.l,lon:lt.o,mnc:lt.m,cid:lt.c,
+          dist:hav(ref,{lat:lt.l,lon:lt.o}),signal:rssi
+        })).sort((a,b)=>a.dist-b.dist)[0];
+        if(nearest&&nearest.dist<CITY_RADIUS)
+          return{...nearest,gen:'LAC',match:'LAC:'+lac};
+      }
+    }
+    // Level 3: MCC+MNC+proximity — find nearest tower of same operator in same city
+    if(TOWER_MNC_IDX&&cityRef&&cityRef.lat>6){
+      const opTowers=TOWER_MNC_IDX.get(mnc);
+      if(opTowers&&opTowers.length>0){
+        // RSSI → estimated distance via path-loss model
+        const estDist=100*Math.pow(10,(rssi+50)/-35);
+        // Find towers at approximately the right distance from our city position
+        let bestMatch=null,bestScore=Infinity;
+        // Only check towers near our city (within 10km to avoid scanning all)
+        for(let i=0;i<opTowers.length;i++){
+          const t=opTowers[i];
+          const tDist=hav(cityRef,{lat:t.l,lon:t.o});
+          if(tDist>10000)continue; // skip towers far from city
+          // Score: how close is actual distance to RSSI-estimated distance
+          const score=Math.abs(tDist-estDist)/Math.max(estDist,100);
+          if(score<bestScore&&score<0.5){bestScore=score;bestMatch={lat:t.l,lon:t.o,mnc:t.m,cid:t.c,dist:tDist,signal:rssi,gen:'SIG',match:'signal-dist ('+Math.round(tDist)+'m≈'+Math.round(estDist)+'m)'};}
+        }
+        if(bestMatch)return bestMatch;
+      }
+    }
+    // Level 4: API cache (from previous lookups)
+    const cacheKey=mcc+'-'+mnc+'-'+lac+'-'+cid;
+    if(cidCache[cacheKey]&&!cidCache[cacheKey].miss&&cidCache[cacheKey].lat>6){
+      const cached=cidCache[cacheKey];
+      if(!cityRef||!cityRef.lat||hav({lat:cached.lat,lon:cached.lon},cityRef)<CITY_RADIUS)
+        return{lat:cached.lat,lon:cached.lon,mnc,cid,signal:rssi,dist:0,gen:'API',match:'API cache'};
+    }
+    // Level 5: fire async API lookup (result available on next packet)
+    lookupCIDOnline(mcc,mnc,lac,cid,rssi);
+    return null;
+  }
+
   if(d.cell4g){
     cellTowers4G=d.cell4g.towers||0;
     const c4ok=d.cell4g.ok||cellTowers4G>0;
     $('srcCell4G').innerHTML=(c4ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers4G+'t';
     $('srcCell4Gd').textContent=(d.cell4g.inet?'4G inet':'no inet')+(d.cell4g.cid?' CID:'+d.cell4g.cid:'');
     $('srcCell4GBox').className='src '+(c4ok?'on':'off');
-    // 4G rssi from board is CSQ (0-31) not dBm. Convert: dBm = -113 + CSQ*2
     const rssi4g=d.cell4g.rssi>0&&d.cell4g.rssi<=31?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
-    if(d.cell4g.cid&&TOWER_CID_IDX){
-      const t=TOWER_CID_IDX.get(d.cell4g.cid);
-      const ref4=gpsTrue||lastGoodFix;
-      const mnc4g=d.cell4g.mnc||84;
-      if(t&&t.m===mnc4g&&(!ref4||!ref4.lat||ref4.lat<1||hav({lat:t.l,lon:t.o},ref4)<50000)){
-        boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi4g,dist:0,gen:'4G'});cidHits++;
-      }else{
-        const mcc=d.cell4g.mcc||404;const mnc=d.cell4g.mnc||84;const lac=d.cell4g.tac||d.cell4g.lac||0;
-        const online=lookupCIDOnline(mcc,mnc,lac,d.cell4g.cid,rssi4g);
-        if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid:d.cell4g.cid,signal:rssi4g,dist:0,gen:'4G-API'});
-        // No fake fallback — wait for real API result
-        cidMisses++;
-      }
+    if(d.cell4g.cid){
+      const found=findTowerInDB(d.cell4g.mcc||404,d.cell4g.mnc||84,d.cell4g.tac||0,d.cell4g.cid,rssi4g);
+      if(found){boardTowerList.push(found);cidHits++;}else{cidMisses++;}
     }
   }
   if(d.cell2g){
     cellTowers2G=d.cell2g.towers||0;
     const c2ok=d.cell2g.ok||cellTowers2G>0;
     $('srcCell2G').innerHTML=(c2ok?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+cellTowers2G+'t';
-    $('srcCell2Gd').textContent=cellTowers2G+'t'+(cidHits>0?' ('+cidHits+' exact)':'')+(cidMisses>0?' ('+cidMisses+' area)':'');
     $('srcCell2GBox').className='src '+(c2ok?'on':'off');
-    // Board sends cell2g.data (not .list) — array of {cid,lac,mcc,mnc,rssi}
     const c2list=d.cell2g.data||d.cell2g.list;
-    if(c2list&&Array.isArray(c2list)&&TOWER_CID_IDX){
+    if(c2list&&Array.isArray(c2list)){
       c2list.forEach(c=>{
-        const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;const mnc=c.mnc||c.MNC||0;
-        const lac=c.lac||c.LAC||0;const mcc=c.mcc||c.MCC||404;
+        const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;
+        const mnc=c.mnc||c.MNC||0;const lac=c.lac||c.LAC||0;const mcc=c.mcc||c.MCC||404;
         if(cid){
-          // Level 1: exact CID match — but verify MNC matches AND tower is within 50km
-          // (CIDs are NOT globally unique — same CID can exist in different cities)
-          const t=TOWER_CID_IDX.get(cid);
-          const ref=gpsTrue||lastGoodFix;
-          const refOk=ref&&ref.lat>1;
-          if(t&&t.m===mnc&&(!refOk||hav({lat:t.l,lon:t.o},ref)<50000)){
-            boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});cidHits++;
-          }else if(t&&refOk&&hav({lat:t.l,lon:t.o},ref)>=50000){
-            // CID collision — same CID exists in a different city, skip it
-            if(bleGoodPkts<=3)log('CID '+cid+' collision: DB has it at '+t.l.toFixed(2)+','+t.o.toFixed(2)+' ('+Math.round(hav({lat:t.l,lon:t.o},ref)/1000)+'km away) — skipped','var(--red)');
-            cidMisses++;
-          }else{
-            // Level 2: LAC match — find towers in same LAC area
-            const lacKey=mnc+'-'+lac;
-            const lacTowers=TOWER_LAC_IDX?TOWER_LAC_IDX.get(lacKey):null;
-            if(lacTowers&&lacTowers.length>0){
-              // Pick nearest tower in this LAC to our position
-              const ref=gpsTrue||lastGoodFix||{lat:13.08,lon:80.27};
-              const nearest=lacTowers.map(lt=>({lat:lt.l,lon:lt.o,mnc:lt.m,cid:lt.c,
-                dist:hav(ref,{lat:lt.l,lon:lt.o}),signal:rssi
-              })).sort((a,b)=>a.dist-b.dist)[0];
-              if(nearest&&nearest.dist<10000){
-                boardTowerList.push({...nearest,gen:'2G-LAC'});cidHits++;
-              }else{cidMisses++;}
-            }else{
-              // Level 3: API lookup
-              const online=lookupCIDOnline(mcc,mnc,lac,cid,rssi);
-              if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid,signal:rssi,dist:0,gen:'2G-API'});
-              cidMisses++;
-            }
-          }
+          const found=findTowerInDB(mcc,mnc,lac,cid,rssi);
+          if(found){boardTowerList.push(found);cidHits++;}else{cidMisses++;}
         }
       });
     }
   }
+  $('srcCell2Gd').textContent=(cellTowers4G+cellTowers2G)+'t hits:'+cidHits+' miss:'+cidMisses;
   // If no towers matched by CID, try LAC-level geolocation
   // LAC (Location Area Code) covers ~5-10km — gives area-level position
   if(boardTowerList.length<2&&(cellTowers4G+cellTowers2G)>=2){
@@ -4571,6 +4592,8 @@ function tick(){
 // Controls
 function calibrate(){
   log('Calibrating — hold still 5s (accel bias + gyro bias)','var(--amber)');
+  // Lock the calibration city — all tower matches must be within 50km of this point
+  if(gpsTrue&&gpsTrue.lat>6){calGpsPos={lat:gpsTrue.lat,lon:gpsTrue.lon};log('Calibration city locked: '+gpsTrue.lat.toFixed(4)+','+gpsTrue.lon.toFixed(4),'var(--cyan)');}
   if(!useBoard)initPhoneSensors();
   PREPROCESS.gyroBiasCollecting=true;PREPROCESS.gyroBiasSamples=[];
   const iv=setInterval(()=>{
