@@ -607,13 +607,62 @@ function initCIDCache(){
     const d=localStorage.getItem(CID_CACHE_KEY);
     if(d){
       const parsed=JSON.parse(d);
-      // Keep successful lookups, drop misses so they retry with new API key
       Object.entries(parsed).forEach(([k,v])=>{if(v&&v.lat&&!v.miss)cidCache[k]=v;});
+    }
+  }catch(e){}
+  // Load saved tower DB from localStorage (towers discovered via API/import)
+  try{
+    const saved=localStorage.getItem('upin_tower_db');
+    if(saved){
+      const arr=JSON.parse(saved);
+      if(Array.isArray(arr)&&arr.length>0){
+        // Merge into runtime TOWERS array
+        if(typeof TOWERS!=='undefined')arr.forEach(t=>TOWERS.push(t));
+        log('Loaded '+arr.length+' saved towers from previous sessions','var(--green)');
+      }
     }
   }catch(e){}
 }
 function saveCIDCache(){
   try{localStorage.setItem(CID_CACHE_KEY,JSON.stringify(cidCache));}catch(e){}
+}
+// Save discovered towers to localStorage so DB grows over time
+function saveTowerDB(){
+  try{
+    // Collect all towers from cidCache that have real positions
+    const discovered=[];
+    Object.entries(cidCache).forEach(([k,v])=>{
+      if(v&&v.lat&&v.lon&&!v.miss&&v.lat>6&&v.lat<38&&v.lon>68&&v.lon<98){
+        const parts=k.split('-');
+        const mnc=parseInt(parts[1])||0;const lac=parseInt(parts[2])||0;const cid=parseInt(parts[3])||0;
+        if(cid)discovered.push({l:+v.lat.toFixed(5),o:+v.lon.toFixed(5),m:mnc,c:cid,a:lac});
+      }
+    });
+    localStorage.setItem('upin_tower_db',JSON.stringify(discovered));
+    return discovered.length;
+  }catch(e){return 0;}
+}
+
+// Auto-capture: when we have GPS + cell towers, record tower positions
+function autoCaptureTowers(gps,boardTowers){
+  if(!gps||!gps.lat||gps.lat<6||!boardTowers||!boardTowers.length)return;
+  let newCount=0;
+  boardTowers.forEach(bt=>{
+    if(!bt.cid)return;
+    const key='404-'+(bt.mnc||84)+'-0-'+bt.cid;
+    if(cidCache[key]&&!cidCache[key].miss)return; // already known
+    // Estimate tower position: GPS position + direction from RSSI
+    // Simple: tower is somewhere within RSSI-estimated distance
+    // For now: record GPS as approximate tower location (within 1-2km)
+    cidCache[key]={lat:gps.lat,lon:gps.lon,range:2000,ts:Date.now(),autoCapture:true};
+    if(TOWER_CID_IDX)TOWER_CID_IDX.set(bt.cid,{l:gps.lat,o:gps.lon,m:bt.mnc||84,c:bt.cid});
+    newCount++;
+  });
+  if(newCount>0){
+    saveCIDCache();
+    const total=saveTowerDB();
+    log('Auto-captured '+newCount+' tower positions from GPS. DB now: '+total+' towers','var(--green)');
+  }
 }
 
 function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
@@ -644,6 +693,9 @@ function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
       saveCIDCache();
       if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:d.lat,o:d.lon,m:mnc,c:cid});
       log('Tower found: CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+' (±'+Math.round(d.accuracy||500)+'m)','var(--green)');
+      // Also push to runtime TOWERS array and save
+      if(typeof TOWERS!=='undefined')TOWERS.push({l:d.lat,o:d.lon,m:mnc,c:cid,a:lac});
+      saveTowerDB();
       try{$('ctApiLog').innerHTML+='<div style="color:var(--green)">✓ CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+'</div>';}catch(e){}
     }else{
       cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};
@@ -4240,6 +4292,8 @@ function tick(){
     TERRAIN.record(gpsSys.lat,gpsSys.lon);
     MANEUVER.record(gpsSys.lat,gpsSys.lon,dt);
     TOWER_CAPTURE.capture(gpsSys.lat,gpsSys.lon,boardData);
+    // Auto-capture: record tower positions when we have GPS fix
+    if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
     // Calibrate ant step length from GPS distance every 50 steps
     if(ANIMAL.ant.steps%50===0&&ANIMAL.ant.steps>0&&lastPos){
       const gDist=hav(lastPos,gpsSys);
@@ -4619,8 +4673,9 @@ function endTest(){
   if(alertIv)clearInterval(alertIv);clearInterval(tickIv);
   if(phase==='jammed'||phase==='spoofed')resurface();
   const dur=startTime?(performance.now()-startTime)/1000:0;phase='idle';
-  // Auto-save profile calibrations after every test
+  // Auto-save profile + tower DB after every test
   try{PROFILES.saveProfile();}catch(e){}
+  try{const n=saveTowerDB();if(n>0)log('Saved '+n+' discovered towers to DB','var(--green)');}catch(e){}
   showReport(dur);
 }
 
