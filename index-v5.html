@@ -375,8 +375,12 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     </div>
     <div style="margin-top:6px;padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:2px">
       <div style="font-size:8px;font-weight:700;color:var(--cyan);letter-spacing:1px;margin-bottom:4px">IMPORT TOWER LIST (CSV)</div>
-      <div style="font-size:7px;color:var(--td);margin-bottom:4px">Upload a CSV with columns: mcc,mnc,lac,cid,lat,lon (or lon,lat). Adds towers to the live lookup cache — no firmware change needed.</div>
-      <input type="file" id="towerFileInput" accept=".csv,.txt" onchange="V.importTowers(this)" style="font-size:8px;color:var(--tm);width:100%">
+      <div style="font-size:7px;color:var(--td);margin-bottom:4px">CSV format — any of these work:<br>
+      <code style="color:var(--cyan)">mcc,mnc,lac,cid,lat,lon</code><br>
+      <code style="color:var(--cyan)">radio,mcc,mnc,lac,cid,unit,lon,lat,range</code> (OpenCellID format)<br>
+      1. Choose file → 2. Tap IMPORT SELECTED FILE</div>
+      <input type="file" id="towerFileInput" accept=".csv,.txt" style="font-size:8px;color:var(--tm);width:100%;margin-bottom:4px">
+      <button class="btn btn-green" onclick="V.importTowers(document.getElementById('towerFileInput'))" style="width:100%;font-size:8px">IMPORT SELECTED FILE</button>
       <div id="importStatus" style="font-size:7px;color:var(--td);margin-top:3px"></div>
       <div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
         <div style="font-size:8px;font-weight:700;color:var(--green);letter-spacing:1px;margin-bottom:4px">ADD TOWER MANUALLY</div>
@@ -5043,24 +5047,27 @@ function addManualTower(){
 }
 function importTowers(input){
   const file=input.files&&input.files[0];
-  if(!file){return;}
+  if(!file){$('importStatus').innerHTML='<span style="color:var(--red)">No file selected — choose a CSV first</span>';return;}
+  $('importStatus').innerHTML='<span style="color:var(--amber)">Reading '+file.name+' ('+Math.round(file.size/1024)+'KB)...</span>';
   const reader=new FileReader();
   reader.onload=function(e){
     const text=e.target.result;
     const lines=text.split('\n').filter(l=>l.trim());
     if(lines.length<2){$('importStatus').textContent='File empty or invalid';return;}
-    // Detect header
+    $('importStatus').innerHTML='<span style="color:var(--amber)">Processing '+lines.length+' lines...</span>';
+    // Detect header — supports multiple CSV formats
     const header=lines[0].toLowerCase();
     const cols=header.split(',').map(c=>c.trim());
     const iMcc=cols.indexOf('mcc');const iMnc=cols.indexOf('mnc');
-    const iLac=cols.findIndex(c=>c==='lac'||c==='tac');
-    const iCid=cols.findIndex(c=>c==='cid'||c==='cellid'||c==='cell_id');
+    const iLac=cols.findIndex(c=>c==='lac'||c==='tac'||c==='area');
+    const iCid=cols.findIndex(c=>c==='cid'||c==='cellid'||c==='cell_id'||c==='cell');
     const iLat=cols.findIndex(c=>c==='lat'||c==='latitude');
     const iLon=cols.findIndex(c=>c==='lon'||c==='lng'||c==='longitude');
     if(iCid<0||iLat<0||iLon<0){
-      $('importStatus').innerHTML='<span style="color:var(--red)">Missing columns. Need: cid, lat, lon. Found: '+cols.join(', ')+'</span>';
+      $('importStatus').innerHTML='<span style="color:var(--red)">Missing columns. Need: cid, lat, lon.<br>Found: '+cols.join(', ')+'<br>Try OpenCellID format: radio,mcc,mnc,lac,cid,unit,lon,lat,range</span>';
       return;
     }
+    log('Importing '+file.name+': '+lines.length+' lines, columns: '+cols.join(','),'var(--cyan)');
     let added=0,skipped=0;
     buildCIDIndex();
     for(let i=1;i<lines.length;i++){
@@ -5071,15 +5078,22 @@ function importTowers(input){
       const mcc=iMcc>=0?parseInt(vals[iMcc])||404:404;
       const lac=iLac>=0?parseInt(vals[iLac])||0:0;
       // Add to CID index for instant lookup
-      if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:lat,o:lon,m:mnc,c:cid});
+      const entry={l:lat,o:lon,m:mnc,c:cid,a:lac};
+      if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,entry);
+      // Add to LAC index
+      if(lac&&TOWER_LAC_IDX){
+        const lk=mnc+'-'+lac;
+        if(!TOWER_LAC_IDX.has(lk))TOWER_LAC_IDX.set(lk,[]);
+        TOWER_LAC_IDX.get(lk).push(entry);
+      }
       // Add to API cache so it persists across sessions
       const key=mcc+'-'+mnc+'-'+lac+'-'+cid;
       cidCache[key]={lat,lon,range:500,ts:Date.now()};
       added++;
     }
     saveCIDCache();
-    $('importStatus').innerHTML='<span style="color:var(--green)">Imported '+added+' towers ('+skipped+' skipped). Cached permanently.</span>';
-    log('Imported '+added+' towers from CSV — cached in localStorage','var(--green)');
+    $('importStatus').innerHTML='<span style="color:var(--green)">Imported <b>'+added+'</b> towers ('+skipped+' skipped). Cached permanently.<br>LAC groups: '+(TOWER_LAC_IDX?TOWER_LAC_IDX.size:0)+'</span>';
+    log('Imported '+added+' towers from '+file.name+' — CID index: '+(TOWER_CID_IDX?TOWER_CID_IDX.size:0)+', LAC groups: '+(TOWER_LAC_IDX?TOWER_LAC_IDX.size:0),'var(--green)');
   };
   reader.readAsText(file);
 }
