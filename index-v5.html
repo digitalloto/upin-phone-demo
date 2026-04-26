@@ -695,15 +695,24 @@ function validCompass(raw){
 // FIX 3: CID index for O(1) tower lookups from board data
 let TOWER_CID_IDX=null;
 let TOWER_MNC_IDX=null; // MNC→[towers] for area-level fallback
+let TOWER_LAC_IDX=null; // "MNC-LAC"→[towers] for LAC matching
 function buildCIDIndex(){
   if(typeof TOWERS==='undefined'||TOWER_CID_IDX)return;
   TOWER_CID_IDX=new Map();
   TOWER_MNC_IDX=new Map();
+  TOWER_LAC_IDX=new Map();
   TOWERS.forEach(t=>{
     TOWER_CID_IDX.set(t.c,t);
     if(!TOWER_MNC_IDX.has(t.m))TOWER_MNC_IDX.set(t.m,[]);
     TOWER_MNC_IDX.get(t.m).push(t);
+    // LAC index (if DB has LAC in field 'a')
+    if(t.a){
+      const lacKey=t.m+'-'+t.a;
+      if(!TOWER_LAC_IDX.has(lacKey))TOWER_LAC_IDX.set(lacKey,[]);
+      TOWER_LAC_IDX.get(lacKey).push(t);
+    }
   });
+  log('Tower index: '+TOWER_CID_IDX.size+' CIDs, '+TOWER_MNC_IDX.size+' MNCs, '+TOWER_LAC_IDX.size+' LAC groups','var(--tm)');
 }
 let boardTowerList=[]; // real towers from board with positions+RSSI
 
@@ -1187,17 +1196,31 @@ function processBoardData(d){
     const c2list=d.cell2g.data||d.cell2g.list;
     if(c2list&&Array.isArray(c2list)&&TOWER_CID_IDX){
       c2list.forEach(c=>{
-        const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;const mnc=c.mnc||c.MNC||84;
+        const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;const mnc=c.mnc||c.MNC||0;
+        const lac=c.lac||c.LAC||0;const mcc=c.mcc||c.MCC||404;
         if(cid){
+          // Level 1: exact CID match
           const t=TOWER_CID_IDX.get(cid);
           if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});cidHits++;}
           else{
-            // Try live API lookup
-            const mcc=c.mcc||c.MCC||404;const lac=c.lac||c.LAC||0;
-            const online=lookupCIDOnline(mcc,mnc,lac,cid,rssi);
-            if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid,signal:rssi,dist:0,gen:'2G-API'});
-            // No fake fallback — wait for real API result
-            cidMisses++;
+            // Level 2: LAC match — find towers in same LAC area
+            const lacKey=mnc+'-'+lac;
+            const lacTowers=TOWER_LAC_IDX?TOWER_LAC_IDX.get(lacKey):null;
+            if(lacTowers&&lacTowers.length>0){
+              // Pick nearest tower in this LAC to our position
+              const ref=gpsTrue||lastGoodFix||{lat:13.08,lon:80.27};
+              const nearest=lacTowers.map(lt=>({lat:lt.l,lon:lt.o,mnc:lt.m,cid:lt.c,
+                dist:hav(ref,{lat:lt.l,lon:lt.o}),signal:rssi
+              })).sort((a,b)=>a.dist-b.dist)[0];
+              if(nearest&&nearest.dist<10000){
+                boardTowerList.push({...nearest,gen:'2G-LAC'});cidHits++;
+              }else{cidMisses++;}
+            }else{
+              // Level 3: API lookup
+              const online=lookupCIDOnline(mcc,mnc,lac,cid,rssi);
+              if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid,signal:rssi,dist:0,gen:'2G-API'});
+              cidMisses++;
+            }
           }
         }
       });
