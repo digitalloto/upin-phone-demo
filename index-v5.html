@@ -460,6 +460,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   </div>
   <div class="card">
     <div class="card-title">API LOOKUP LOG</div>
+    <button class="btn btn-red" onclick="V.clearTowerCache()" style="font-size:7px;margin-bottom:4px">CLEAR TOWER CACHE (reset all lookups)</button>
     <div id="ctApiLog" style="font-size:8px;color:var(--td);max-height:120px;overflow-y:auto">Waiting for tower data...</div>
   </div>
 </div>
@@ -1320,14 +1321,20 @@ function processBoardData(d){
         }
       });
       // Update tower tab with nearby count
-      try{$('ctTriDetail').innerHTML=($('ctTriDetail').innerHTML||'')+'<div style="margin-top:4px;color:var(--cyan)">DB towers within 2km: <b>'+nearbyTowers.length+'</b> ('+nearbyTowers.filter(t=>nearbyDbMarkers.some(m=>m.options.fillOpacity>0.5)).length+' signal-matched)</div>';}catch(e){}
+      try{$('ctMatched').textContent=boardTowerList.length+' (+'+nearbyTowers.length+' nearby)';}catch(e){}
     }
   }catch(e){}
 
-  // Feed real tower data (or area-matched) into UTIN
+  // Feed real tower data into UTIN — validate the result
   if(boardTowerList.length>=2){
     UTIN.recordBoardScan(boardTowerList);
     if(ML_TOGGLE.doppler)try{DOPPLER.record(boardTowerList,performance.now());}catch(e){}
+    // Validate tri result — reject if accuracy > 50km (garbage fix)
+    const trCheck=UTIN.predict();
+    if(trCheck&&trCheck.acc>50000){
+      UTIN.lastTowers=null; // reject garbage fix
+      if(bleGoodPkts<=3)log('Tri rejected: accuracy '+Math.round(trCheck.acc)+'m too large — bad tower positions in cache?','var(--red)');
+    }
     // Show cell triangulation + individual towers on map
     try{
       if(typeof L!=='undefined'&&map){
@@ -5015,6 +5022,13 @@ function applyAICorrections(corrections){
   }
 }
 
+function clearTowerCache(){
+  cidCache={};cidPending.clear();
+  try{localStorage.removeItem(CID_CACHE_KEY);}catch(e){}
+  log('Tower cache cleared — all lookups will retry','var(--amber)');
+  $('ctApiLog').innerHTML='Cache cleared. Lookups will retry on next BLE packet.';
+  $('ctCached').textContent='0';
+}
 function addManualTower(){
   const cid=parseInt($('manCid').value);
   const lat=parseFloat($('manLat').value);
@@ -5294,7 +5308,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,aiPing,aiAsk,aiDiagnose,toggleMapLayer,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,_getProfile};
 })();
 </script>
 </body>
