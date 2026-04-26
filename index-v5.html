@@ -1181,8 +1181,11 @@ function processBoardData(d){
     const rssi4g=d.cell4g.rssi>0&&d.cell4g.rssi<=31?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
     if(d.cell4g.cid&&TOWER_CID_IDX){
       const t=TOWER_CID_IDX.get(d.cell4g.cid);
-      if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi4g,dist:0,gen:'4G'});cidHits++;}
-      else{
+      const ref4=gpsTrue||lastGoodFix;
+      const mnc4g=d.cell4g.mnc||84;
+      if(t&&t.m===mnc4g&&(!ref4||!ref4.lat||ref4.lat<1||hav({lat:t.l,lon:t.o},ref4)<50000)){
+        boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi4g,dist:0,gen:'4G'});cidHits++;
+      }else{
         const mcc=d.cell4g.mcc||404;const mnc=d.cell4g.mnc||84;const lac=d.cell4g.tac||d.cell4g.lac||0;
         const online=lookupCIDOnline(mcc,mnc,lac,d.cell4g.cid,rssi4g);
         if(online&&online.lat)boardTowerList.push({lat:online.lat,lon:online.lon,mnc,cid:d.cell4g.cid,signal:rssi4g,dist:0,gen:'4G-API'});
@@ -1204,10 +1207,18 @@ function processBoardData(d){
         const cid=c.cid||c.CID;const rssi=c.rssi||c.RSSI||-90;const mnc=c.mnc||c.MNC||0;
         const lac=c.lac||c.LAC||0;const mcc=c.mcc||c.MCC||404;
         if(cid){
-          // Level 1: exact CID match
+          // Level 1: exact CID match — but verify MNC matches AND tower is within 50km
+          // (CIDs are NOT globally unique — same CID can exist in different cities)
           const t=TOWER_CID_IDX.get(cid);
-          if(t){boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});cidHits++;}
-          else{
+          const ref=gpsTrue||lastGoodFix;
+          const refOk=ref&&ref.lat>1;
+          if(t&&t.m===mnc&&(!refOk||hav({lat:t.l,lon:t.o},ref)<50000)){
+            boardTowerList.push({lat:t.l,lon:t.o,mnc:t.m,cid:t.c,signal:rssi,dist:0,gen:'2G'});cidHits++;
+          }else if(t&&refOk&&hav({lat:t.l,lon:t.o},ref)>=50000){
+            // CID collision — same CID exists in a different city, skip it
+            if(bleGoodPkts<=3)log('CID '+cid+' collision: DB has it at '+t.l.toFixed(2)+','+t.o.toFixed(2)+' ('+Math.round(hav({lat:t.l,lon:t.o},ref)/1000)+'km away) — skipped','var(--red)');
+            cidMisses++;
+          }else{
             // Level 2: LAC match — find towers in same LAC area
             const lacKey=mnc+'-'+lac;
             const lacTowers=TOWER_LAC_IDX?TOWER_LAC_IDX.get(lacKey):null;
@@ -1285,7 +1296,7 @@ function processBoardData(d){
       nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
       nearbyDbMarkers=[];
       // Find all towers within 2km of current position
-      const RADIUS=2000; // meters
+      const RADIUS=5000; // 5km — show all towers in range
       const nearbyTowers=[];
       TOWERS.forEach(t=>{
         const d=hav({lat:refP.lat,lon:refP.lon},{lat:t.l,lon:t.o});
