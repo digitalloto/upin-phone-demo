@@ -82,8 +82,25 @@ function buildIdx(){
   CID_IDX=new Map();
   TOWERS.forEach(t=>CID_IDX.set(t.c,t));
 }
-// Load cached towers
-try{const d=localStorage.getItem('v5b_cid_cache');if(d)cidCache=JSON.parse(d);}catch(e){}
+// Load cached towers from previous sessions into runtime DB
+try{
+  const d=localStorage.getItem('v5b_cid_cache');
+  if(d){
+    const parsed=JSON.parse(d);
+    let loaded=0;
+    Object.entries(parsed).forEach(([k,v])=>{
+      if(v&&v.lat&&!v.miss){
+        cidCache[k]=v;
+        // Push back into TOWERS array so nearby display + CID index works
+        if(typeof TOWERS!=='undefined'){
+          TOWERS.push({l:v.lat,o:v.lon,m:parseInt(k.split('-')[1])||84,c:parseInt(k.split('-')[3])||0,a:parseInt(k.split('-')[2])||0});
+          loaded++;
+        }
+      }
+    });
+    if(loaded>0)console.log('Loaded '+loaded+' cached towers into DB');
+  }
+}catch(e){}
 
 function log(m,c){const d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent=m;$('log').appendChild(d);$('log').scrollTop=99999;}
 
@@ -284,7 +301,8 @@ function onBLE(e){
   if(bleBuffer.length>4000)bleBuffer='';
 }
 
-log('v5b ready — connect board to see cell towers','var(--cyan)');
+const cachedCount=Object.keys(cidCache).filter(k=>cidCache[k]&&cidCache[k].lat&&!cidCache[k].miss).length;
+log('v5b ready — DB: '+(typeof TOWERS!=='undefined'?TOWERS.length:0)+' towers ('+cachedCount+' from previous sessions). Connect board to start.','var(--cyan)');
 </script>
 </body>
 </html>
