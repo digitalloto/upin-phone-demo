@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>UPIN v5b — Cell Tower Triangulation</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+:root{--bg:#080c14;--panel:#0f1520;--border:#1a2438;--cyan:#4da6ff;--green:#3dcc6e;--amber:#e8a832;--red:#f06060;--purple:#A855F7;--tp:#dce6f5;--tm:#7a9bc0;--td:#4a6080}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(--tp);height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:11px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#050a12;border-bottom:1px solid var(--border)}
+.topbar h1{font-size:13px;font-weight:700;color:var(--amber);letter-spacing:3px}
+#map{flex:1;width:100%}
+.panel{background:var(--panel);border-top:1px solid var(--border);max-height:45vh;overflow-y:auto;padding:8px}
+.card{background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:8px;margin-bottom:6px}
+.card-title{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--amber);margin-bottom:6px}
+.row{display:flex;gap:4px;margin-bottom:4px}
+.mc{flex:1;background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:4px;text-align:center}
+.mc .ml{font-size:7px;color:var(--td);text-transform:uppercase;letter-spacing:1px}
+.mc .mv{font-size:15px;font-weight:700;line-height:1.2}
+.btn{padding:8px;border:none;border-radius:2px;font-family:inherit;font-size:9px;font-weight:700;letter-spacing:1px;cursor:pointer;text-transform:uppercase}
+.btn-hw{font-size:11px;font-weight:900;letter-spacing:2px;color:var(--cyan);background:rgba(77,166,255,.04);border:2px solid var(--cyan);padding:12px;width:100%;cursor:pointer;border-radius:2px}
+.btn-hw:active{background:rgba(77,166,255,.15)}
+.btn-hw.ok{color:var(--green);border-color:var(--green)}
+.sdot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.sdot.live{background:var(--green)}.sdot.off{background:var(--td)}.sdot.err{background:var(--red)}
+.tower-row{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);font-size:9px}
+.rssi-bar{height:6px;border-radius:3px;background:var(--border);flex:0 0 60px;overflow:hidden}
+.rssi-fill{height:100%;border-radius:3px}
+#log{font-size:7px;line-height:1.5;max-height:60px;overflow-y:auto;color:var(--td);padding:4px;background:var(--bg);border:1px solid var(--border);border-radius:2px;margin-top:4px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>UPIN v5b — TOWER TRI</h1>
+  <span id="status" style="font-size:9px;color:var(--td)">DISCONNECTED</span>
+</div>
+<div id="map"></div>
+<div class="panel">
+  <button class="btn-hw" id="bleBtn" onclick="connectBLE()">CONNECT BOARD VIA BLE</button>
+  <div class="card" style="margin-top:6px">
+    <div class="card-title">CELL TOWERS FROM BOARD</div>
+    <div class="row">
+      <div class="mc"><div class="ml">4G</div><div class="mv" id="ct4g">0</div></div>
+      <div class="mc"><div class="ml">2G</div><div class="mv" id="ct2g">0</div></div>
+      <div class="mc"><div class="ml">Matched</div><div class="mv" id="ctMatch">0</div></div>
+      <div class="mc"><div class="ml">Tri Fix</div><div class="mv" id="ctFix" style="color:var(--red)">NO</div></div>
+    </div>
+    <div id="towerList"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">TRIANGULATION</div>
+    <div id="triInfo" style="font-size:9px;color:var(--tm)">Connect board to start</div>
+  </div>
+  <div class="card">
+    <div class="card-title">API LOG</div>
+    <div id="apiLog" style="font-size:8px;color:var(--td);max-height:80px;overflow-y:auto">Waiting...</div>
+  </div>
+  <div id="log"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="towers-data.js"></script>
+<script>
+const GOOGLE_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
+const $=id=>document.getElementById(id);
+const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
+
+// State
+let map,gpsMarker,triMarker,triCircle;
+let towerMarkers=[],towerLines=[];
+let bleDevice=null,bleChar=null,bleBuffer='';
+let cidCache={};
+const cidPending=new Set();
+const BLE_SVC='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const BLE_TX='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+
+// CID index
+let CID_IDX=null;
+function buildIdx(){
+  if(CID_IDX||typeof TOWERS==='undefined')return;
+  CID_IDX=new Map();
+  TOWERS.forEach(t=>CID_IDX.set(t.c,t));
+}
+// Load cached towers
+try{const d=localStorage.getItem('v5b_cid_cache');if(d)cidCache=JSON.parse(d);}catch(e){}
+
+function log(m,c){const d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent=m;$('log').appendChild(d);$('log').scrollTop=99999;}
+
+// Map
+map=L.map('map',{zoomControl:false}).setView([13.08,80.27],14);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM',maxZoom:19}).addTo(map);
+
+// Phone GPS
+if('geolocation' in navigator){
+  navigator.geolocation.watchPosition(p=>{
+    const ll=[p.coords.latitude,p.coords.longitude];
+    if(!gpsMarker)gpsMarker=L.circleMarker(ll,{radius:8,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1,weight:2}).bindTooltip('GPS').addTo(map);
+    else gpsMarker.setLatLng(ll);
+    map.setView(ll,16);
+  },()=>{},{ enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+}
+
+// Google Geolocation API lookup
+function lookupGoogle(mcc,mnc,lac,cid,rssi,cb){
+  const key=mcc+'-'+mnc+'-'+lac+'-'+cid;
+  if(cidCache[key]&&cidCache[key].lat){cb(cidCache[key]);return;}
+  if(cidPending.has(key))return;
+  cidPending.add(key);
+  fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_KEY,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cellTowers:[{cellId:cid,locationAreaCode:lac,mobileCountryCode:mcc,mobileNetworkCode:mnc,signalStrength:rssi||0}]})
+  }).then(r=>r.json()).then(d=>{
+    cidPending.delete(key);
+    if(d.location&&d.location.lat){
+      const r={lat:d.location.lat,lon:d.location.lng,range:d.accuracy||500};
+      cidCache[key]=r;
+      try{localStorage.setItem('v5b_cid_cache',JSON.stringify(cidCache));}catch(e){}
+      // Add to runtime DB
+      if(typeof TOWERS!=='undefined')TOWERS.push({l:r.lat,o:r.lon,m:mnc,c:cid,a:lac});
+      if(CID_IDX)CID_IDX.set(cid,{l:r.lat,o:r.lon,m:mnc,c:cid,a:lac});
+      $('apiLog').innerHTML+='<div style="color:var(--green)">✓ Google: CID '+cid+' → '+r.lat.toFixed(4)+','+r.lon.toFixed(4)+' (±'+Math.round(r.range)+'m)</div>';
+      log('Tower CID '+cid+' found via Google','var(--green)');
+      cb(r);
+    }else{
+      cidCache[key]={lat:0,lon:0,miss:true};
+      try{localStorage.setItem('v5b_cid_cache',JSON.stringify(cidCache));}catch(e){}
+      $('apiLog').innerHTML+='<div style="color:var(--red)">✗ CID '+cid+': '+(d.error?d.error.message:'not found')+'</div>';
+    }
+  }).catch(e=>{
+    cidPending.delete(key);
+    $('apiLog').innerHTML+='<div style="color:var(--red)">✗ CID '+cid+': '+e.message+'</div>';
+  });
+}
+
+// NLLS trilateration
+function trilaterate(towers){
+  if(towers.length<2)return null;
+  let sL=0,sO=0,sW=0;
+  towers.forEach(t=>{const w=Math.pow(10,(t.signal+100)/30);sL+=t.lat*w;sO+=t.lon*w;sW+=w;});
+  let lat=sL/sW,lon=sO/sW;
+  if(towers.length>=3){
+    for(let iter=0;iter<5;iter++){
+      let gL=0,gO=0;
+      towers.forEach(t=>{
+        const ed=hav({lat,lon},{lat:t.lat,lon:t.lon});
+        const td=100*Math.pow(10,(t.signal+50)/-35);
+        const err=ed-td;const dL=(lat-t.lat)/(ed+1);const dO=(lon-t.lon)/(ed+1);
+        gL+=err*dL;gO+=err*dO;
+      });
+      lat-=0.00005*gL;lon-=0.00005*gO;
+    }
+  }
+  const acc=towers.reduce((s,t)=>s+hav({lat,lon},{lat:t.lat,lon:t.lon}),0)/towers.length;
+  return{lat,lon,acc:Math.round(acc*0.3),towers:towers.length};
+}
+
+// Process board data
+function processBoard(d){
+  if(!d)return;
+  buildIdx();
+  const matched=[];
+  const allTowers=[];
+
+  // 4G
+  if(d.cell4g&&d.cell4g.cid){
+    const rssi=d.cell4g.rssi>0&&d.cell4g.rssi<=31?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
+    allTowers.push({mcc:d.cell4g.mcc||404,mnc:d.cell4g.mnc||84,lac:d.cell4g.tac||0,cid:d.cell4g.cid,rssi,gen:'4G'});
+  }
+  // 2G
+  const c2=d.cell2g&&(d.cell2g.data||d.cell2g.list);
+  if(c2&&Array.isArray(c2))c2.forEach(c=>{
+    allTowers.push({mcc:c.mcc||404,mnc:c.mnc||84,lac:c.lac||0,cid:c.cid||0,rssi:c.rssi||-90,gen:'2G'});
+  });
+
+  $('ct4g').textContent=d.cell4g?d.cell4g.towers||0:0;
+  $('ct2g').textContent=d.cell2g?d.cell2g.towers||0:0;
+
+  // Look up each tower
+  allTowers.forEach(t=>{
+    if(!t.cid)return;
+    // Check local DB first
+    const db=CID_IDX?CID_IDX.get(t.cid):null;
+    if(db&&db.l){matched.push({lat:db.l,lon:db.o,signal:t.rssi,cid:t.cid,gen:t.gen,src:'DB'});return;}
+    // Check cache
+    const key=t.mcc+'-'+t.mnc+'-'+t.lac+'-'+t.cid;
+    if(cidCache[key]&&cidCache[key].lat&&!cidCache[key].miss){
+      matched.push({lat:cidCache[key].lat,lon:cidCache[key].lon,signal:t.rssi,cid:t.cid,gen:t.gen,src:'cache'});return;
+    }
+    // Google API lookup
+    lookupGoogle(t.mcc,t.mnc,t.lac,t.cid,t.rssi,r=>{
+      // Will be picked up on next packet via cache
+    });
+  });
+
+  $('ctMatch').textContent=matched.length;
+
+  // Draw towers on map
+  towerMarkers.forEach(m=>map.removeLayer(m));
+  towerLines.forEach(l=>map.removeLayer(l));
+  towerMarkers=[];towerLines=[];
+
+  // Tower list HTML
+  let html='';
+  allTowers.forEach((t,i)=>{
+    const m=matched.find(x=>x.cid===t.cid);
+    const barW=Math.max(5,Math.min(100,(t.rssi+110)*2));
+    const col=t.rssi>-75?'var(--green)':t.rssi>-85?'var(--cyan)':t.rssi>-95?'var(--amber)':'var(--red)';
+    html+='<div class="tower-row"><span style="width:20px;color:var(--td)">'+(i+1)+'</span><span style="width:25px;color:var(--cyan)">'+t.gen+'</span><span style="flex:1"><b>CID:'+t.cid+'</b> LAC:'+t.lac+'</span><span style="width:50px;text-align:right;color:'+col+'">'+t.rssi+'dBm</span><div class="rssi-bar"><div class="rssi-fill" style="width:'+barW+'%;background:'+col+'"></div></div><span style="width:40px;text-align:right;font-size:7px;color:'+(m?'var(--green)':'var(--red)')+'">'+(m?m.src:'??')+'</span></div>';
+
+    if(m){
+      const mkr=L.circleMarker([m.lat,m.lon],{radius:m.signal>-80?8:m.signal>-90?6:4,color:col.replace('var(','').replace(')',''),fillColor:col.replace('var(','').replace(')',''),fillOpacity:0.7,weight:2}).addTo(map);
+      mkr.bindTooltip(t.gen+' CID:'+t.cid+'<br>'+t.rssi+'dBm<br>src:'+m.src);
+      towerMarkers.push(mkr);
+    }
+  });
+  $('towerList').innerHTML=html;
+
+  // Triangulate
+  if(matched.length>=2){
+    const fix=trilaterate(matched);
+    if(fix&&fix.acc<50000){
+      $('ctFix').textContent='YES';$('ctFix').style.color='var(--green)';
+      $('triInfo').innerHTML='<b style="color:var(--green)">FIX</b> Lat: '+fix.lat.toFixed(6)+' Lon: '+fix.lon.toFixed(6)+'<br>Accuracy: ±'+fix.acc+'m | Towers: '+fix.towers;
+      const cll=[fix.lat,fix.lon];
+      if(!triMarker){
+        triMarker=L.circleMarker(cll,{radius:8,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.9,weight:3}).bindTooltip('TRI FIX').addTo(map);
+        triCircle=L.circle(cll,{radius:fix.acc,color:'#e8a832',fillOpacity:0.05,weight:1,dashArray:'6,4'}).addTo(map);
+      }else{
+        triMarker.setLatLng(cll);triCircle.setLatLng(cll);triCircle.setRadius(fix.acc);
+      }
+      // Lines from towers to tri fix
+      matched.forEach(m=>{
+        const l=L.polyline([[m.lat,m.lon],cll],{color:'#e8a832',weight:1,opacity:0.4,dashArray:'4,4'}).addTo(map);
+        towerLines.push(l);
+      });
+    }else{
+      $('ctFix').textContent='BAD';$('ctFix').style.color='var(--red)';
+      $('triInfo').textContent='Fix rejected: accuracy '+((fix&&fix.acc)||'?')+'m too large';
+    }
+  }else{
+    $('ctFix').textContent='NO';$('ctFix').style.color='var(--red)';
+    $('triInfo').textContent='Need ≥2 towers with positions. Have: '+matched.length+'/'+allTowers.length+'. Lookups pending: '+cidPending.size;
+  }
+}
+
+// BLE
+function connectBLE(){
+  if(!navigator.bluetooth){log('No BLE — use Chrome on laptop','var(--red)');return;}
+  if(bleDevice&&bleDevice.gatt.connected){bleDevice.gatt.disconnect();$('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';$('status').textContent='DISCONNECTED';return;}
+  log('Requesting BLE...','var(--cyan)');
+  $('bleBtn').textContent='CONNECTING...';
+  navigator.bluetooth.requestDevice({filters:[{name:'UPIN-BLE'}],optionalServices:[BLE_SVC]})
+  .then(d=>{bleDevice=d;d.addEventListener('gattserverdisconnected',()=>{$('status').textContent='DISCONNECTED';$('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';});return d.gatt.connect();})
+  .then(s=>s.getPrimaryService(BLE_SVC))
+  .then(s=>s.getCharacteristic(BLE_TX))
+  .then(c=>{bleChar=c;return c.startNotifications();})
+  .then(()=>{
+    bleChar.addEventListener('characteristicvaluechanged',onBLE);
+    $('status').textContent='CONNECTED — RECEIVING';
+    $('bleBtn').textContent='BLE CONNECTED — TAP TO DISCONNECT';
+    $('bleBtn').className='btn-hw ok';
+    log('BLE connected!','var(--green)');
+  }).catch(e=>{
+    log('BLE error: '+e.message,'var(--red)');
+    $('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';
+  });
+}
+function onBLE(e){
+  const raw=new TextDecoder().decode(e.target.value);
+  bleBuffer+=raw;
+  let idx;
+  while((idx=bleBuffer.indexOf('$'))!==-1){
+    let json=bleBuffer.substring(0,idx).trim();
+    bleBuffer=bleBuffer.substring(idx+1);
+    if(!json||json[0]!=='{')continue;
+    json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
+    try{
+      const d=JSON.parse(json);
+      if(d.k!==undefined)continue;
+      if(d.cell4g||d.cell2g)processBoard(d);
+    }catch(e){}
+  }
+  if(bleBuffer.length>4000)bleBuffer='';
+}
+
+log('v5b ready — connect board to see cell towers','var(--cyan)');
+</script>
+</body>
+</html>

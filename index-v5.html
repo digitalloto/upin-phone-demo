@@ -594,9 +594,10 @@ const FIX_REJECTIONS=[]; // FIX 2: rolling log of last 100 rejections
 let compassBadCount=0,compassTotalCount=0; // FIX 6
 
 // ═══════════════════════════════════════
-// LIVE CID LOOKUP — OpenCellID API for towers not in local DB
-// Fires async fetch, caches result in localStorage. Next BLE packet picks it up.
+// LIVE CID LOOKUP — Google Geolocation API (most complete tower DB in the world)
+// Falls back to OpenCellID/unwiredlabs if Google fails.
 // ═══════════════════════════════════════
+const GOOGLE_GEO_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
 const CID_CACHE_KEY='upin_cid_cache';
 let cidCache={}; // {mcc-mnc-lac-cid: {lat,lon,range,ts}}
 let cidPending=new Set(); // CIDs currently being looked up (avoid duplicate requests)
@@ -668,58 +669,51 @@ function autoCaptureTowers(gps,boardTowers){
 
 function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
   const key=mcc+'-'+mnc+'-'+lac+'-'+cid;
-  // Already cached?
-  if(cidCache[key]){
-    cidCacheHits++;
-    return cidCache[key]; // {lat,lon,range}
-  }
-  // Already pending?
+  if(cidCache[key]){cidCacheHits++;return cidCache[key];}
   if(cidPending.has(key))return null;
-  // Fire async lookup
-  cidPending.add(key);
-  cidLookups++;
-  // Try direct API first, then CORS proxy if blocked
-  const apiUrl='https://opencellid.org/cell/get?key='+OPENCELLID_TOKEN+'&mcc='+mcc+'&mnc='+mnc+'&lac='+lac+'&cellid='+cid+'&format=json';
-  const proxyUrl='https://corsproxy.io/?'+encodeURIComponent(apiUrl);
-  // Try unwiredlabs geolocation API (more complete than opencellid cell/get)
-  const uwUrl='https://us1.unwiredlabs.com/v2/process';
-  const uwBody={token:OPENCELLID_TOKEN,radio:lac>0?'gsm':'lte',mcc,mnc,
-    cells:[{lac,cid,signal:rssi||0}],address:0};
-  const uwProxy='https://corsproxy.io/?'+encodeURIComponent(uwUrl);
-  fetch(uwProxy,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(uwBody)})
-  .then(r=>r.json()).then(d=>{
+  cidPending.add(key);cidLookups++;
+
+  function onFound(lat,lon,acc,src){
     cidPending.delete(key);
-    if(d.status==='ok'&&d.lat&&d.lon){
-      cidCache[key]={lat:d.lat,lon:d.lon,range:d.accuracy||500,ts:Date.now()};
-      saveCIDCache();
-      if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:d.lat,o:d.lon,m:mnc,c:cid});
-      log('Tower found: CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+' (±'+Math.round(d.accuracy||500)+'m)','var(--green)');
-      // Also push to runtime TOWERS array and save
-      if(typeof TOWERS!=='undefined')TOWERS.push({l:d.lat,o:d.lon,m:mnc,c:cid,a:lac});
-      saveTowerDB();
-      try{$('ctApiLog').innerHTML+='<div style="color:var(--green)">✓ CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4)+'</div>';}catch(e){}
+    cidCache[key]={lat,lon,range:acc,ts:Date.now()};
+    saveCIDCache();
+    if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:lat,o:lon,m:mnc,c:cid,a:lac});
+    if(typeof TOWERS!=='undefined')TOWERS.push({l:lat,o:lon,m:mnc,c:cid,a:lac});
+    saveTowerDB();
+    log('Tower found ('+src+'): CID '+cid+' → '+lat.toFixed(4)+','+lon.toFixed(4)+' (±'+Math.round(acc)+'m)','var(--green)');
+    try{$('ctApiLog').innerHTML+='<div style="color:var(--green)">✓ '+src+': CID '+cid+' → '+lat.toFixed(4)+','+lon.toFixed(4)+'</div>';}catch(e){}
+  }
+  function onFail(src,reason){
+    cidPending.delete(key);
+    cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};saveCIDCache();
+    log('CID '+cid+' not found ('+src+'): '+reason,'var(--red)');
+    try{$('ctApiLog').innerHTML+='<div style="color:var(--red)">✗ '+src+': CID '+cid+' — '+reason+'</div>';}catch(e){}
+  }
+
+  // PRIMARY: Google Geolocation API (most complete tower DB)
+  fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cellTowers:[{cellId:cid,locationAreaCode:lac,mobileCountryCode:mcc,mobileNetworkCode:mnc,signalStrength:rssi||0}]})
+  }).then(r=>r.json()).then(d=>{
+    if(d.location&&d.location.lat&&d.location.lng){
+      onFound(d.location.lat,d.location.lng,d.accuracy||500,'Google');
     }else{
-      cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};
-      saveCIDCache();
-      const reason=d.message||d.status||'unknown';
-      log('Tower NOT found: CID '+cid+' ('+reason+')','var(--red)');
-      try{$('ctApiLog').innerHTML+='<div style="color:var(--red)">✗ CID '+cid+' — '+reason+'</div>';}catch(e){}
+      // Google failed — try OpenCellID via CORS proxy
+      const ocUrl='https://opencellid.org/cell/get?key='+OPENCELLID_TOKEN+'&mcc='+mcc+'&mnc='+mnc+'&lac='+lac+'&cellid='+cid+'&format=json';
+      fetch('https://corsproxy.io/?'+encodeURIComponent(ocUrl)).then(r=>r.json()).then(d2=>{
+        if(d2.lat&&d2.lon&&d2.lat!==0)onFound(d2.lat,d2.lon,d2.range||500,'OpenCellID');
+        else onFail('All','Google: '+(d.error?d.error.message:'no result')+' / OpenCellID: not found');
+      }).catch(()=>onFail('All','Google: '+(d.error?d.error.message:'no result')+' / OpenCellID: network error'));
     }
   }).catch(e=>{
-    cidPending.delete(key);
-    // Fallback: try opencellid direct
-    fetch(proxyUrl).then(r=>r.json()).then(d=>{
-      if(d.lat&&d.lon&&d.lat!==0){
-        cidCache[key]={lat:d.lat,lon:d.lon,range:d.range||500,ts:Date.now()};
-        saveCIDCache();
-        if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,{l:d.lat,o:d.lon,m:mnc,c:cid});
-        log('Tower found (OpenCellID): CID '+cid+' → '+d.lat.toFixed(4)+','+d.lon.toFixed(4),'var(--green)');
-      }else{
-        cidCache[key]={lat:0,lon:0,range:0,ts:Date.now(),miss:true};saveCIDCache();
-      }
-    }).catch(()=>{cidPending.delete(key);});
+    // Google network error — try OpenCellID
+    const ocUrl='https://opencellid.org/cell/get?key='+OPENCELLID_TOKEN+'&mcc='+mcc+'&mnc='+mnc+'&lac='+lac+'&cellid='+cid+'&format=json';
+    fetch('https://corsproxy.io/?'+encodeURIComponent(ocUrl)).then(r=>r.json()).then(d=>{
+      if(d.lat&&d.lon&&d.lat!==0)onFound(d.lat,d.lon,d.range||500,'OpenCellID');
+      else onFail('All','Google: '+e.message+' / OpenCellID: not found');
+    }).catch(()=>onFail('All','Google: '+e.message+' / OpenCellID: network error'));
   });
-  return null; // not available yet — will be on next packet
+  return null;
 }
 
 function validateFix(lat,lon,source){
