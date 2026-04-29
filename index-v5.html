@@ -1359,15 +1359,14 @@ function processBoardData(d){
       log('Towers: '+boardTowerList.length+' positioned / '+(cellTowers4G+cellTowers2G)+' detected. '+lacList+'. API: '+cidPending.size+' pending','var(--amber)');
     }
   }
-  // ═══ SHOW ALL DB TOWERS WITHIN 2KM + SIGNAL-MATCH ═══
-  // This shows every tower from our 44k DB near the user's position,
-  // regardless of operator. Then matches board's RSSI to nearest towers.
+  // ═══ SHOW ALL DB TOWERS WITHIN 5KM ON MAP ═══
   try{
-    const refP=gpsTrue||lastGoodFix;
-    if(refP&&typeof TOWERS!=='undefined'&&typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
-      // Clear old nearby markers
-      nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
-      nearbyDbMarkers=[];
+    const refP=gpsTrue||lastGoodFix||calGpsPos;
+    if(refP&&refP.lat>6&&typeof TOWERS!=='undefined'&&TOWERS.length>0&&typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
+      // Clear old nearby markers (only every 10th packet to reduce flicker)
+      if(bleGoodPkts%10===0){
+        nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+        nearbyDbMarkers=[];
       // Find all towers within 2km of current position
       const RADIUS=5000; // 5km — show all towers in range
       const nearbyTowers=[];
@@ -1410,8 +1409,10 @@ function processBoardData(d){
       });
       // Update tower tab with nearby count
       try{$('ctMatched').textContent=boardTowerList.length+' (+'+nearbyTowers.length+' nearby)';}catch(e){}
+      if(bleGoodPkts<=3)log('Nearby DB towers within 5km: '+nearbyTowers.length+' (TOWERS.length='+TOWERS.length+', ref='+refP.lat.toFixed(3)+','+refP.lon.toFixed(3)+')','var(--cyan)');
+      } // close bleGoodPkts%10 check
     }
-  }catch(e){}
+  }catch(e){if(bleGoodPkts<=3)log('Nearby tower error: '+e.message,'var(--red)');}
 
   // Feed real tower data into UTIN — validate the result
   if(boardTowerList.length>=2){
@@ -5168,6 +5169,9 @@ function importTowers(input){
       const lac=iLac>=0?parseInt(vals[iLac])||0:0;
       // Add to CID index for instant lookup
       const entry={l:lat,o:lon,m:mnc,c:cid,a:lac};
+      // Add to runtime TOWERS array (for nearby display on map)
+      if(typeof TOWERS!=='undefined')TOWERS.push(entry);
+      // Add to CID index for instant lookup
       if(TOWER_CID_IDX)TOWER_CID_IDX.set(cid,entry);
       // Add to LAC index
       if(lac&&TOWER_LAC_IDX){
@@ -5175,13 +5179,17 @@ function importTowers(input){
         if(!TOWER_LAC_IDX.has(lk))TOWER_LAC_IDX.set(lk,[]);
         TOWER_LAC_IDX.get(lk).push(entry);
       }
-      // Add to API cache so it persists across sessions
-      const key=mcc+'-'+mnc+'-'+lac+'-'+cid;
-      cidCache[key]={lat,lon,range:500,ts:Date.now()};
+      // Add to MNC index
+      if(TOWER_MNC_IDX){
+        if(!TOWER_MNC_IDX.has(mnc))TOWER_MNC_IDX.set(mnc,[]);
+        TOWER_MNC_IDX.get(mnc).push(entry);
+      }
       added++;
     }
+    // Save to localStorage so imported towers survive refresh
     saveCIDCache();
-    $('importStatus').innerHTML='<span style="color:var(--green)">Imported <b>'+added+'</b> towers ('+skipped+' skipped). Cached permanently.<br>LAC groups: '+(TOWER_LAC_IDX?TOWER_LAC_IDX.size:0)+'</span>';
+    saveTowerDB();
+    $('importStatus').innerHTML='<span style="color:var(--green)">Imported <b>'+added+'</b> towers ('+skipped+' skipped).<br>Total DB: '+(typeof TOWERS!=='undefined'?TOWERS.length:0)+' towers | LAC groups: '+(TOWER_LAC_IDX?TOWER_LAC_IDX.size:0)+'</span>';
     log('Imported '+added+' towers from '+file.name+' — CID index: '+(TOWER_CID_IDX?TOWER_CID_IDX.size:0)+', LAC groups: '+(TOWER_LAC_IDX?TOWER_LAC_IDX.size:0),'var(--green)');
   };
   reader.readAsText(file);
