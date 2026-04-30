@@ -286,19 +286,43 @@ function processBoard(d){
     html+='<div class="tower-row"><span style="width:20px;color:var(--td)">'+(i+1)+'</span><span style="width:25px;color:var(--cyan)">'+t.gen+'</span><span style="flex:1"><b>CID:'+t.cid+'</b> LAC:'+t.lac+'</span><span style="width:50px;text-align:right;color:'+col+'">'+t.rssi+'dBm</span><div class="rssi-bar"><div class="rssi-fill" style="width:'+barW+'%;background:'+col+'"></div></div><span style="width:40px;text-align:right;font-size:7px;color:'+(m?'var(--green)':'var(--red)')+'">'+(m?m.src:'??')+'</span></div>';
 
     if(m){
-      const mkr=L.circleMarker([m.lat,m.lon],{radius:m.signal>-80?8:m.signal>-90?6:4,color:col.replace('var(','').replace(')',''),fillColor:col.replace('var(','').replace(')',''),fillOpacity:0.7,weight:2}).addTo(map);
+      const colHex=t.rssi>-75?'#3dcc6e':t.rssi>-85?'#4da6ff':t.rssi>-95?'#e8a832':'#f06060';
+      // Tower position marker
+      const mkr=L.circleMarker([m.lat,m.lon],{radius:m.signal>-80?8:m.signal>-90?6:4,color:colHex,fillColor:colHex,fillOpacity:0.8,weight:2}).addTo(map);
       mkr.bindTooltip(t.gen+' CID:'+t.cid+'<br>'+t.rssi+'dBm<br>src:'+m.src);
       towerMarkers.push(mkr);
+      // RSSI range circle — estimated distance from signal strength
+      // Stronger signal = smaller circle = you're closer to this tower
+      const estDist=100*Math.pow(10,(t.rssi+50)/-35); // path-loss model
+      const rangeCircle=L.circle([m.lat,m.lon],{radius:Math.min(estDist,5000),color:colHex,fillColor:colHex,fillOpacity:0.04,weight:1,dashArray:'4,4'}).addTo(map);
+      rangeCircle.bindTooltip('Range: ~'+Math.round(estDist)+'m ('+t.rssi+'dBm)');
+      towerMarkers.push(rangeCircle);
     }
   });
   $('towerList').innerHTML=html;
+
+  // Track signal changes for direction detection
+  if(!processBoard._prevRSSI)processBoard._prevRSSI={};
+  let approaching=[],receding=[];
+  matched.forEach(m=>{
+    const prev=processBoard._prevRSSI[m.cid];
+    if(prev!==undefined){
+      const delta=m.signal-prev;
+      if(delta>1)approaching.push(m); // getting stronger = moving toward
+      if(delta<-1)receding.push(m);   // getting weaker = moving away
+    }
+    processBoard._prevRSSI[m.cid]=m.signal;
+  });
 
   // Triangulate
   if(matched.length>=2){
     const fix=trilaterate(matched);
     if(fix&&fix.acc<50000){
       $('ctFix').textContent='YES';$('ctFix').style.color='var(--green)';
-      $('triInfo').innerHTML='<b style="color:var(--green)">FIX</b> Lat: '+fix.lat.toFixed(6)+' Lon: '+fix.lon.toFixed(6)+'<br>Accuracy: ±'+fix.acc+'m | Towers: '+fix.towers;
+      let triHtml='<b style="color:var(--green)">FIX</b> Lat: '+fix.lat.toFixed(6)+' Lon: '+fix.lon.toFixed(6)+'<br>Accuracy: ±'+fix.acc+'m | Towers: '+fix.towers;
+      if(approaching.length)triHtml+='<br><span style="color:var(--green)">Approaching: '+approaching.map(m=>'CID:'+m.cid).join(', ')+'</span>';
+      if(receding.length)triHtml+='<br><span style="color:var(--red)">Receding: '+receding.map(m=>'CID:'+m.cid).join(', ')+'</span>';
+      $('triInfo').innerHTML=triHtml;
       const cll=[fix.lat,fix.lon];
       if(!triMarker){
         triMarker=L.circleMarker(cll,{radius:8,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.9,weight:3}).bindTooltip('TRI FIX').addTo(map);
@@ -306,9 +330,13 @@ function processBoard(d){
       }else{
         triMarker.setLatLng(cll);triCircle.setLatLng(cll);triCircle.setRadius(fix.acc);
       }
-      // Lines from towers to tri fix
+      // Lines from towers to tri fix — color by direction
       matched.forEach(m=>{
-        const l=L.polyline([[m.lat,m.lon],cll],{color:'#e8a832',weight:1,opacity:0.4,dashArray:'4,4'}).addTo(map);
+        const isApproach=approaching.find(a=>a.cid===m.cid);
+        const isRecede=receding.find(r=>r.cid===m.cid);
+        const lineCol=isApproach?'#3dcc6e':isRecede?'#f06060':'#e8a832';
+        const lineW=isApproach?2:isRecede?2:1;
+        const l=L.polyline([[m.lat,m.lon],cll],{color:lineCol,weight:lineW,opacity:0.5,dashArray:'4,4'}).addTo(map);
         towerLines.push(l);
       });
     }else{
