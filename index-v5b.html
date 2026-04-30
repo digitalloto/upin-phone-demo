@@ -62,6 +62,14 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <div id="triInfo" style="font-size:9px;color:var(--tm)">Connect board to start</div>
   </div>
   <div class="card">
+    <div class="card-title">FLIGHT PATH PREDICTION</div>
+    <div id="flightInfo" style="font-size:9px;color:var(--tm)">Move with GPS to see predicted path (T+5 to T+30 seconds)</div>
+  </div>
+  <div class="card">
+    <div class="card-title">TOWER DISTANCES (GPS-learned)</div>
+    <div id="towerDist" style="font-size:8px;color:var(--td)">Connect board + get GPS fix to learn distances</div>
+  </div>
+  <div class="card">
     <div class="card-title">API LOG</div>
     <div id="apiLog" style="font-size:8px;color:var(--td);max-height:80px;overflow-y:auto">Waiting...</div>
   </div>
@@ -77,9 +85,21 @@ const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon
 // State
 let map,gpsMarker,triMarker,triCircle;
 let towerMarkers=[],towerLines=[];
+let flightPathLine=null,flightPathMarkers=[];
 let bleDevice=null,bleChar=null,bleBuffer='';
 let cidCache={};
 const cidPending=new Set();
+
+// GPS tracking
+let gpsPos=null; // current GPS position {lat,lon,speed,heading,t}
+let gpsHistory=[]; // last 30 GPS positions for velocity/heading
+const GPS_HIST_MAX=30;
+
+// Tower distance tracking (learned from GPS)
+let towerDistances={}; // {cid: {realDist, rssi, lastUpdate}} — real distances from GPS
+
+// Flight path prediction
+let flightPath=[]; // [{lat,lon,t,label}] — predicted positions T+5 to T+30
 const BLE_SVC='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const BLE_TX='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
@@ -116,14 +136,93 @@ function log(m,c){const d=document.createElement('div');d.style.color=c||'var(--
 map=L.map('map',{zoomControl:false}).setView([13.08,80.27],14);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM',maxZoom:19}).addTo(map);
 
-// Phone GPS
+// Phone GPS — tracks position history for flight path prediction
 if('geolocation' in navigator){
   navigator.geolocation.watchPosition(p=>{
+    const now=performance.now();
     const ll=[p.coords.latitude,p.coords.longitude];
+    gpsPos={lat:p.coords.latitude,lon:p.coords.longitude,speed:p.coords.speed||0,heading:p.coords.heading||0,acc:p.coords.accuracy,t:now};
+    gpsHistory.push({...gpsPos});
+    if(gpsHistory.length>GPS_HIST_MAX)gpsHistory.shift();
     if(!gpsMarker)gpsMarker=L.circleMarker(ll,{radius:8,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1,weight:2}).bindTooltip('GPS').addTo(map);
     else gpsMarker.setLatLng(ll);
     map.setView(ll,16);
+
+    // Learn real distance to each matched tower from GPS
+    if(processBoard._lastMatched){
+      processBoard._lastMatched.forEach(m=>{
+        const realDist=hav(gpsPos,{lat:m.lat,lon:m.lon});
+        towerDistances[m.cid]={realDist:Math.round(realDist),rssi:m.signal,lat:m.lat,lon:m.lon,t:now};
+      });
+    }
+
+    // Predict flight path: T+5, T+10, T+15, T+20, T+25, T+30
+    predictFlightPath();
   },()=>{},{ enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+}
+
+// Flight path prediction from GPS history
+function predictFlightPath(){
+  if(gpsHistory.length<3||!gpsPos)return;
+  // Calculate average velocity from last N GPS positions
+  const recent=gpsHistory.slice(-5);
+  let vLat=0,vLon=0,count=0;
+  for(let i=1;i<recent.length;i++){
+    const dt=(recent[i].t-recent[i-1].t)/1000;
+    if(dt>0&&dt<10){
+      vLat+=(recent[i].lat-recent[i-1].lat)/dt;
+      vLon+=(recent[i].lon-recent[i-1].lon)/dt;
+      count++;
+    }
+  }
+  if(count===0)return;
+  vLat/=count;vLon/=count;
+
+  // Detect turn rate from heading changes
+  let turnRate=0;
+  if(recent.length>=3){
+    const h1=recent[recent.length-3].heading||0;
+    const h2=recent[recent.length-1].heading||0;
+    let dh=h2-h1;if(dh>180)dh-=360;if(dh<-180)dh+=360;
+    const dt=(recent[recent.length-1].t-recent[recent.length-3].t)/1000;
+    if(dt>0)turnRate=dh/dt; // degrees per second
+  }
+
+  // Generate predicted positions
+  flightPath=[];
+  const times=[5,10,15,20,25,30]; // seconds ahead
+  let predLat=gpsPos.lat,predLon=gpsPos.lon,predHdg=gpsPos.heading||0;
+  const speed=Math.sqrt(vLat*vLat+vLon*vLon)*111320; // m/s approx
+
+  times.forEach(t=>{
+    // Apply turn rate to heading
+    predHdg+=turnRate*t;
+    const h=predHdg*Math.PI/180;
+    const dist=speed*t;
+    const pLat=gpsPos.lat+(dist*Math.cos(h))/111320;
+    const pLon=gpsPos.lon+(dist*Math.sin(h))/(111320*Math.cos(gpsPos.lat*Math.PI/180));
+    flightPath.push({lat:pLat,lon:pLon,t,label:'T+'+t+'s'});
+  });
+
+  // Draw flight path on map
+  flightPathMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+  flightPathMarkers=[];
+  if(flightPathLine)try{map.removeLayer(flightPathLine);}catch(e){}
+
+  if(flightPath.length>0&&speed>0.5){ // only show if moving
+    const pathPoints=[[gpsPos.lat,gpsPos.lon],...flightPath.map(p=>[p.lat,p.lon])];
+    flightPathLine=L.polyline(pathPoints,{color:'#A855F7',weight:2,opacity:0.6,dashArray:'6,4'}).addTo(map);
+    flightPathMarkers.push(flightPathLine);
+
+    // Time markers along the path
+    flightPath.forEach((p,i)=>{
+      const size=i<2?5:3; // T+5 and T+10 bigger
+      const opacity=1-i*0.12;
+      const mkr=L.circleMarker([p.lat,p.lon],{radius:size,color:'#A855F7',fillColor:'#A855F7',fillOpacity:opacity,weight:1}).addTo(map);
+      mkr.bindTooltip(p.label+'<br>'+p.lat.toFixed(5)+','+p.lon.toFixed(5),{direction:'top'});
+      flightPathMarkers.push(mkr);
+    });
+  }
 }
 
 // Google Geolocation API lookup — only tries ONCE per CID
@@ -271,6 +370,7 @@ function processBoard(d){
   });
 
   $('ctMatch').textContent=matched.length;
+  processBoard._lastMatched=matched; // store for GPS distance learning
 
   // Draw towers on map
   towerMarkers.forEach(m=>map.removeLayer(m));
@@ -283,7 +383,9 @@ function processBoard(d){
     const m=matched.find(x=>x.cid===t.cid);
     const barW=Math.max(5,Math.min(100,(t.rssi+110)*2));
     const col=t.rssi>-75?'var(--green)':t.rssi>-85?'var(--cyan)':t.rssi>-95?'var(--amber)':'var(--red)';
-    html+='<div class="tower-row"><span style="width:20px;color:var(--td)">'+(i+1)+'</span><span style="width:25px;color:var(--cyan)">'+t.gen+'</span><span style="flex:1"><b>CID:'+t.cid+'</b> LAC:'+t.lac+'</span><span style="width:50px;text-align:right;color:'+col+'">'+t.rssi+'dBm</span><div class="rssi-bar"><div class="rssi-fill" style="width:'+barW+'%;background:'+col+'"></div></div><span style="width:40px;text-align:right;font-size:7px;color:'+(m?'var(--green)':'var(--red)')+'">'+(m?m.src:'??')+'</span></div>';
+    const td=towerDistances[t.cid];
+    const distInfo=td?Math.round(td.realDist)+'m':'--';
+    html+='<div class="tower-row"><span style="width:20px;color:var(--td)">'+(i+1)+'</span><span style="width:25px;color:var(--cyan)">'+t.gen+'</span><span style="flex:1"><b>CID:'+t.cid+'</b> LAC:'+t.lac+'</span><span style="width:40px;text-align:right;color:'+col+'">'+t.rssi+'</span><div class="rssi-bar"><div class="rssi-fill" style="width:'+barW+'%;background:'+col+'"></div></div><span style="width:45px;text-align:right;font-size:7px;color:var(--cyan)">'+distInfo+'</span><span style="width:30px;text-align:right;font-size:7px;color:'+(m?'var(--green)':'var(--red)')+'">'+(m?m.src:'??')+'</span></div>';
 
     if(m){
       const colHex=t.rssi>-75?'#3dcc6e':t.rssi>-85?'#4da6ff':t.rssi>-95?'#e8a832':'#f06060';
@@ -346,6 +448,21 @@ function processBoard(d){
   }else{
     $('ctFix').textContent='NO';$('ctFix').style.color='var(--red)';
     $('triInfo').textContent='Need ≥2 towers with positions. Have: '+matched.length+'/'+allTowers.length+'. Lookups pending: '+cidPending.size;
+  }
+
+  // Update flight path and tower distance displays
+  if(flightPath.length>0&&gpsPos){
+    const spd=(gpsPos.speed||0)*3.6;
+    $('flightInfo').innerHTML='<b style="color:var(--purple)">Speed: '+spd.toFixed(0)+' km/h</b> | Path: '+flightPath.length+' points<br>'+
+      flightPath.map(p=>'<span style="color:var(--purple)">'+p.label+': '+p.lat.toFixed(4)+','+p.lon.toFixed(4)+'</span>').join(' → ');
+  }
+  const tdKeys=Object.keys(towerDistances);
+  if(tdKeys.length>0){
+    $('towerDist').innerHTML=tdKeys.map(cid=>{
+      const d=towerDistances[cid];
+      const col=d.realDist<500?'var(--green)':d.realDist<2000?'var(--cyan)':'var(--amber)';
+      return '<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:1px 0"><span>CID:'+cid+'</span><span style="color:'+col+'"><b>'+d.realDist+'m</b> ('+d.rssi+'dBm)</span></div>';
+    }).join('');
   }
 
   // Show ALL DB towers within 5km as small grey dots
