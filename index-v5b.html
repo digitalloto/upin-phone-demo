@@ -205,21 +205,69 @@ function processBoard(d){
   $('ct4g').textContent=d.cell4g?d.cell4g.towers||0:0;
   $('ct2g').textContent=d.cell2g?d.cell2g.towers||0:0;
 
-  // Look up each tower
+  // BATCH GOOGLE LOOKUP: send ALL towers in ONE request for best accuracy
+  // Google triangulates all towers together (much better than per-CID lookup)
+  if(allTowers.length>=1&&!processBoard._batchDone){
+    const gTowers=allTowers.filter(t=>t.cid).map(t=>({
+      cellId:t.cid,
+      locationAreaCode:t.lac,
+      mobileCountryCode:t.mcc,
+      mobileNetworkCode:t.mnc,
+      radioType:t.gen==='4G'?'lte':'gsm',
+      signalStrength:t.rssi
+    }));
+    if(gTowers.length>0){
+      processBoard._batchDone=true; // only try once
+      $('apiLog').innerHTML+='<div style="color:var(--cyan)">Sending '+gTowers.length+' towers to Google in one batch...</div>';
+      fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_KEY,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({considerIp:false,cellTowers:gTowers})
+      }).then(r=>r.json()).then(g=>{
+        if(g.location&&g.location.lat){
+          $('apiLog').innerHTML+='<div style="color:var(--green);font-weight:700">✓ BATCH FIX: '+g.location.lat.toFixed(6)+', '+g.location.lng.toFixed(6)+' (±'+Math.round(g.accuracy)+'m)</div>';
+          log('Google batch fix: '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4)+' ±'+Math.round(g.accuracy)+'m','var(--green)');
+          // Save each tower's position as the batch position (approximate but real)
+          allTowers.forEach(t=>{
+            if(!t.cid)return;
+            const key=t.mcc+'-'+t.mnc+'-'+t.lac+'-'+t.cid;
+            if(!cidCache[key]||cidCache[key].miss){
+              cidCache[key]={lat:g.location.lat,lon:g.location.lng,range:g.accuracy||500};
+              if(typeof TOWERS!=='undefined')TOWERS.push({l:g.location.lat,o:g.location.lng,m:t.mnc,c:t.cid,a:t.lac});
+              if(CID_IDX)CID_IDX.set(t.cid,{l:g.location.lat,o:g.location.lng,m:t.mnc,c:t.cid,a:t.lac});
+            }
+          });
+          try{localStorage.setItem('v5b_cid_cache',JSON.stringify(cidCache));}catch(e){}
+          // Draw the Google fix on map immediately
+          const gll=[g.location.lat,g.location.lng];
+          if(!triMarker){
+            triMarker=L.circleMarker(gll,{radius:10,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.9,weight:3}).bindTooltip('GOOGLE FIX ±'+Math.round(g.accuracy)+'m').addTo(map);
+            triCircle=L.circle(gll,{radius:g.accuracy,color:'#e8a832',fillOpacity:0.05,weight:1,dashArray:'6,4'}).addTo(map);
+          }else{triMarker.setLatLng(gll);triCircle.setLatLng(gll);triCircle.setRadius(g.accuracy);}
+          map.setView(gll,16);
+          $('ctFix').textContent='YES';$('ctFix').style.color='var(--green)';
+          $('triInfo').innerHTML='<b style="color:var(--green)">GOOGLE BATCH FIX</b><br>Lat: '+g.location.lat.toFixed(6)+' Lon: '+g.location.lng.toFixed(6)+'<br>Accuracy: ±'+Math.round(g.accuracy)+'m | Towers sent: '+gTowers.length;
+        }else{
+          const err=g.error?g.error.message:'unknown error';
+          $('apiLog').innerHTML+='<div style="color:var(--red)">✗ Batch: '+err+'</div>';
+          log('Google batch error: '+err,'var(--red)');
+          processBoard._batchDone=false; // retry on next packet
+        }
+      }).catch(e=>{
+        $('apiLog').innerHTML+='<div style="color:var(--red)">✗ Batch network error: '+e.message+'</div>';
+        processBoard._batchDone=false;
+      });
+    }
+  }
+
+  // Individual tower lookups (for towers not yet in cache)
   allTowers.forEach(t=>{
     if(!t.cid)return;
-    // Check local DB first
     const db=CID_IDX?CID_IDX.get(t.cid):null;
     if(db&&db.l){matched.push({lat:db.l,lon:db.o,signal:t.rssi,cid:t.cid,gen:t.gen,src:'DB'});return;}
-    // Check cache
     const key=t.mcc+'-'+t.mnc+'-'+t.lac+'-'+t.cid;
     if(cidCache[key]&&cidCache[key].lat&&!cidCache[key].miss){
       matched.push({lat:cidCache[key].lat,lon:cidCache[key].lon,signal:t.rssi,cid:t.cid,gen:t.gen,src:'cache'});return;
     }
-    // Google API lookup
-    lookupGoogle(t.mcc,t.mnc,t.lac,t.cid,t.rssi,r=>{
-      // Will be picked up on next packet via cache
-    });
   });
 
   $('ctMatch').textContent=matched.length;
