@@ -36,7 +36,15 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
   <h1>UPIN v5b — TOWER TRI</h1>
   <span id="status" style="font-size:9px;color:var(--td)">DISCONNECTED</span>
 </div>
-<div id="map"></div>
+<div id="map" style="position:relative">
+  <div style="position:absolute;top:6px;right:6px;z-index:1000;background:rgba(8,12,20,.92);border:1px solid var(--border);border-radius:2px;padding:4px;font-size:7px">
+    <div style="color:var(--cyan);font-weight:700;margin-bottom:2px">LAYERS</div>
+    <label style="display:block;color:#3dcc6e;cursor:pointer"><input type="checkbox" checked id="lyGps">GPS</label>
+    <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" checked id="lyTowers">Board Towers</label>
+    <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" checked id="lyTri">Triangulation</label>
+    <label style="display:block;color:rgba(100,100,120,0.6);cursor:pointer"><input type="checkbox" checked id="lyDb">DB Towers (5km)</label>
+  </div>
+</div>
 <div class="panel">
   <button class="btn-hw" id="bleBtn" onclick="connectBLE()">CONNECT BOARD VIA BLE</button>
   <div class="card" style="margin-top:6px">
@@ -118,10 +126,14 @@ if('geolocation' in navigator){
   },()=>{},{ enableHighAccuracy:true,maximumAge:2000,timeout:15000});
 }
 
-// Google Geolocation API lookup
+// Google Geolocation API lookup — only tries ONCE per CID
 function lookupGoogle(mcc,mnc,lac,cid,rssi,cb){
   const key=mcc+'-'+mnc+'-'+lac+'-'+cid;
-  if(cidCache[key]&&cidCache[key].lat){cb(cidCache[key]);return;}
+  // Already have result (success or failure)?
+  if(cidCache[key]){
+    if(cidCache[key].lat&&!cidCache[key].miss)cb(cidCache[key]);
+    return;
+  }
   if(cidPending.has(key))return;
   cidPending.add(key);
   fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_KEY,{
@@ -258,6 +270,32 @@ function processBoard(d){
   }else{
     $('ctFix').textContent='NO';$('ctFix').style.color='var(--red)';
     $('triInfo').textContent='Need ≥2 towers with positions. Have: '+matched.length+'/'+allTowers.length+'. Lookups pending: '+cidPending.size;
+  }
+
+  // Show ALL DB towers within 5km as small grey dots
+  if($('lyDb').checked&&typeof TOWERS!=='undefined'&&TOWERS.length>0){
+    const ref=gpsMarker?{lat:gpsMarker.getLatLng().lat,lon:gpsMarker.getLatLng().lng}:null;
+    if(ref){
+      // Only refresh every 5th call to avoid lag
+      if(!processBoard._dbCount)processBoard._dbCount=0;
+      processBoard._dbCount++;
+      if(processBoard._dbCount%5===1){
+        if(!processBoard._dbMarkers)processBoard._dbMarkers=[];
+        processBoard._dbMarkers.forEach(m=>map.removeLayer(m));
+        processBoard._dbMarkers=[];
+        let count=0;
+        TOWERS.forEach(t=>{
+          const d=hav(ref,{lat:t.l,lon:t.o});
+          if(d<5000){
+            const mkr=L.circleMarker([t.l,t.o],{radius:2,color:'rgba(100,120,150,0.4)',fillColor:'rgba(100,120,150,0.3)',fillOpacity:0.3,weight:1}).addTo(map);
+            mkr.bindTooltip('DB: CID:'+t.c+' MNC:'+t.m+(t.a?' LAC:'+t.a:'')+' ('+Math.round(d)+'m)');
+            processBoard._dbMarkers.push(mkr);
+            count++;
+          }
+        });
+        $('triInfo').textContent+=(' | DB towers in 5km: '+count);
+      }
+    }
   }
 }
 
