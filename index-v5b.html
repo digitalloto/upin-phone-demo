@@ -272,7 +272,8 @@ if('geolocation' in navigator){
   },()=>{},{ enableHighAccuracy:true,maximumAge:2000,timeout:15000});
 }
 
-// Flight path prediction with turn scenarios and tower validation
+// Flight path: ONE path that continuously adjusts from live sensor data
+// Gyro turn → path curves. Accel brake → path shortens. Tower confirms → path locks.
 function predictFlightPath(){
   if(gpsHistory.length<3||!gpsPos)return;
   const recent=gpsHistory.slice(-10);
@@ -284,7 +285,7 @@ function predictFlightPath(){
   if(count===0)return;
   vLat/=count;vLon/=count;
 
-  // Turn rate from heading changes
+  // Current turn rate from heading history (degrees per second)
   let turnRate=0;
   if(recent.length>=4){
     const h1=recent[recent.length-4].heading||0;
@@ -294,62 +295,66 @@ function predictFlightPath(){
     if(dt>0)turnRate=dh/dt;
   }
 
-  const speed=gpsPos.speed||Math.sqrt(vLat*vLat+vLon*vLon)*111320;
-  const hdg=(gpsPos.heading||Math.atan2(vLon,vLat)*180/Math.PI)+PREDICTOR.headingBias;
+  // Current acceleration (speed change rate)
+  let accelRate=0;
+  if(recent.length>=3){
+    const s1=recent[recent.length-3].speed||0;
+    const s2=recent[recent.length-1].speed||0;
+    const dt=(recent[recent.length-1].t-recent[recent.length-3].t)/1000;
+    if(dt>0)accelRate=(s2-s1)/dt; // m/s² positive=accelerating, negative=braking
+  }
 
-  // MAIN PATH: current heading + current turn rate
+  let speed=gpsPos.speed||Math.sqrt(vLat*vLat+vLon*vLon)*111320;
+  let hdg=(gpsPos.heading||Math.atan2(vLon,vLat)*180/Math.PI)+PREDICTOR.headingBias;
+
+  // Build ONE path: step forward 1 second at a time, applying turn + accel each step
   flightPath=[];
-  const times=[5,10,15,20,25,30];
-  times.forEach(t=>{
-    const adjHdg=hdg+turnRate*t;
-    const p=PREDICTOR.predict(gpsPos, speed, adjHdg, t);
-    if(p)flightPath.push({...p,t,label:'T+'+t+'s'});
-  });
+  const totalSeconds=300; // predict 5 minutes ahead
+  const stepSize=5; // report every 5 seconds
+  let curLat=gpsPos.lat, curLon=gpsPos.lon, curHdg=hdg, curSpd=speed;
 
-  // Draw flight path on map
+  for(let t=1;t<=totalSeconds;t++){
+    // Apply current turn rate (heading changes each second)
+    curHdg+=turnRate;
+    // Apply acceleration (speed changes each second)
+    curSpd+=accelRate;
+    curSpd=Math.max(0,Math.min(curSpd,50)); // clamp 0-50 m/s (0-180 km/h)
+    // If decelerating past zero, stop
+    if(curSpd<0.1){curSpd=0;accelRate=0;}
+    // Step forward
+    const h=curHdg*Math.PI/180;
+    curLat+=(curSpd*Math.cos(h)*PREDICTOR.speedBias)/111320;
+    curLon+=(curSpd*Math.sin(h)*PREDICTOR.speedBias)/(111320*Math.cos(curLat*Math.PI/180));
+
+    // Record at step intervals
+    if(t%stepSize===0){
+      const minutes=Math.floor(t/60);
+      const secs=t%60;
+      const label=minutes>0?minutes+'m'+secs+'s':'T+'+t+'s';
+      flightPath.push({lat:curLat,lon:curLon,t,label});
+    }
+  }
+
+  // Draw ONE path on map
   flightPathMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
   flightPathMarkers=[];
   if(flightPathLine)try{map.removeLayer(flightPathLine);}catch(e){}
 
-  if(flightPath.length>0&&speed>0.5){
-    // MAIN path (purple solid)
-    const mainPts=[[gpsPos.lat,gpsPos.lon],...flightPath.map(p=>[p.lat,p.lon])];
-    flightPathLine=L.polyline(mainPts,{color:'#A855F7',weight:3,opacity:0.7}).addTo(map);
+  if(flightPath.length>0&&speed>0.3){
+    // Single continuous path — thicker near you, fading ahead
+    const allPts=[[gpsPos.lat,gpsPos.lon],...flightPath.map(p=>[p.lat,p.lon])];
+    flightPathLine=L.polyline(allPts,{color:'#A855F7',weight:3,opacity:0.7}).addTo(map);
     flightPathMarkers.push(flightPathLine);
 
-    // LEFT TURN scenario (lighter purple, dashed)
-    const leftPts=[[gpsPos.lat,gpsPos.lon]];
-    times.forEach(t=>{
-      const p=PREDICTOR.predict(gpsPos, speed, hdg+turnRate*t-30, t);
-      if(p)leftPts.push([p.lat,p.lon]);
-    });
-    const leftLine=L.polyline(leftPts,{color:'#A855F7',weight:1,opacity:0.25,dashArray:'4,6'}).addTo(map);
-    flightPathMarkers.push(leftLine);
-
-    // RIGHT TURN scenario
-    const rightPts=[[gpsPos.lat,gpsPos.lon]];
-    times.forEach(t=>{
-      const p=PREDICTOR.predict(gpsPos, speed, hdg+turnRate*t+30, t);
-      if(p)rightPts.push([p.lat,p.lon]);
-    });
-    const rightLine=L.polyline(rightPts,{color:'#A855F7',weight:1,opacity:0.25,dashArray:'4,6'}).addTo(map);
-    flightPathMarkers.push(rightLine);
-
-    // SLOW DOWN scenario (half speed, straight)
-    const slowPts=[[gpsPos.lat,gpsPos.lon]];
-    times.forEach(t=>{
-      const p=PREDICTOR.predict(gpsPos, speed*0.3, hdg+turnRate*t, t);
-      if(p)slowPts.push([p.lat,p.lon]);
-    });
-    const slowLine=L.polyline(slowPts,{color:'#e8a832',weight:1,opacity:0.2,dashArray:'2,6'}).addTo(map);
-    flightPathMarkers.push(slowLine);
-
-    // Time markers on MAIN path
+    // Time markers — bigger and brighter for near future, smaller for far
     flightPath.forEach((p,i)=>{
+      const secAhead=p.t;
+      const size=secAhead<=10?7:secAhead<=30?5:secAhead<=60?4:3;
+      const opacity=Math.max(0.3,1-secAhead/360);
       const conf=PREDICTOR.confidence();
       const col=conf>0.7?'#3dcc6e':conf>0.4?'#A855F7':'#e8a832';
-      const mkr=L.circleMarker([p.lat,p.lon],{radius:i<2?6:4,color:col,fillColor:col,fillOpacity:0.8-i*0.1,weight:2}).addTo(map);
-      mkr.bindTooltip(p.label+(conf>0?' ('+Math.round(conf*100)+'% conf)':''),{direction:'top'});
+      const mkr=L.circleMarker([p.lat,p.lon],{radius:size,color:col,fillColor:col,fillOpacity:opacity,weight:secAhead<=30?2:1}).addTo(map);
+      mkr.bindTooltip(p.label+(secAhead<=30?' ('+Math.round(conf*100)+'% conf)':''),{direction:'top'});
       flightPathMarkers.push(mkr);
     });
   }
