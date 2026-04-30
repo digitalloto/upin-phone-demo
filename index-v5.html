@@ -135,6 +135,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('route')" style="margin-right:3px">Route</label>
     <label style="display:block;color:#FFB800;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('predict')" style="margin-right:3px">T+5 Predict</label>
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('turns')" style="margin-right:3px">Turn Markers</label>
+    <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('flight')" style="margin-right:3px">Flight Path</label>
   </div>
 </div>
 
@@ -1247,26 +1248,8 @@ function processBoardData(d){
           return{...nearest,gen:'LAC',match:'LAC:'+lac};
       }
     }
-    // Level 3: MCC+MNC+proximity — find nearest tower of same operator in same city
-    if(TOWER_MNC_IDX&&cityRef&&cityRef.lat>6){
-      const opTowers=TOWER_MNC_IDX.get(mnc);
-      if(opTowers&&opTowers.length>0){
-        // RSSI → estimated distance via path-loss model
-        const estDist=100*Math.pow(10,(rssi+50)/-35);
-        // Find towers at approximately the right distance from our city position
-        let bestMatch=null,bestScore=Infinity;
-        // Only check towers near our city (within 10km to avoid scanning all)
-        for(let i=0;i<opTowers.length;i++){
-          const t=opTowers[i];
-          const tDist=hav(cityRef,{lat:t.l,lon:t.o});
-          if(tDist>10000)continue; // skip towers far from city
-          // Score: how close is actual distance to RSSI-estimated distance
-          const score=Math.abs(tDist-estDist)/Math.max(estDist,100);
-          if(score<bestScore&&score<0.5){bestScore=score;bestMatch={lat:t.l,lon:t.o,mnc:t.m,cid:t.c,dist:tDist,signal:rssi,gen:'SIG',match:'signal-dist ('+Math.round(tDist)+'m≈'+Math.round(estDist)+'m)'};}
-        }
-        if(bestMatch)return bestMatch;
-      }
-    }
+    // Level 3: REMOVED — signal-distance matching produced fake towers
+    // Google API (Level 5) now provides real positions for all CIDs
     // Level 4: API cache (from previous lookups)
     const cacheKey=mcc+'-'+mnc+'-'+lac+'-'+cid;
     if(cidCache[cacheKey]&&!cidCache[cacheKey].miss&&cidCache[cacheKey].lat>6){
@@ -1404,35 +1387,13 @@ function processBoardData(d){
       // Draw each nearby DB tower as a small grey circle
       const op={40:'Airtel',41:'Airtel',43:'Vi',44:'Vi',45:'Airtel',49:'Airtel',84:'Jio',86:'Jio',64:'BSNL',10:'AirTel',20:'Vi',92:'AirTel'};
       nearbyTowers.forEach(t=>{
-        // Check if this tower matches any board signal by distance
-        // Board's RSSI → estimated distance via path-loss model
-        let matched=false;let matchColor='rgba(100,100,120,0.3)';
-        const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
-        if(c2d&&Array.isArray(c2d)){
-          c2d.forEach(c=>{
-            const estDist=100*Math.pow(10,(c.rssi+50)/-35); // RSSI → distance
-            // If DB tower distance ≈ estimated distance from RSSI (within 30%), likely match
-            if(Math.abs(t.dist-estDist)/Math.max(estDist,100)<0.4&&t.mnc===(c.mnc||84)){
-              matched=true;
-              matchColor=c.rssi>-75?'#3dcc6e':c.rssi>-85?'#4da6ff':c.rssi>-95?'#e8a832':'#f06060';
-            }
-          });
-        }
+        // Show DB tower as grey dot (no fake signal matching)
         const mkr=L.circleMarker([t.lat,t.lon],{
-          radius:matched?6:3,
-          color:matchColor,fillColor:matchColor,
-          fillOpacity:matched?0.7:0.2,weight:matched?2:1
+          radius:2, color:'rgba(100,120,150,0.4)',fillColor:'rgba(100,120,150,0.3)',
+          fillOpacity:0.2,weight:1
         }).addTo(map);
-        mkr.bindTooltip((op[t.mnc]||'Op'+t.mnc)+' CID:'+t.cid+'<br>'+Math.round(t.dist)+'m away'+(matched?'<br><b style="color:#3dcc6e">SIGNAL MATCH</b>':''),{direction:'top'});
+        mkr.bindTooltip((op[t.mnc]||'Op'+t.mnc)+' CID:'+t.cid+'<br>'+Math.round(t.dist)+'m away');
         nearbyDbMarkers.push(mkr);
-        // If matched, also add to boardTowerList for triangulation!
-        if(matched&&!boardTowerList.find(bt=>bt.cid===t.cid)){
-          const bestRssi=c2d.reduce((best,c)=>{
-            const ed=100*Math.pow(10,(c.rssi+50)/-35);
-            return Math.abs(t.dist-ed)<Math.abs(t.dist-(best.ed||99999))?{rssi:c.rssi,ed}:best;
-          },{rssi:-90,ed:99999});
-          boardTowerList.push({lat:t.lat,lon:t.lon,mnc:t.mnc,cid:t.cid,signal:bestRssi.rssi,dist:t.dist,gen:'matched'});
-        }
       });
       // Update tower tab with nearby count
       try{$('ctMatched').textContent=boardTowerList.length+' (+'+nearbyTowers.length+' nearby)';}catch(e){}
@@ -4924,7 +4885,7 @@ function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish D
 // ═══════════════════════════════════════
 // MAP LAYER TOGGLES
 // ═══════════════════════════════════════
-const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true};
+const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true,flight:true};
 function toggleMapLayer(layer){
   MAP_LAYERS[layer]=!MAP_LAYERS[layer];
   const on=MAP_LAYERS[layer];
