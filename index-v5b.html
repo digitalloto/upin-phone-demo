@@ -88,6 +88,14 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <div id="towerDist" style="font-size:8px;color:var(--td)">Connect board + get GPS fix to learn distances</div>
   </div>
   <div class="card">
+    <div class="card-title" style="color:var(--red)">ANTI-SPOOF DETECTION</div>
+    <div id="spoofInfo" style="font-size:9px;color:var(--tm)">Monitoring GPS integrity...</div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="color:var(--amber)">RF FIELD MONITOR</div>
+    <div id="rfFieldInfo" style="font-size:9px;color:var(--tm)">Learning baseline environment...</div>
+  </div>
+  <div class="card">
     <div class="card-title">API LOG</div>
     <div id="apiLog" style="font-size:8px;color:var(--td);max-height:80px;overflow-y:auto">Waiting...</div>
   </div>
@@ -250,6 +258,118 @@ try{
   }
 }catch(e){}
 
+// ═══════════════════════════════════════
+// LAYER: ANTI-SPOOF DETECTION
+// Cross-checks GPS against towers, IMU, and signal patterns
+// to detect fake/spoofed GPS signals
+// ═══════════════════════════════════════
+const ANTISPOOF={
+  alerts:[],spoofScore:0,lastGpsPos:null,lastGpsTime:0,
+  gpsJumpCount:0,towerDisagreeCount:0,imuDisagreeCount:0,totalChecks:0,rejected:0,
+
+  check(gps,triPos,accelData){
+    if(!gps||!gps.lat)return{spoofed:false,score:0};
+    this.totalChecks++;
+    let score=0;const alerts=[];const now=performance.now();
+
+    // CHECK 1: Teleport (impossible speed)
+    if(this.lastGpsPos){
+      const dist=hav(gps,this.lastGpsPos);
+      const dt=(now-this.lastGpsTime)/1000;
+      if(dt>0){
+        const speed=dist/dt;
+        if(speed>340){score+=40;alerts.push({t:now,type:'TELEPORT',severity:'CRITICAL',detail:'Jump '+Math.round(dist)+'m in '+dt.toFixed(1)+'s (Mach '+(speed/340).toFixed(1)+')'});this.gpsJumpCount++;}
+        else if(speed>100&&dt<2){score+=25;alerts.push({t:now,type:'JUMP',severity:'HIGH',detail:Math.round(dist)+'m in '+dt.toFixed(1)+'s ('+Math.round(speed*3.6)+'km/h)'});}
+      }
+    }
+    // CHECK 2: GPS vs cell towers disagree
+    if(triPos&&triPos.lat){
+      const triDist=hav(gps,triPos);
+      if(triDist>1000){score+=30;alerts.push({t:now,type:'TOWER_MISMATCH',severity:'HIGH',detail:'GPS vs towers: '+Math.round(triDist)+'m apart'});this.towerDisagreeCount++;}
+      else if(triDist>500)score+=10;
+    }
+    // CHECK 3: GPS moves but accelerometer is still
+    if(accelData&&this.lastGpsPos){
+      const gpsDist=hav(gps,this.lastGpsPos);const dt=(now-this.lastGpsTime)/1000;
+      const gpsSpd=dt>0?gpsDist/dt:0;
+      const energy=Math.abs(Math.sqrt(accelData.x**2+accelData.y**2+accelData.z**2)-9.81);
+      if(gpsSpd>5&&energy<0.2){score+=20;alerts.push({t:now,type:'IMU_MISMATCH',severity:'MED',detail:'GPS: '+Math.round(gpsSpd*3.6)+'km/h but IMU still ('+energy.toFixed(2)+')'});this.imuDisagreeCount++;}
+    }
+    // CHECK 4: Suspiciously perfect accuracy
+    if(gps.acc&&gps.acc<3){score+=15;alerts.push({t:now,type:'TOO_PRECISE',severity:'LOW',detail:'±'+gps.acc.toFixed(1)+'m — real GPS is never this precise'});}
+
+    this.spoofScore=this.spoofScore*0.7+score*0.3;
+    this.lastGpsPos={lat:gps.lat,lon:gps.lon};this.lastGpsTime=now;
+    if(alerts.length){this.alerts.push(...alerts);if(this.alerts.length>50)this.alerts=this.alerts.slice(-50);}
+    const spoofed=this.spoofScore>40;if(spoofed)this.rejected++;
+    return{spoofed,score:Math.round(this.spoofScore),alerts};
+  },
+  stats(){return{score:Math.round(this.spoofScore),checks:this.totalChecks,rejected:this.rejected,jumps:this.gpsJumpCount,towerMismatch:this.towerDisagreeCount,imuMismatch:this.imuDisagreeCount,alerts:this.alerts.slice(-5)};}
+};
+
+// ═══════════════════════════════════════
+// LAYER: RF FIELD MONITOR
+// Creates a "normal field" around the device. Any disturbance
+// (signal spike, jamming, radar, new transmitter) triggers alert.
+// ═══════════════════════════════════════
+const RF_FIELD={
+  baseline:{rssiAvg:0,rssiStd:0,towerCount:0},
+  history:[],alerts:[],
+  fieldStatus:'LEARNING', // LEARNING → NORMAL → ALERT → HOSTILE
+  learningCount:0,LEARNING_THRESHOLD:30,
+
+  record(cell4g,cell2g){
+    const snap={t:performance.now(),rssis:[],towerCount:0};
+    const c2=cell2g&&(cell2g.data||cell2g.list);
+    if(c2&&Array.isArray(c2))c2.forEach(t=>{snap.rssis.push(t.rssi);snap.towerCount++;});
+    if(cell4g&&cell4g.rssi){snap.rssis.push(cell4g.rssi>0?-113+cell4g.rssi*2:cell4g.rssi);snap.towerCount++;}
+    this.history.push(snap);if(this.history.length>60)this.history.shift();
+
+    if(this.learningCount<this.LEARNING_THRESHOLD){
+      this.learningCount++;
+      if(this.learningCount===this.LEARNING_THRESHOLD)this.buildBaseline();
+      this.fieldStatus='LEARNING';return;
+    }
+    this.monitor(snap);
+  },
+
+  buildBaseline(){
+    const all=[];this.history.forEach(s=>s.rssis.forEach(r=>all.push(r)));
+    if(!all.length)return;
+    this.baseline.rssiAvg=all.reduce((s,v)=>s+v,0)/all.length;
+    this.baseline.rssiStd=Math.sqrt(all.reduce((s,v)=>s+(v-this.baseline.rssiAvg)**2,0)/all.length);
+    this.baseline.towerCount=Math.round(this.history.reduce((s,h)=>s+h.towerCount,0)/this.history.length);
+    this.fieldStatus='NORMAL';
+  },
+
+  monitor(snap){
+    const alerts=[];
+    // SPIKE: any signal 3σ above baseline
+    snap.rssis.forEach(rssi=>{
+      const dev=(rssi-this.baseline.rssiAvg)/Math.max(this.baseline.rssiStd,3);
+      if(dev>3)alerts.push({t:snap.t,type:'RF_SPIKE',severity:'HIGH',detail:'Signal '+rssi+'dBm ('+dev.toFixed(1)+'σ above baseline '+this.baseline.rssiAvg.toFixed(0)+'dBm)'});
+    });
+    // JAMMING: all signals drop 15+ dBm
+    if(snap.rssis.length){
+      const avg=snap.rssis.reduce((s,v)=>s+v,0)/snap.rssis.length;
+      if(avg<this.baseline.rssiAvg-15)alerts.push({t:snap.t,type:'JAMMING',severity:'HIGH',detail:'All signals dropped to '+avg.toFixed(0)+'dBm (baseline: '+this.baseline.rssiAvg.toFixed(0)+'dBm)'});
+    }
+    // TOTAL LOSS
+    if(snap.towerCount===0&&this.baseline.towerCount>2)
+      alerts.push({t:snap.t,type:'TOTAL_LOSS',severity:'CRITICAL',detail:'ALL RF signals lost'});
+    // NEW TRANSMITTER
+    if(snap.towerCount>this.baseline.towerCount+2)
+      alerts.push({t:snap.t,type:'NEW_TRANSMITTER',severity:'MED',detail:snap.towerCount+' towers (baseline: '+this.baseline.towerCount+')'});
+
+    if(alerts.some(a=>a.severity==='CRITICAL'))this.fieldStatus='HOSTILE';
+    else if(alerts.some(a=>a.severity==='HIGH'))this.fieldStatus='ALERT';
+    else this.fieldStatus='NORMAL';
+    if(alerts.length){this.alerts.push(...alerts);if(this.alerts.length>50)this.alerts=this.alerts.slice(-50);}
+  },
+
+  stats(){return{status:this.fieldStatus,baseline:this.baseline,learning:Math.min(100,Math.round(this.learningCount/this.LEARNING_THRESHOLD*100)),alerts:this.alerts.slice(-5),totalAlerts:this.alerts.length};}
+};
+
 function log(m,c){const d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent=m;$('log').appendChild(d);$('log').scrollTop=99999;}
 
 // ═══════════════════════════════════════
@@ -361,9 +481,26 @@ if('geolocation' in navigator){
     gpsPos={lat:p.coords.latitude,lon:p.coords.longitude,speed:p.coords.speed||0,heading:p.coords.heading||0,acc:p.coords.accuracy,t:now};
     gpsHistory.push({...gpsPos});
     if(gpsHistory.length>GPS_HIST_MAX)gpsHistory.shift();
-    if(!gpsMarker)gpsMarker=L.circleMarker(ll,{radius:8,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1,weight:2}).bindTooltip('GPS').addTo(map);
-    else gpsMarker.setLatLng(ll);
+
+    // ANTI-SPOOF: check this GPS reading against towers + IMU
+    const triCheck=triMarker?{lat:triMarker.getLatLng().lat,lon:triMarker.getLatLng().lng,acc:triCircle?triCircle.getRadius():9999}:null;
+    const spoofResult=ANTISPOOF.check(gpsPos,triCheck,null); // no IMU in v5b
+    if(spoofResult.spoofed){
+      // GPS is likely spoofed — mark it red, don't trust it
+      if(!gpsMarker)gpsMarker=L.circleMarker(ll,{radius:8,color:'#f06060',fillColor:'#f06060',fillOpacity:1,weight:3}).bindTooltip('GPS (SPOOF?)').addTo(map);
+      else{gpsMarker.setLatLng(ll);gpsMarker.setStyle({color:'#f06060',fillColor:'#f06060'});}
+      log('⚠ SPOOF DETECTED (score:'+spoofResult.score+'): '+spoofResult.alerts.map(a=>a.type).join(', '),'var(--red)');
+    }else{
+      if(!gpsMarker)gpsMarker=L.circleMarker(ll,{radius:8,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1,weight:2}).bindTooltip('GPS').addTo(map);
+      else{gpsMarker.setLatLng(ll);gpsMarker.setStyle({color:'#00FF88',fillColor:'#00FF88'});}
+    }
     map.setView(ll,16);
+
+    // Update anti-spoof display
+    const ss=ANTISPOOF.stats();
+    const sCol=ss.score>40?'var(--red)':ss.score>20?'var(--amber)':'var(--green)';
+    $('spoofInfo').innerHTML='<div style="display:flex;justify-content:space-between"><span>Spoof Score: <b style="color:'+sCol+'">'+ss.score+'/100</b></span><span>Checks: '+ss.checks+' | Rejected: '+ss.rejected+'</span></div>'+
+      (ss.alerts.length?ss.alerts.map(a=>'<div style="color:'+(a.severity==='CRITICAL'?'var(--red)':a.severity==='HIGH'?'var(--amber)':'var(--td)')+'">'+a.type+': '+a.detail+'</div>').join(''):'<div style="color:var(--green)">GPS signal appears clean</div>');
 
     // Learn real distance to each matched tower from GPS
     if(processBoard._lastMatched){
@@ -653,7 +790,15 @@ function processBoard(d){
   });
 
   $('ctMatch').textContent=matched.length;
-  processBoard._lastMatched=matched; // store for GPS distance learning
+  processBoard._lastMatched=matched;
+
+  // RF FIELD MONITOR: record current RF environment
+  RF_FIELD.record(d.cell4g,d.cell2g);
+  const rf=RF_FIELD.stats();
+  const rfCol=rf.status==='HOSTILE'?'var(--red)':rf.status==='ALERT'?'var(--amber)':rf.status==='NORMAL'?'var(--green)':'var(--cyan)';
+  $('rfFieldInfo').innerHTML='<div style="display:flex;justify-content:space-between"><span>Status: <b style="color:'+rfCol+'">'+rf.status+'</b></span><span>Learning: '+rf.learning+'%</span></div>'+
+    '<div style="font-size:7px;color:var(--td)">Baseline: avg '+rf.baseline.rssiAvg.toFixed(0)+'dBm ±'+rf.baseline.rssiStd.toFixed(0)+' | '+rf.baseline.towerCount+' towers | Alerts: '+rf.totalAlerts+'</div>'+
+    (rf.alerts.length?rf.alerts.map(a=>'<div style="color:'+(a.severity==='CRITICAL'?'var(--red)':a.severity==='HIGH'?'var(--amber)':'var(--td)')+'">'+a.type+': '+a.detail+'</div>').join(''):'');
 
   // Draw towers on map
   towerMarkers.forEach(m=>map.removeLayer(m));

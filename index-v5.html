@@ -1520,6 +1520,12 @@ function processBoardData(d){
     $('srcWifi').innerHTML='<span class="sdot live"></span>'+wifiAPs+'ap';
     $('srcWifid').textContent=wifiAPs+' APs';
   }
+  // RF FIELD MONITOR + ANTI-SPOOF
+  RF_FIELD.record(d.cell4g,d.cell2g);
+  if(gpsTrue&&boardTowerList.length>0){
+    const triCheck=UTIN.predict();
+    ANTISPOOF.check(gpsTrue,triCheck,accel);
+  }
 }
 
 // ═══════════════════════════════════════
@@ -4636,6 +4642,57 @@ function routeToDestV5(destLat,destLon){
     }
   }).catch(e=>{log('Route error: '+e.message,'var(--red)');});
 }
+
+// ═══════════════════════════════════════
+// ANTI-SPOOF DETECTION + RF FIELD MONITOR
+// ═══════════════════════════════════════
+const ANTISPOOF={
+  alerts:[],spoofScore:0,lastGpsPos:null,lastGpsTime:0,
+  gpsJumpCount:0,towerDisagreeCount:0,imuDisagreeCount:0,totalChecks:0,rejected:0,
+  check(gps,triPos,accelData){
+    if(!gps||!gps.lat)return{spoofed:false,score:0};
+    this.totalChecks++;let score=0;const alerts=[];const now=performance.now();
+    if(this.lastGpsPos){const dist=hav(gps,this.lastGpsPos);const dt=(now-this.lastGpsTime)/1000;if(dt>0){const speed=dist/dt;
+      if(speed>340){score+=40;alerts.push({t:now,type:'TELEPORT',severity:'CRITICAL',detail:'Jump '+Math.round(dist)+'m (Mach '+(speed/340).toFixed(1)+')'});this.gpsJumpCount++;}
+      else if(speed>100&&dt<2){score+=25;alerts.push({t:now,type:'JUMP',severity:'HIGH',detail:Math.round(dist)+'m in '+dt.toFixed(1)+'s'});}}}
+    if(triPos&&triPos.lat){const triDist=hav(gps,triPos);if(triDist>1000){score+=30;alerts.push({t:now,type:'TOWER_MISMATCH',severity:'HIGH',detail:'GPS vs towers: '+Math.round(triDist)+'m'});this.towerDisagreeCount++;}else if(triDist>500)score+=10;}
+    if(accelData&&this.lastGpsPos){const gpsDist=hav(gps,this.lastGpsPos);const dt=(now-this.lastGpsTime)/1000;const gpsSpd=dt>0?gpsDist/dt:0;const energy=Math.abs(Math.sqrt(accelData.x**2+accelData.y**2+accelData.z**2)-9.81);
+      if(gpsSpd>5&&energy<0.2){score+=20;alerts.push({t:now,type:'IMU_MISMATCH',severity:'MED',detail:'GPS: '+Math.round(gpsSpd*3.6)+'km/h but IMU still'});this.imuDisagreeCount++;}}
+    if(gps.acc&&gps.acc<3){score+=15;alerts.push({t:now,type:'TOO_PRECISE',severity:'LOW',detail:'±'+gps.acc.toFixed(1)+'m'});}
+    this.spoofScore=this.spoofScore*0.7+score*0.3;
+    this.lastGpsPos={lat:gps.lat,lon:gps.lon};this.lastGpsTime=now;
+    if(alerts.length){this.alerts.push(...alerts);if(this.alerts.length>50)this.alerts=this.alerts.slice(-50);}
+    const spoofed=this.spoofScore>40;if(spoofed)this.rejected++;
+    return{spoofed,score:Math.round(this.spoofScore),alerts};
+  },
+  stats(){return{score:Math.round(this.spoofScore),checks:this.totalChecks,rejected:this.rejected,jumps:this.gpsJumpCount,towerMismatch:this.towerDisagreeCount,imuMismatch:this.imuDisagreeCount,alerts:this.alerts.slice(-5)};}
+};
+
+const RF_FIELD={
+  baseline:{rssiAvg:0,rssiStd:0,towerCount:0},history:[],alerts:[],
+  fieldStatus:'LEARNING',learningCount:0,LEARNING_THRESHOLD:30,
+  record(cell4g,cell2g){
+    const snap={t:performance.now(),rssis:[],towerCount:0};
+    const c2=cell2g&&(cell2g.data||cell2g.list);
+    if(c2&&Array.isArray(c2))c2.forEach(t=>{snap.rssis.push(t.rssi);snap.towerCount++;});
+    if(cell4g&&cell4g.rssi){snap.rssis.push(cell4g.rssi>0?-113+cell4g.rssi*2:cell4g.rssi);snap.towerCount++;}
+    this.history.push(snap);if(this.history.length>60)this.history.shift();
+    if(this.learningCount<this.LEARNING_THRESHOLD){this.learningCount++;if(this.learningCount===this.LEARNING_THRESHOLD)this.buildBaseline();this.fieldStatus='LEARNING';return;}
+    this.monitor(snap);
+  },
+  buildBaseline(){const all=[];this.history.forEach(s=>s.rssis.forEach(r=>all.push(r)));if(!all.length)return;this.baseline.rssiAvg=all.reduce((s,v)=>s+v,0)/all.length;this.baseline.rssiStd=Math.sqrt(all.reduce((s,v)=>s+(v-this.baseline.rssiAvg)**2,0)/all.length);this.baseline.towerCount=Math.round(this.history.reduce((s,h)=>s+h.towerCount,0)/this.history.length);this.fieldStatus='NORMAL';},
+  monitor(snap){const alerts=[];
+    snap.rssis.forEach(rssi=>{const dev=(rssi-this.baseline.rssiAvg)/Math.max(this.baseline.rssiStd,3);if(dev>3)alerts.push({t:snap.t,type:'RF_SPIKE',severity:'HIGH',detail:rssi+'dBm ('+dev.toFixed(1)+'σ)'});});
+    if(snap.rssis.length){const avg=snap.rssis.reduce((s,v)=>s+v,0)/snap.rssis.length;if(avg<this.baseline.rssiAvg-15)alerts.push({t:snap.t,type:'JAMMING',severity:'HIGH',detail:'Avg dropped to '+avg.toFixed(0)+'dBm'});}
+    if(snap.towerCount===0&&this.baseline.towerCount>2)alerts.push({t:snap.t,type:'TOTAL_LOSS',severity:'CRITICAL',detail:'ALL signals lost'});
+    if(snap.towerCount>this.baseline.towerCount+2)alerts.push({t:snap.t,type:'NEW_TRANSMITTER',severity:'MED',detail:snap.towerCount+' towers (baseline: '+this.baseline.towerCount+')'});
+    if(alerts.some(a=>a.severity==='CRITICAL'))this.fieldStatus='HOSTILE';
+    else if(alerts.some(a=>a.severity==='HIGH'))this.fieldStatus='ALERT';
+    else this.fieldStatus='NORMAL';
+    if(alerts.length){this.alerts.push(...alerts);if(this.alerts.length>50)this.alerts=this.alerts.slice(-50);}
+  },
+  stats(){return{status:this.fieldStatus,baseline:this.baseline,learning:Math.min(100,Math.round(this.learningCount/this.LEARNING_THRESHOLD*100)),alerts:this.alerts.slice(-5),totalAlerts:this.alerts.length};}
+};
 
 // Controls
 function calibrate(){
