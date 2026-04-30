@@ -83,7 +83,7 @@ const $=id=>document.getElementById(id);
 const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
 
 // State
-let map,gpsMarker,triMarker,triCircle;
+let map,gpsMarker,triMarker,triCircle,triZone=null;
 let towerMarkers=[],towerLines=[];
 let flightPathLine=null,flightPathMarkers=[];
 let bleDevice=null,bleChar=null,bleBuffer='';
@@ -91,15 +91,115 @@ let cidCache={};
 const cidPending=new Set();
 
 // GPS tracking
-let gpsPos=null; // current GPS position {lat,lon,speed,heading,t}
-let gpsHistory=[]; // last 30 GPS positions for velocity/heading
-const GPS_HIST_MAX=30;
+let gpsPos=null;
+let gpsHistory=[];
+const GPS_HIST_MAX=60; // 60 positions for better velocity averaging
 
 // Tower distance tracking (learned from GPS)
-let towerDistances={}; // {cid: {realDist, rssi, lastUpdate}} — real distances from GPS
+let towerDistances={};
 
 // Flight path prediction
-let flightPath=[]; // [{lat,lon,t,label}] — predicted positions T+5 to T+30
+let flightPath=[];
+
+// ═══════════════════════════════════════
+// CONTINUOUS PREDICTION ENGINE
+// Predicts position continuously. During GPS: validates predictions
+// against reality. Tower RSSI changes confirm or deny predictions.
+// When GPS denied: predictions are already proven, trusted.
+// ═══════════════════════════════════════
+const PREDICTOR={
+  predictions:[], // [{targetTime, predLat, predLon, fromLat, fromLon, heading, speed}]
+  validated:0,
+  errors:[], // last 20 prediction errors (meters)
+  headingBias:0, // learned heading correction
+  speedBias:1.0, // learned speed multiplier
+  towerConfirmations:0, // times tower RSSI confirmed prediction direction
+  towerDenials:0,
+
+  // Make a prediction for T+N seconds from now
+  predict(fromPos, speed, heading, seconds){
+    if(!fromPos||speed<0.2)return null;
+    const h=heading*Math.PI/180;
+    const dist=speed*this.speedBias*seconds;
+    return{
+      lat:fromPos.lat+(dist*Math.cos(h))/111320,
+      lon:fromPos.lon+(dist*Math.sin(h))/(111320*Math.cos(fromPos.lat*Math.PI/180))
+    };
+  },
+
+  // Record prediction for future validation
+  recordPrediction(fromPos, speed, heading, seconds){
+    if(!fromPos||speed<0.2)return;
+    const pred=this.predict(fromPos, speed, heading+this.headingBias, seconds);
+    if(pred){
+      this.predictions.push({
+        targetTime:performance.now()+seconds*1000,
+        predLat:pred.lat, predLon:pred.lon,
+        fromLat:fromPos.lat, fromLon:fromPos.lon,
+        heading:heading+this.headingBias, speed
+      });
+      if(this.predictions.length>30)this.predictions.shift();
+    }
+  },
+
+  // Validate old predictions against current GPS position
+  validateWithGPS(actualPos){
+    if(!actualPos)return;
+    const now=performance.now();
+    while(this.predictions.length&&this.predictions[0].targetTime<=now){
+      const p=this.predictions.shift();
+      const err=hav(actualPos,{lat:p.predLat,lon:p.predLon});
+      this.errors.push(err);
+      if(this.errors.length>20)this.errors.shift();
+      this.validated++;
+      // Learn heading bias
+      const dLat=actualPos.lat-p.fromLat, dLon=actualPos.lon-p.fromLon;
+      if(Math.abs(dLat)+Math.abs(dLon)>1e-7){
+        const trueBear=Math.atan2(dLon,dLat)*180/Math.PI;
+        let dh=trueBear-p.heading;
+        if(dh>180)dh-=360;if(dh<-180)dh+=360;
+        this.headingBias=this.headingBias*0.9+dh*0.1;
+      }
+      // Learn speed bias
+      const predDist=hav({lat:p.fromLat,lon:p.fromLon},{lat:p.predLat,lon:p.predLon});
+      const actDist=hav({lat:p.fromLat,lon:p.fromLon},actualPos);
+      if(predDist>1&&actDist>1){
+        this.speedBias=this.speedBias*0.9+(actDist/predDist)*0.1;
+        this.speedBias=Math.max(0.3,Math.min(3,this.speedBias));
+      }
+    }
+  },
+
+  // Validate prediction direction with tower RSSI changes
+  validateWithTowers(approaching, receding, predHeading){
+    if(!approaching.length&&!receding.length)return;
+    // If prediction says heading north and northern tower RSSI increases → confirmed
+    // Check if approaching towers are in the predicted direction
+    let confirms=0,denies=0;
+    approaching.forEach(t=>{
+      if(!gpsPos)return;
+      const tBear=Math.atan2(t.lon-gpsPos.lon,t.lat-gpsPos.lat)*180/Math.PI;
+      let diff=tBear-predHeading;if(diff>180)diff-=360;if(diff<-180)diff+=360;
+      if(Math.abs(diff)<90)confirms++;else denies++;
+    });
+    receding.forEach(t=>{
+      if(!gpsPos)return;
+      const tBear=Math.atan2(t.lon-gpsPos.lon,t.lat-gpsPos.lat)*180/Math.PI;
+      let diff=tBear-predHeading;if(diff>180)diff-=360;if(diff<-180)diff+=360;
+      if(Math.abs(diff)>90)confirms++;else denies++;
+    });
+    this.towerConfirmations+=confirms;
+    this.towerDenials+=denies;
+  },
+
+  avgError(){return this.errors.length?this.errors.reduce((s,v)=>s+v,0)/this.errors.length:999;},
+  confidence(){
+    if(this.errors.length<3)return 0;
+    const avg=this.avgError();
+    const towerConf=this.towerConfirmations/(this.towerConfirmations+this.towerDenials+1);
+    return Math.max(0,Math.min(1,(1-avg/50)*0.6+towerConf*0.4));
+  }
+};
 const BLE_SVC='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const BLE_TX='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
@@ -156,52 +256,54 @@ if('geolocation' in navigator){
       });
     }
 
-    // Predict flight path: T+5, T+10, T+15, T+20, T+25, T+30
+    // CONTINUOUS PREDICTION: validate old predictions, record new ones
+    PREDICTOR.validateWithGPS(gpsPos);
+    const spd=gpsPos.speed||0;
+    const hdg=gpsPos.heading||0;
+    if(spd>0.5){
+      PREDICTOR.recordPrediction(gpsPos, spd, hdg, 5);
+      PREDICTOR.recordPrediction(gpsPos, spd, hdg, 10);
+      PREDICTOR.recordPrediction(gpsPos, spd, hdg, 20);
+      PREDICTOR.recordPrediction(gpsPos, spd, hdg, 30);
+    }
+
+    // Predict flight path with turn scenarios
     predictFlightPath();
   },()=>{},{ enableHighAccuracy:true,maximumAge:2000,timeout:15000});
 }
 
-// Flight path prediction from GPS history
+// Flight path prediction with turn scenarios and tower validation
 function predictFlightPath(){
   if(gpsHistory.length<3||!gpsPos)return;
-  // Calculate average velocity from last N GPS positions
-  const recent=gpsHistory.slice(-5);
+  const recent=gpsHistory.slice(-10);
   let vLat=0,vLon=0,count=0;
   for(let i=1;i<recent.length;i++){
     const dt=(recent[i].t-recent[i-1].t)/1000;
-    if(dt>0&&dt<10){
-      vLat+=(recent[i].lat-recent[i-1].lat)/dt;
-      vLon+=(recent[i].lon-recent[i-1].lon)/dt;
-      count++;
-    }
+    if(dt>0&&dt<10){vLat+=(recent[i].lat-recent[i-1].lat)/dt;vLon+=(recent[i].lon-recent[i-1].lon)/dt;count++;}
   }
   if(count===0)return;
   vLat/=count;vLon/=count;
 
-  // Detect turn rate from heading changes
+  // Turn rate from heading changes
   let turnRate=0;
-  if(recent.length>=3){
-    const h1=recent[recent.length-3].heading||0;
+  if(recent.length>=4){
+    const h1=recent[recent.length-4].heading||0;
     const h2=recent[recent.length-1].heading||0;
     let dh=h2-h1;if(dh>180)dh-=360;if(dh<-180)dh+=360;
-    const dt=(recent[recent.length-1].t-recent[recent.length-3].t)/1000;
-    if(dt>0)turnRate=dh/dt; // degrees per second
+    const dt=(recent[recent.length-1].t-recent[recent.length-4].t)/1000;
+    if(dt>0)turnRate=dh/dt;
   }
 
-  // Generate predicted positions
-  flightPath=[];
-  const times=[5,10,15,20,25,30]; // seconds ahead
-  let predLat=gpsPos.lat,predLon=gpsPos.lon,predHdg=gpsPos.heading||0;
-  const speed=Math.sqrt(vLat*vLat+vLon*vLon)*111320; // m/s approx
+  const speed=gpsPos.speed||Math.sqrt(vLat*vLat+vLon*vLon)*111320;
+  const hdg=(gpsPos.heading||Math.atan2(vLon,vLat)*180/Math.PI)+PREDICTOR.headingBias;
 
+  // MAIN PATH: current heading + current turn rate
+  flightPath=[];
+  const times=[5,10,15,20,25,30];
   times.forEach(t=>{
-    // Apply turn rate to heading
-    predHdg+=turnRate*t;
-    const h=predHdg*Math.PI/180;
-    const dist=speed*t;
-    const pLat=gpsPos.lat+(dist*Math.cos(h))/111320;
-    const pLon=gpsPos.lon+(dist*Math.sin(h))/(111320*Math.cos(gpsPos.lat*Math.PI/180));
-    flightPath.push({lat:pLat,lon:pLon,t,label:'T+'+t+'s'});
+    const adjHdg=hdg+turnRate*t;
+    const p=PREDICTOR.predict(gpsPos, speed, adjHdg, t);
+    if(p)flightPath.push({...p,t,label:'T+'+t+'s'});
   });
 
   // Draw flight path on map
@@ -209,17 +311,45 @@ function predictFlightPath(){
   flightPathMarkers=[];
   if(flightPathLine)try{map.removeLayer(flightPathLine);}catch(e){}
 
-  if(flightPath.length>0&&speed>0.5){ // only show if moving
-    const pathPoints=[[gpsPos.lat,gpsPos.lon],...flightPath.map(p=>[p.lat,p.lon])];
-    flightPathLine=L.polyline(pathPoints,{color:'#A855F7',weight:2,opacity:0.6,dashArray:'6,4'}).addTo(map);
+  if(flightPath.length>0&&speed>0.5){
+    // MAIN path (purple solid)
+    const mainPts=[[gpsPos.lat,gpsPos.lon],...flightPath.map(p=>[p.lat,p.lon])];
+    flightPathLine=L.polyline(mainPts,{color:'#A855F7',weight:3,opacity:0.7}).addTo(map);
     flightPathMarkers.push(flightPathLine);
 
-    // Time markers along the path
+    // LEFT TURN scenario (lighter purple, dashed)
+    const leftPts=[[gpsPos.lat,gpsPos.lon]];
+    times.forEach(t=>{
+      const p=PREDICTOR.predict(gpsPos, speed, hdg+turnRate*t-30, t);
+      if(p)leftPts.push([p.lat,p.lon]);
+    });
+    const leftLine=L.polyline(leftPts,{color:'#A855F7',weight:1,opacity:0.25,dashArray:'4,6'}).addTo(map);
+    flightPathMarkers.push(leftLine);
+
+    // RIGHT TURN scenario
+    const rightPts=[[gpsPos.lat,gpsPos.lon]];
+    times.forEach(t=>{
+      const p=PREDICTOR.predict(gpsPos, speed, hdg+turnRate*t+30, t);
+      if(p)rightPts.push([p.lat,p.lon]);
+    });
+    const rightLine=L.polyline(rightPts,{color:'#A855F7',weight:1,opacity:0.25,dashArray:'4,6'}).addTo(map);
+    flightPathMarkers.push(rightLine);
+
+    // SLOW DOWN scenario (half speed, straight)
+    const slowPts=[[gpsPos.lat,gpsPos.lon]];
+    times.forEach(t=>{
+      const p=PREDICTOR.predict(gpsPos, speed*0.3, hdg+turnRate*t, t);
+      if(p)slowPts.push([p.lat,p.lon]);
+    });
+    const slowLine=L.polyline(slowPts,{color:'#e8a832',weight:1,opacity:0.2,dashArray:'2,6'}).addTo(map);
+    flightPathMarkers.push(slowLine);
+
+    // Time markers on MAIN path
     flightPath.forEach((p,i)=>{
-      const size=i<2?5:3; // T+5 and T+10 bigger
-      const opacity=1-i*0.12;
-      const mkr=L.circleMarker([p.lat,p.lon],{radius:size,color:'#A855F7',fillColor:'#A855F7',fillOpacity:opacity,weight:1}).addTo(map);
-      mkr.bindTooltip(p.label+'<br>'+p.lat.toFixed(5)+','+p.lon.toFixed(5),{direction:'top'});
+      const conf=PREDICTOR.confidence();
+      const col=conf>0.7?'#3dcc6e':conf>0.4?'#A855F7':'#e8a832';
+      const mkr=L.circleMarker([p.lat,p.lon],{radius:i<2?6:4,color:col,fillColor:col,fillOpacity:0.8-i*0.1,weight:2}).addTo(map);
+      mkr.bindTooltip(p.label+(conf>0?' ('+Math.round(conf*100)+'% conf)':''),{direction:'top'});
       flightPathMarkers.push(mkr);
     });
   }
@@ -388,33 +518,42 @@ function processBoard(d){
     html+='<div class="tower-row"><span style="width:20px;color:var(--td)">'+(i+1)+'</span><span style="width:25px;color:var(--cyan)">'+t.gen+'</span><span style="flex:1"><b>CID:'+t.cid+'</b> LAC:'+t.lac+'</span><span style="width:40px;text-align:right;color:'+col+'">'+t.rssi+'</span><div class="rssi-bar"><div class="rssi-fill" style="width:'+barW+'%;background:'+col+'"></div></div><span style="width:45px;text-align:right;font-size:7px;color:var(--cyan)">'+distInfo+'</span><span style="width:30px;text-align:right;font-size:7px;color:'+(m?'var(--green)':'var(--red)')+'">'+(m?m.src:'??')+'</span></div>';
 
     if(m){
-      const colHex=t.rssi>-75?'#3dcc6e':t.rssi>-85?'#4da6ff':t.rssi>-95?'#e8a832':'#f06060';
-      // Tower position marker
-      const mkr=L.circleMarker([m.lat,m.lon],{radius:m.signal>-80?8:m.signal>-90?6:4,color:colHex,fillColor:colHex,fillOpacity:0.8,weight:2}).addTo(map);
-      mkr.bindTooltip(t.gen+' CID:'+t.cid+'<br>'+t.rssi+'dBm<br>src:'+m.src);
+      // DARKER colors for tower circles
+      const colHex=t.rssi>-75?'#1a8a3e':t.rssi>-85?'#2a6db3':t.rssi>-95?'#b8841a':'#c04040';
+      const colLight=t.rssi>-75?'#3dcc6e':t.rssi>-85?'#4da6ff':t.rssi>-95?'#e8a832':'#f06060';
+      // Tower position marker (solid dot)
+      const td=towerDistances[t.cid];
+      const realD=td?td.realDist:null;
+      const mkr=L.circleMarker([m.lat,m.lon],{radius:m.signal>-80?9:m.signal>-90?7:5,color:colHex,fillColor:colLight,fillOpacity:0.9,weight:3}).addTo(map);
+      mkr.bindTooltip(t.gen+' CID:'+t.cid+'<br>'+t.rssi+'dBm'+(realD?' | GPS dist: '+realD+'m':'')+'<br>src:'+m.src);
       towerMarkers.push(mkr);
-      // RSSI range circle — estimated distance from signal strength
-      // Stronger signal = smaller circle = you're closer to this tower
-      const estDist=100*Math.pow(10,(t.rssi+50)/-35); // path-loss model
-      const rangeCircle=L.circle([m.lat,m.lon],{radius:Math.min(estDist,5000),color:colHex,fillColor:colHex,fillOpacity:0.04,weight:1,dashArray:'4,4'}).addTo(map);
-      rangeCircle.bindTooltip('Range: ~'+Math.round(estDist)+'m ('+t.rssi+'dBm)');
+      // RSSI range circle — darker border, very subtle fill
+      const estDist=realD||100*Math.pow(10,(t.rssi+50)/-35);
+      const rangeCircle=L.circle([m.lat,m.lon],{radius:Math.min(estDist,5000),color:colHex,fillColor:colHex,fillOpacity:0.06,weight:2,dashArray:'6,4'}).addTo(map);
+      rangeCircle.bindTooltip('Range: ~'+Math.round(estDist)+'m ('+t.rssi+'dBm)'+(realD?' [GPS: '+realD+'m]':''));
       towerMarkers.push(rangeCircle);
     }
   });
   $('towerList').innerHTML=html;
 
-  // Track signal changes for direction detection
+  // Track signal changes for direction detection + prediction validation
   if(!processBoard._prevRSSI)processBoard._prevRSSI={};
   let approaching=[],receding=[];
   matched.forEach(m=>{
     const prev=processBoard._prevRSSI[m.cid];
     if(prev!==undefined){
       const delta=m.signal-prev;
-      if(delta>1)approaching.push(m); // getting stronger = moving toward
-      if(delta<-1)receding.push(m);   // getting weaker = moving away
+      if(delta>1)approaching.push(m);
+      if(delta<-1)receding.push(m);
     }
     processBoard._prevRSSI[m.cid]=m.signal;
   });
+
+  // VALIDATE PREDICTION WITH TOWER RSSI CHANGES
+  if(gpsPos&&(approaching.length||receding.length)){
+    const predHdg=(gpsPos.heading||0)+PREDICTOR.headingBias;
+    PREDICTOR.validateWithTowers(approaching, receding, predHdg);
+  }
 
   // Triangulate
   if(matched.length>=2){
@@ -450,11 +589,16 @@ function processBoard(d){
     $('triInfo').textContent='Need ≥2 towers with positions. Have: '+matched.length+'/'+allTowers.length+'. Lookups pending: '+cidPending.size;
   }
 
-  // Update flight path and tower distance displays
-  if(flightPath.length>0&&gpsPos){
+  // Update flight path and predictor displays
+  if(gpsPos){
     const spd=(gpsPos.speed||0)*3.6;
-    $('flightInfo').innerHTML='<b style="color:var(--purple)">Speed: '+spd.toFixed(0)+' km/h</b> | Path: '+flightPath.length+' points<br>'+
-      flightPath.map(p=>'<span style="color:var(--purple)">'+p.label+': '+p.lat.toFixed(4)+','+p.lon.toFixed(4)+'</span>').join(' → ');
+    const conf=PREDICTOR.confidence();
+    const confCol=conf>0.7?'var(--green)':conf>0.4?'var(--purple)':'var(--amber)';
+    $('flightInfo').innerHTML=
+      '<div style="display:flex;justify-content:space-between"><b style="color:var(--purple)">Speed: '+spd.toFixed(0)+' km/h</b><span style="color:'+confCol+'">Confidence: '+Math.round(conf*100)+'%</span></div>'+
+      '<div style="font-size:7px;color:var(--td)">Validated: '+PREDICTOR.validated+' predictions | Avg err: '+PREDICTOR.avgError().toFixed(1)+'m | Tower confirms: '+PREDICTOR.towerConfirmations+' denials: '+PREDICTOR.towerDenials+'</div>'+
+      '<div style="font-size:7px;color:var(--td)">Heading bias: '+PREDICTOR.headingBias.toFixed(1)+'° | Speed bias: '+PREDICTOR.speedBias.toFixed(2)+'×</div>'+
+      (flightPath.length?'<div style="margin-top:3px">'+flightPath.map(p=>'<span style="color:var(--purple);font-size:8px">'+p.label+'</span>').join(' → ')+'</div>':'');
   }
   const tdKeys=Object.keys(towerDistances);
   if(tdKeys.length>0){
