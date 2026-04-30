@@ -1412,57 +1412,68 @@ function processBoardData(d){
       UTIN.lastTowers=null; // reject garbage fix
       if(bleGoodPkts<=3)log('Tri rejected: accuracy '+Math.round(trCheck.acc)+'m too large — bad tower positions in cache?','var(--red)');
     }
-    // Show cell triangulation + individual towers on map
+    // Show cell triangulation + individual towers on map (v5b style)
     try{
-      if(typeof L!=='undefined'&&map){
-        // ── Individual tower markers (different colors by signal strength) ──
-        // Clear old tower markers
+      if(typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
         towerMapMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
         towerMapLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
         towerMapMarkers=[];towerMapLines=[];
 
         const cellFix=UTIN.predict();
-        // Signal strength → color: strong=green, medium=cyan, weak=amber, very weak=red
+
+        // Track signal changes for direction detection
+        if(!processBoardData._prevRSSI)processBoardData._prevRSSI={};
+        let approaching=[],receding=[];
+        boardTowerList.forEach(t=>{
+          const prev=processBoardData._prevRSSI[t.cid];
+          if(prev!==undefined){
+            const delta=t.signal-prev;
+            if(delta>1)approaching.push(t);
+            if(delta<-1)receding.push(t);
+          }
+          processBoardData._prevRSSI[t.cid]=t.signal;
+        });
+
         boardTowerList.forEach((t,i)=>{
           const sig=t.signal||-90;
-          const color=sig>-65?'#3dcc6e':sig>-75?'#4da6ff':sig>-85?'#e8a832':'#f06060';
-          const radius=sig>-65?8:sig>-75?6:sig>-85?5:4;
+          // Darker colors (v5b style)
+          const colHex=sig>-75?'#1a8a3e':sig>-85?'#2a6db3':sig>-95?'#b8841a':'#c04040';
+          const colLight=sig>-75?'#3dcc6e':sig>-85?'#4da6ff':sig>-95?'#e8a832':'#f06060';
           const op={40:'Airtel',41:'Airtel',43:'Vi',44:'Vi',84:'Jio',86:'Jio',64:'BSNL'}[t.mnc]||'Op'+t.mnc;
+          // Tower position marker (solid dot, darker)
           const mkr=L.circleMarker([t.lat,t.lon],{
-            radius:radius,color:color,fillColor:color,fillOpacity:0.6,weight:2
+            radius:sig>-80?9:sig>-90?7:5,color:colHex,fillColor:colLight,fillOpacity:0.9,weight:3
           }).addTo(map);
-          mkr.bindTooltip(
-            op+' '+(t.gen||'?')+' CID:'+t.cid+'<br>RSSI: '+Math.round(sig)+'dBm',
-            {permanent:false,direction:'top'}
-          );
+          mkr.bindTooltip(op+' '+(t.gen||'?')+' CID:'+t.cid+'<br>RSSI: '+Math.round(sig)+'dBm');
           towerMapMarkers.push(mkr);
-
-          // Draw line from tower to triangulated position
+          // RSSI range circle
+          const estDist=100*Math.pow(10,(sig+50)/-35);
+          const rangeCircle=L.circle([t.lat,t.lon],{radius:Math.min(estDist,5000),color:colHex,fillColor:colHex,fillOpacity:0.06,weight:2,dashArray:'6,4'}).addTo(map);
+          towerMapMarkers.push(rangeCircle);
+          // Direction-colored line to tri fix
           if(cellFix){
-            const line=L.polyline([[t.lat,t.lon],[cellFix.lat,cellFix.lon]],{
-              color:color,weight:1,opacity:0.4,dashArray:'4,4'
-            }).addTo(map);
+            const isApproach=approaching.find(a=>a.cid===t.cid);
+            const isRecede=receding.find(r=>r.cid===t.cid);
+            const lineCol=isApproach?'#3dcc6e':isRecede?'#f06060':'#e8a832';
+            const lineW=isApproach||isRecede?2:1;
+            const line=L.polyline([[t.lat,t.lon],[cellFix.lat,cellFix.lon]],{color:lineCol,weight:lineW,opacity:0.5,dashArray:'4,4'}).addTo(map);
             towerMapLines.push(line);
           }
         });
 
-        // ── Triangulated position (amber diamond) ──
+        // Triangulated position
         if(cellFix){
           const cll=[cellFix.lat,cellFix.lon];
           const cAcc=cellFix.acc||200;
           if(!UTIN._marker){
-            UTIN._marker=L.circleMarker(cll,{radius:7,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.9,weight:2}).addTo(map);
-            UTIN._marker.bindTooltip('CELL TRI: ±'+cAcc+'m ('+boardTowerList.length+' towers)',{permanent:false,direction:'top'});
-            UTIN._circle=L.circle(cll,{radius:cAcc,color:'#e8a832',fillOpacity:.05,weight:1,dashArray:'4,4'}).addTo(map);
+            UTIN._marker=L.circleMarker(cll,{radius:8,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.9,weight:3}).addTo(map);
+            UTIN._marker.bindTooltip('CELL TRI: ±'+cAcc+'m ('+boardTowerList.length+' towers)');
+            UTIN._circle=L.circle(cll,{radius:cAcc,color:'#e8a832',fillOpacity:.05,weight:1,dashArray:'6,4'}).addTo(map);
           }else{
-            UTIN._marker.setLatLng(cll);
-            UTIN._marker.setTooltipContent('CELL TRI: ±'+cAcc+'m ('+boardTowerList.length+' towers)');
+            UTIN._marker.setLatLng(cll);UTIN._marker.setTooltipContent('CELL TRI: ±'+cAcc+'m ('+boardTowerList.length+' towers)');
             UTIN._circle.setLatLng(cll);UTIN._circle.setRadius(cAcc);
           }
-          if(!gpsTrue&&!marker){
-            map.setView(cll,15);
-            $('bStart').disabled=false;$('bStart').style.opacity='1';
-          }
+          if(!gpsTrue&&!marker){map.setView(cll,15);$('bStart').disabled=false;$('bStart').style.opacity='1';}
         }
       }
     }catch(e){}
