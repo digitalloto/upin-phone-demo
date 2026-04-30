@@ -4302,6 +4302,8 @@ function tick(){
     TERRAIN.record(gpsSys.lat,gpsSys.lon);
     MANEUVER.record(gpsSys.lat,gpsSys.lon,dt);
     TOWER_CAPTURE.capture(gpsSys.lat,gpsSys.lon,boardData);
+    // Map matching: snap to road every 5th tick
+    if(uiFrame%5===0&&MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
     if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
     // Calibrate ant step length from GPS distance every 50 steps
@@ -4576,6 +4578,63 @@ function tick(){
     }
     $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+bleGoodPkts+'/'+blePackets+(bleErrors?' ('+bleErrors+'err)':''):'WiFi '+wifiPackets+'pkt'):'ACTIVE');
   }
+}
+
+// ═══════════════════════════════════════
+// MAP MATCHING — snap to nearest road via OSRM (free, no key)
+// ═══════════════════════════════════════
+const MAP_MATCH={
+  lastSnap:null,snapHistory:[],pending:false,mode:'ground',
+  snap(lat,lon,cb){
+    if(this.pending||this.mode==='air')return;
+    this.pending=true;
+    fetch('https://router.project-osrm.org/nearest/v1/driving/'+lon+','+lat+'?number=1')
+    .then(r=>r.json()).then(d=>{
+      this.pending=false;
+      if(d.code==='Ok'&&d.waypoints&&d.waypoints[0]){
+        const wp=d.waypoints[0];
+        this.lastSnap={lat:wp.location[1],lon:wp.location[0],road:wp.name||'unnamed',dist:wp.distance,t:performance.now()};
+        this.snapHistory.push(this.lastSnap);if(this.snapHistory.length>10)this.snapHistory.shift();
+        if(cb)cb(this.lastSnap);
+      }
+    }).catch(()=>{this.pending=false;});
+  },
+  snapPath(points,cb){
+    if(points.length<2||this.mode==='air'){if(cb)cb(points);return;}
+    const coords=points.map(p=>p.lon+','+p.lat).join(';');
+    fetch('https://router.project-osrm.org/match/v1/driving/'+coords+'?overview=full&geometries=geojson')
+    .then(r=>r.json()).then(d=>{
+      if(d.code==='Ok'&&d.matchings&&d.matchings[0]){
+        const snapped=d.matchings[0].geometry.coordinates.map(c=>({lat:c[1],lon:c[0]}));
+        if(cb)cb(snapped);
+      }else{if(cb)cb(points);}
+    }).catch(()=>{if(cb)cb(points);});
+  }
+};
+
+// ═══════════════════════════════════════
+// DESTINATION ROUTING via OSRM
+// ═══════════════════════════════════════
+let v5DestMarker=null,v5RouteLine=null,v5RouteSteps=[];
+
+function routeToDestV5(destLat,destLon){
+  if(!gpsTrue){log('Need GPS for routing','var(--red)');return;}
+  if(v5DestMarker&&typeof L!=='undefined')try{map.removeLayer(v5DestMarker);}catch(e){}
+  if(v5RouteLine&&typeof L!=='undefined')try{map.removeLayer(v5RouteLine);}catch(e){}
+  if(typeof L!=='undefined'){
+    v5DestMarker=L.circleMarker([destLat,destLon],{radius:10,color:'#f06060',fillColor:'#f06060',fillOpacity:0.9,weight:3}).bindTooltip('DESTINATION').addTo(map);
+  }
+  fetch('https://router.project-osrm.org/route/v1/driving/'+gpsTrue.lon+','+gpsTrue.lat+';'+destLon+','+destLat+'?overview=full&geometries=geojson&steps=true')
+  .then(r=>r.json()).then(d=>{
+    if(d.code==='Ok'&&d.routes&&d.routes[0]){
+      const route=d.routes[0];
+      const geom=route.geometry.coordinates.map(c=>[c[1],c[0]]);
+      v5RouteSteps=route.geometry.coordinates.map(c=>({lat:c[1],lon:c[0]}));
+      if(typeof L!=='undefined')v5RouteLine=L.polyline(geom,{color:'#f06060',weight:4,opacity:0.7,dashArray:'10,6'}).addTo(map);
+      log('Route: '+(route.distance/1000).toFixed(1)+'km, '+Math.round(route.duration/60)+' min','var(--green)');
+      $('routeStatus').textContent='Route: '+(route.distance/1000).toFixed(1)+'km | '+Math.round(route.duration/60)+' min | '+route.legs[0].steps.length+' turns';
+    }
+  }).catch(e=>{log('Route error: '+e.message,'var(--red)');});
 }
 
 // Controls
@@ -5204,6 +5263,8 @@ function setRoute(){
   const tp=toStr.split(',').map(Number);
   if(fp.length<2||tp.length<2||isNaN(fp[0])||isNaN(tp[0])){log('Invalid coordinates — use format: lat,lon','var(--red)');return;}
   ROUTE_NAV.setRoute(fp[0],fp[1],tp[0],tp[1]);
+  // Also get OSRM road route
+  routeToDestV5(tp[0],tp[1]);
 }
 function useCurrentAsFrom(){
   if(!gpsTrue){log('No GPS position yet','var(--red)');return;}
