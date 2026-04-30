@@ -44,9 +44,21 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" checked id="lyTri">Triangulation</label>
     <label style="display:block;color:rgba(100,100,120,0.6);cursor:pointer"><input type="checkbox" checked id="lyDb">DB Towers (5km)</label>
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked id="lyFlight">Flight Path</label>
+    <label style="display:block;color:#3dcc6e;cursor:pointer"><input type="checkbox" checked id="lyRoad">Road Match</label>
+    <label style="display:block;color:#f06060;cursor:pointer"><input type="checkbox" id="lyRoute">Route</label>
   </div>
 </div>
 <div class="panel">
+  <!-- Destination routing -->
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:6px;margin-bottom:6px">
+    <div style="font-size:8px;font-weight:700;color:var(--green);letter-spacing:1px;margin-bottom:4px">DESTINATION</div>
+    <div style="display:flex;gap:3px;margin-bottom:4px">
+      <input type="text" id="destInput" placeholder="lat,lon or search" style="flex:1;background:var(--panel);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:9px;padding:5px;border-radius:2px">
+      <button onclick="setDestination()" style="background:var(--green);color:#000;border:none;padding:5px 10px;font-family:inherit;font-size:8px;font-weight:700;border-radius:2px;cursor:pointer">GO</button>
+      <button onclick="clearDestination()" style="background:var(--panel);color:var(--td);border:1px solid var(--border);padding:5px 8px;font-family:inherit;font-size:8px;border-radius:2px;cursor:pointer">CLR</button>
+    </div>
+    <div id="routeInfo" style="font-size:8px;color:var(--td)">Enter destination to see predicted route</div>
+  </div>
   <button class="btn-hw" id="bleBtn" onclick="connectBLE()">CONNECT BOARD VIA BLE</button>
   <div class="card" style="margin-top:6px">
     <div class="card-title">CELL TOWERS FROM BOARD</div>
@@ -65,6 +77,11 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
   <div class="card">
     <div class="card-title">FLIGHT PATH PREDICTION</div>
     <div id="flightInfo" style="font-size:9px;color:var(--tm)">Move with GPS to see predicted path (T+5 to T+30 seconds)</div>
+  </div>
+  <div class="card">
+    <div class="card-title">MAP MATCHING</div>
+    <div id="mapMatchInfo" style="font-size:9px;color:var(--tm)">Move with GPS to see road-snapped position</div>
+    <div style="margin-top:4px;font-size:7px;color:var(--td)">Green dot = position snapped to nearest road. Green dashed line = flight path snapped to roads. Works for ground vehicles. For air: uncheck "Road Match" toggle.</div>
   </div>
   <div class="card">
     <div class="card-title">TOWER DISTANCES (GPS-learned)</div>
@@ -87,6 +104,8 @@ const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon
 let map,gpsMarker,triMarker,triCircle,triZone=null;
 let towerMarkers=[],towerLines=[];
 let flightPathLine=null,flightPathMarkers=[];
+let roadMatchMarker=null,roadMatchLine=null;
+let destMarker=null,routeLine=null,routeSteps=[];
 let bleDevice=null,bleChar=null,bleBuffer='';
 let cidCache={};
 const cidPending=new Set();
@@ -233,6 +252,103 @@ try{
 
 function log(m,c){const d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent=m;$('log').appendChild(d);$('log').scrollTop=99999;}
 
+// ═══════════════════════════════════════
+// MAP MATCHING — snap position to nearest road using OSRM
+// Works independently OR fused with sensor data.
+// For ground: snaps to roads. For air: passes through (no roads to match).
+// ═══════════════════════════════════════
+const MAP_MATCH={
+  lastSnap:null, // {lat,lon,road,t}
+  snapHistory:[], // last 10 snapped positions
+  pending:false,
+  mode:'ground', // 'ground' (snap to roads) or 'air' (no snap)
+
+  // Snap a position to the nearest road via OSRM
+  snap(lat,lon,cb){
+    if(this.pending||this.mode==='air')return;
+    this.pending=true;
+    fetch('https://router.project-osrm.org/nearest/v1/driving/'+lon+','+lat+'?number=1')
+    .then(r=>r.json()).then(d=>{
+      this.pending=false;
+      if(d.code==='Ok'&&d.waypoints&&d.waypoints[0]){
+        const wp=d.waypoints[0];
+        this.lastSnap={lat:wp.location[1],lon:wp.location[0],road:wp.name||'unnamed',dist:wp.distance,t:performance.now()};
+        this.snapHistory.push(this.lastSnap);
+        if(this.snapHistory.length>10)this.snapHistory.shift();
+        if(cb)cb(this.lastSnap);
+      }
+    }).catch(()=>{this.pending=false;});
+  },
+
+  // Snap the flight path to roads (batch)
+  snapPath(points,cb){
+    if(points.length<2||this.mode==='air'){if(cb)cb(points);return;}
+    const coords=points.map(p=>p.lon+','+p.lat).join(';');
+    fetch('https://router.project-osrm.org/match/v1/driving/'+coords+'?overview=full&geometries=geojson')
+    .then(r=>r.json()).then(d=>{
+      if(d.code==='Ok'&&d.matchings&&d.matchings[0]){
+        const geom=d.matchings[0].geometry.coordinates;
+        const snapped=geom.map(c=>({lat:c[1],lon:c[0]}));
+        if(cb)cb(snapped);
+      }else{if(cb)cb(points);}
+    }).catch(()=>{if(cb)cb(points);});
+  }
+};
+
+// ═══════════════════════════════════════
+// DESTINATION ROUTING — route from current position to destination
+// Uses OSRM for road routing. Fuses with sensor prediction.
+// ═══════════════════════════════════════
+function setDestination(){
+  const input=$('destInput').value.trim();
+  if(!input)return;
+  const parts=input.split(',').map(Number);
+  if(parts.length>=2&&!isNaN(parts[0])&&!isNaN(parts[1])){
+    routeToDestination(parts[0],parts[1]);
+  }else{
+    $('routeInfo').textContent='Use format: lat,lon (e.g., 13.08,80.27)';
+  }
+}
+
+function routeToDestination(destLat,destLon){
+  if(!gpsPos){$('routeInfo').textContent='Need GPS fix to calculate route';return;}
+  // Draw destination marker
+  if(destMarker)map.removeLayer(destMarker);
+  destMarker=L.circleMarker([destLat,destLon],{radius:10,color:'#f06060',fillColor:'#f06060',fillOpacity:0.9,weight:3}).bindTooltip('DESTINATION').addTo(map);
+
+  $('routeInfo').innerHTML='<span style="color:var(--amber)">Calculating route...</span>';
+  // OSRM routing
+  fetch('https://router.project-osrm.org/route/v1/driving/'+gpsPos.lon+','+gpsPos.lat+';'+destLon+','+destLat+'?overview=full&geometries=geojson&steps=true')
+  .then(r=>r.json()).then(d=>{
+    if(d.code==='Ok'&&d.routes&&d.routes[0]){
+      const route=d.routes[0];
+      const geom=route.geometry.coordinates.map(c=>[c[1],c[0]]);
+      routeSteps=route.geometry.coordinates.map(c=>({lat:c[1],lon:c[0]}));
+      // Draw route
+      if(routeLine)map.removeLayer(routeLine);
+      routeLine=L.polyline(geom,{color:'#f06060',weight:4,opacity:0.7,dashArray:'10,6'}).addTo(map);
+      $('lyRoute').checked=true;
+      // Route info
+      const dist=route.distance;const dur=route.duration;
+      $('routeInfo').innerHTML='<b style="color:var(--green)">Route: '+(dist>1000?(dist/1000).toFixed(1)+'km':Math.round(dist)+'m')+' | '+Math.round(dur/60)+' min</b><br>'+
+        '<span style="font-size:7px;color:var(--td)">'+route.legs[0].steps.length+' turns | via OSRM/OpenStreetMap</span>';
+      log('Route set: '+(dist/1000).toFixed(1)+'km, '+Math.round(dur/60)+' min','var(--green)');
+      // Fit map to show entire route
+      map.fitBounds(L.polyline(geom).getBounds().pad(0.1));
+    }else{
+      $('routeInfo').textContent='No route found — check coordinates';
+    }
+  }).catch(e=>{$('routeInfo').textContent='Route error: '+e.message;});
+}
+
+function clearDestination(){
+  if(destMarker){map.removeLayer(destMarker);destMarker=null;}
+  if(routeLine){map.removeLayer(routeLine);routeLine=null;}
+  routeSteps=[];
+  $('routeInfo').textContent='Route cleared';
+  $('destInput').value='';
+}
+
 // Map
 map=L.map('map',{zoomControl:false}).setView([13.08,80.27],14);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM',maxZoom:19}).addTo(map);
@@ -270,6 +386,37 @@ if('geolocation' in navigator){
 
     // Predict flight path with turn scenarios
     predictFlightPath();
+
+    // MAP MATCHING: snap current GPS position to nearest road
+    if($('lyRoad').checked&&gpsHistory.length%3===0){ // every 3rd GPS update
+      MAP_MATCH.snap(gpsPos.lat,gpsPos.lon,snap=>{
+        if(!snap)return;
+        // Draw road-snapped position as green diamond
+        if(roadMatchMarker)map.removeLayer(roadMatchMarker);
+        roadMatchMarker=L.circleMarker([snap.lat,snap.lon],{radius:5,color:'#1a8a3e',fillColor:'#3dcc6e',fillOpacity:0.9,weight:2}).addTo(map);
+        roadMatchMarker.bindTooltip('Road: '+snap.road+'<br>Snap: '+snap.dist.toFixed(0)+'m off road');
+        // Snap the flight path to roads too
+        if(flightPath.length>=2){
+          MAP_MATCH.snapPath(flightPath,snapped=>{
+            if(!snapped||!$('lyRoad').checked)return;
+            if(roadMatchLine)map.removeLayer(roadMatchLine);
+            roadMatchLine=L.polyline(snapped.map(p=>[p.lat,p.lon]),{color:'#1a8a3e',weight:3,opacity:0.6,dashArray:'6,4'}).addTo(map);
+          });
+        }
+      });
+    }
+
+    // If we have a destination route, check progress along it
+    if(routeSteps.length>0){
+      let minDist=Infinity,nearestIdx=0;
+      routeSteps.forEach((s,i)=>{const d=hav(gpsPos,s);if(d<minDist){minDist=d;nearestIdx=i;}});
+      const progress=Math.round(nearestIdx/routeSteps.length*100);
+      const remaining=routeSteps.slice(nearestIdx);
+      let remDist=0;for(let i=1;i<remaining.length;i++)remDist+=hav(remaining[i-1],remaining[i]);
+      const eta=gpsPos.speed>0.5?Math.round(remDist/gpsPos.speed/60):0;
+      $('routeInfo').innerHTML=$('routeInfo').innerHTML.split('<br>')[0]+'<br>'+
+        '<span style="color:var(--cyan)">Progress: '+progress+'% | Remaining: '+(remDist>1000?(remDist/1000).toFixed(1)+'km':Math.round(remDist)+'m')+(eta?' | ETA: '+eta+' min':'')+'</span>';
+    }
   },()=>{},{ enableHighAccuracy:true,maximumAge:2000,timeout:15000});
 }
 
@@ -595,7 +742,11 @@ function processBoard(d){
     $('triInfo').textContent='Need ≥2 towers with positions. Have: '+matched.length+'/'+allTowers.length+'. Lookups pending: '+cidPending.size;
   }
 
-  // Update flight path and predictor displays
+  // Update displays
+  if(MAP_MATCH.lastSnap){
+    $('mapMatchInfo').innerHTML='<b style="color:var(--green)">Road: '+MAP_MATCH.lastSnap.road+'</b> ('+MAP_MATCH.lastSnap.dist.toFixed(0)+'m off road)<br>'+
+      'Snapped: '+MAP_MATCH.lastSnap.lat.toFixed(6)+', '+MAP_MATCH.lastSnap.lon.toFixed(6);
+  }
   if(gpsPos){
     const spd=(gpsPos.speed||0)*3.6;
     const conf=PREDICTOR.confidence();
