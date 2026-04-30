@@ -1309,6 +1309,39 @@ function processBoardData(d){
     }
   }
   $('srcCell2Gd').textContent=(cellTowers4G+cellTowers2G)+'t hits:'+cidHits+' miss:'+cidMisses;
+
+  // BATCH GOOGLE LOOKUP: send ALL towers in ONE request if no matches yet
+  if(boardTowerList.length<2&&cidMisses>0&&!processBoardData._batchDone){
+    processBoardData._batchDone=true;
+    const allT=[];
+    if(d.cell4g&&d.cell4g.cid)allT.push({cellId:d.cell4g.cid,locationAreaCode:d.cell4g.tac||0,mobileCountryCode:d.cell4g.mcc||404,mobileNetworkCode:d.cell4g.mnc||84,radioType:'lte',signalStrength:d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80)});
+    const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
+    if(c2d&&Array.isArray(c2d))c2d.forEach(c=>{if(c.cid)allT.push({cellId:c.cid,locationAreaCode:c.lac||0,mobileCountryCode:c.mcc||404,mobileNetworkCode:c.mnc||84,radioType:'gsm',signalStrength:c.rssi||-90});});
+    if(allT.length>0){
+      log('Google batch: sending '+allT.length+' towers...','var(--cyan)');
+      fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({considerIp:false,cellTowers:allT})
+      }).then(r=>r.json()).then(g=>{
+        if(g.location&&g.location.lat){
+          log('Google batch fix: '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4)+' ±'+Math.round(g.accuracy)+'m','var(--green)');
+          allT.forEach(t=>{
+            const key=t.mobileCountryCode+'-'+t.mobileNetworkCode+'-'+t.locationAreaCode+'-'+t.cellId;
+            if(!cidCache[key]||cidCache[key].miss){
+              cidCache[key]={lat:g.location.lat,lon:g.location.lng,range:g.accuracy||500};
+              if(TOWER_CID_IDX)TOWER_CID_IDX.set(t.cellId,{l:g.location.lat,o:g.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
+              if(typeof TOWERS!=='undefined')TOWERS.push({l:g.location.lat,o:g.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
+            }
+          });
+          saveCIDCache();saveTowerDB();
+        }else{
+          log('Google batch: '+(g.error?g.error.message:'no result'),'var(--red)');
+          processBoardData._batchDone=false;
+        }
+      }).catch(e=>{log('Google batch error: '+e.message,'var(--red)');processBoardData._batchDone=false;});
+    }
+  }
+
   // If no towers matched by CID, try LAC-level geolocation
   // LAC (Location Area Code) covers ~5-10km — gives area-level position
   if(boardTowerList.length<2&&(cellTowers4G+cellTowers2G)>=2){
