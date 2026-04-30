@@ -45,6 +45,7 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <label style="display:block;color:rgba(100,100,120,0.6);cursor:pointer"><input type="checkbox" checked id="lyDb">DB Towers (5km)</label>
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked id="lyFlight">Flight Path</label>
     <label style="display:block;color:#3dcc6e;cursor:pointer"><input type="checkbox" checked id="lyRoad">Road Match</label>
+    <label style="display:block;color:#00e5ff;cursor:pointer"><input type="checkbox" checked id="lyGpsRadius">GPS Radius</label>
     <label style="display:block;color:#f06060;cursor:pointer"><input type="checkbox" id="lyRoute">Route</label>
   </div>
 </div>
@@ -96,6 +97,10 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <div id="rfFieldInfo" style="font-size:9px;color:var(--tm)">Learning baseline environment...</div>
   </div>
   <div class="card">
+    <div class="card-title" style="color:#00e5ff">GPS-MEASURED TOWER RADII</div>
+    <div id="gpsRadiusInfo" style="font-size:9px;color:var(--tm)">Need GPS fix + tower positions to draw exact circles</div>
+  </div>
+  <div class="card">
     <div class="card-title">API LOG</div>
     <div id="apiLog" style="font-size:8px;color:var(--td);max-height:80px;overflow-y:auto">Waiting...</div>
   </div>
@@ -113,6 +118,7 @@ let map,gpsMarker,triMarker,triCircle,triZone=null;
 let towerMarkers=[],towerLines=[];
 let flightPathLine=null,flightPathMarkers=[];
 let roadMatchMarker=null,roadMatchLine=null;
+let gpsRadiusCircles=[],gpsRadiusLines=[],gpsRadiusIntersect=null;
 let destMarker=null,routeLine=null,routeSteps=[];
 let bleDevice=null,bleChar=null,bleBuffer='';
 let cidCache={};
@@ -522,6 +528,45 @@ if('geolocation' in navigator){
     }
 
     // Predict flight path with turn scenarios
+    // ═══ GPS-MEASURED RADIUS LAYER ═══
+    // Draw a circle from each tower with radius = exact GPS distance to that tower.
+    // Every circle passes through the GPS position. All circles intersect at your location.
+    if($('lyGpsRadius').checked&&processBoard._lastMatched&&processBoard._lastMatched.length>0){
+      // Clear old
+      gpsRadiusCircles.forEach(c=>{try{map.removeLayer(c);}catch(e){}});
+      gpsRadiusLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
+      if(gpsRadiusIntersect)try{map.removeLayer(gpsRadiusIntersect);}catch(e){}
+      gpsRadiusCircles=[];gpsRadiusLines=[];
+
+      const colors=['#00e5ff','#00bcd4','#0097a7','#00838f','#006064','#004d40','#00897b'];
+      let infoHtml='';
+      processBoard._lastMatched.forEach((t,i)=>{
+        const realDist=hav(gpsPos,{lat:t.lat,lon:t.lon});
+        // Store learned distance
+        towerDistances[t.cid]={realDist:Math.round(realDist),rssi:t.signal,lat:t.lat,lon:t.lon,t:now};
+        const col=colors[i%colors.length];
+        // Circle centered on TOWER with radius = GPS distance to tower
+        const circle=L.circle([t.lat,t.lon],{
+          radius:realDist,color:col,fillColor:col,fillOpacity:0.03,weight:2.5,dashArray:'8,4'
+        }).addTo(map);
+        circle.bindTooltip('CID:'+t.cid+' — GPS dist: '+Math.round(realDist)+'m');
+        gpsRadiusCircles.push(circle);
+        // Line from tower to GPS position (shows the radius)
+        const line=L.polyline([[t.lat,t.lon],[gpsPos.lat,gpsPos.lon]],{
+          color:col,weight:2,opacity:0.7
+        }).addTo(map);
+        gpsRadiusLines.push(line);
+        infoHtml+='<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:1px 0"><span style="color:'+col+'">CID:'+t.cid+'</span><span><b>'+Math.round(realDist)+'m</b> ('+t.signal+'dBm)</span></div>';
+      });
+      // Intersection marker — all circles cross here
+      gpsRadiusIntersect=L.circleMarker([gpsPos.lat,gpsPos.lon],{
+        radius:6,color:'#00e5ff',fillColor:'#00e5ff',fillOpacity:1,weight:3
+      }).addTo(map);
+      gpsRadiusIntersect.bindTooltip('ALL CIRCLES INTERSECT HERE<br>'+processBoard._lastMatched.length+' tower radii confirmed');
+      gpsRadiusCircles.push(gpsRadiusIntersect);
+      $('gpsRadiusInfo').innerHTML='<b style="color:#00e5ff">'+processBoard._lastMatched.length+' towers — all circles cross at GPS position</b><br>'+infoHtml;
+    }
+
     predictFlightPath();
 
     // MAP MATCHING: snap current GPS position to nearest road

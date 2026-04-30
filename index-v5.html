@@ -136,6 +136,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#FFB800;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('predict')" style="margin-right:3px">T+5 Predict</label>
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('turns')" style="margin-right:3px">Turn Markers</label>
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('flight')" style="margin-right:3px">Flight Path</label>
+    <label style="display:block;color:#00e5ff;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('gpsRadius')" style="margin-right:3px">GPS Radius</label>
   </div>
 </div>
 
@@ -4323,6 +4324,24 @@ function tick(){
     if(uiFrame%5===0&&MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
     if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
+    // GPS-MEASURED RADIUS LAYER: draw exact circles from each tower through GPS position
+    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=='undefined'&&uiFrame%5===0){
+      gpsRadiusCircles.forEach(c=>{try{map.removeLayer(c);}catch(e){}});
+      gpsRadiusLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
+      if(gpsRadiusIntersect)try{map.removeLayer(gpsRadiusIntersect);}catch(e){}
+      gpsRadiusCircles=[];gpsRadiusLines=[];
+      const colors=['#00e5ff','#00bcd4','#0097a7','#00838f','#006064','#004d40','#00897b'];
+      boardTowerList.forEach((t,i)=>{
+        const realDist=hav(gpsSys,{lat:t.lat,lon:t.lon});
+        const col=colors[i%colors.length];
+        const circle=L.circle([t.lat,t.lon],{radius:realDist,color:col,fillColor:col,fillOpacity:0.03,weight:2.5,dashArray:'8,4'}).addTo(map);
+        gpsRadiusCircles.push(circle);
+        const line=L.polyline([[t.lat,t.lon],[gpsSys.lat,gpsSys.lon]],{color:col,weight:2,opacity:0.7}).addTo(map);
+        gpsRadiusLines.push(line);
+      });
+      gpsRadiusIntersect=L.circleMarker([gpsSys.lat,gpsSys.lon],{radius:6,color:'#00e5ff',fillColor:'#00e5ff',fillOpacity:1,weight:3}).bindTooltip('GPS RADIUS INTERSECTION').addTo(map);
+      gpsRadiusCircles.push(gpsRadiusIntersect);
+    }
     // Calibrate ant step length from GPS distance every 50 steps
     if(ANIMAL.ant.steps%50===0&&ANIMAL.ant.steps>0&&lastPos){
       const gDist=hav(lastPos,gpsSys);
@@ -5012,7 +5031,8 @@ function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish D
 // ═══════════════════════════════════════
 // MAP LAYER TOGGLES
 // ═══════════════════════════════════════
-const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true,flight:true};
+const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true,flight:true,gpsRadius:true};
+let gpsRadiusCircles=[],gpsRadiusLines=[],gpsRadiusIntersect=null;
 function toggleMapLayer(layer){
   MAP_LAYERS[layer]=!MAP_LAYERS[layer];
   const on=MAP_LAYERS[layer];
@@ -5026,6 +5046,7 @@ function toggleMapLayer(layer){
     if(layer==='route'&&ROUTE_NAV.routeLine){if(on)ROUTE_NAV.routeLine.addTo(map);else map.removeLayer(ROUTE_NAV.routeLine);}
     if(layer==='predict'&&PREDICTOR._marker){if(on)PREDICTOR._marker.addTo(map);else map.removeLayer(PREDICTOR._marker);if(PREDICTOR._line){if(on)PREDICTOR._line.addTo(map);else map.removeLayer(PREDICTOR._line);}}
     if(layer==='turns'){turnMarkers.forEach(m=>{if(on)m.addTo(map);else map.removeLayer(m);});}
+    if(layer==='gpsRadius'){gpsRadiusCircles.forEach(c=>{if(on)c.addTo(map);else map.removeLayer(c);});gpsRadiusLines.forEach(l=>{if(on)l.addTo(map);else map.removeLayer(l);});}
   }catch(e){}
 }
 
