@@ -110,6 +110,19 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <div id="apiLog" style="font-size:8px;color:var(--td);max-height:80px;overflow-y:auto">Waiting...</div>
   </div>
   <div id="log"></div>
+  <button onclick="generateReport()" style="width:100%;background:#A855F7;color:#fff;border:none;padding:10px;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:2px;cursor:pointer;border-radius:2px;margin-top:6px">GENERATE REPORT</button>
+</div>
+<!-- Report overlay -->
+<div id="reportOverlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:2000;overflow-y:auto;padding:12px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <h2 style="color:var(--amber);font-size:14px;letter-spacing:3px">UPIN v5b FIELD TEST REPORT</h2>
+    <div style="display:flex;gap:6px">
+      <button onclick="captureMap()" style="background:var(--cyan);color:#000;border:none;padding:6px 12px;font-family:inherit;font-size:9px;font-weight:700;border-radius:2px;cursor:pointer">SAVE MAP IMAGE</button>
+      <button onclick="$('reportOverlay').style.display='none'" style="background:var(--panel);color:var(--tp);border:1px solid var(--border);padding:6px 12px;font-family:inherit;font-size:9px;border-radius:2px;cursor:pointer">CLOSE</button>
+    </div>
+  </div>
+  <div id="mapSnapshot" style="border:1px solid var(--border);border-radius:3px;overflow:hidden;margin-bottom:10px;height:300px;background:var(--panel);display:flex;align-items:center;justify-content:center;color:var(--td);font-size:9px">Map snapshot will appear here</div>
+  <div id="reportBody"></div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="towers-data.js"></script>
@@ -1218,6 +1231,134 @@ function onBLE(e){
 }
 
 const cachedCount=Object.keys(cidCache).filter(k=>cidCache[k]&&cidCache[k].lat&&!cidCache[k].miss).length;
+// ═══════════════════════════════════════
+// REPORT GENERATION
+// ═══════════════════════════════════════
+function generateReport(){
+  const now=new Date();
+  const ds=DIRECTIONAL.stats();
+  const ss=ANTISPOOF.stats();
+  const rf=RF_FIELD.stats();
+  const ps=PREDICTOR;
+
+  // Capture the current map view as an embedded mini-map
+  const mapEl=document.getElementById('map');
+  const center=map.getCenter();
+  const zoom=map.getZoom();
+  // Use a static map image from OSM
+  const mapImg='https://staticmap.openstreetmap.de/staticmap.php?center='+center.lat+','+center.lng+'&zoom='+zoom+'&size=600x300&maptype=osmarenderer';
+  $('mapSnapshot').innerHTML='<img src="'+mapImg+'" style="width:100%;height:100%;object-fit:cover" onerror="this.parentNode.textContent=\'Map image unavailable — use SAVE MAP IMAGE for screenshot\'">';
+
+  let html='';
+
+  // Summary card
+  html+='<div style="background:var(--panel);border:1px solid var(--green);border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--green);letter-spacing:2px;margin-bottom:6px">SUMMARY</div>'+
+    '<div style="font-size:11px;color:var(--tp);line-height:1.8">'+
+    'Report generated: <b>'+now.toLocaleString()+'</b><br>'+
+    (gpsPos?'GPS Position: <b style="color:var(--cyan)">'+gpsPos.lat.toFixed(6)+', '+gpsPos.lon.toFixed(6)+'</b> (±'+Math.round(gpsPos.acc||0)+'m)<br>':'No GPS fix<br>')+
+    'Speed: <b>'+((gpsPos?gpsPos.speed:0)*3.6).toFixed(0)+' km/h</b><br>'+
+    'Cell Towers: <b style="color:var(--amber)">7 detected, '+Object.keys(towerDistances).length+' with known positions</b><br>'+
+    'Triangulation: <b style="color:'+(triMarker?'var(--green)':'var(--red)')+'">'+( triMarker?'FIX':'NO FIX')+'</b>'+
+    '</div></div>';
+
+  // Tower details
+  html+='<div style="background:var(--panel);border:1px solid var(--amber);border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--amber);letter-spacing:2px;margin-bottom:6px">CELL TOWERS</div>';
+  Object.entries(towerDistances).forEach(([cid,d])=>{
+    const col=d.realDist<500?'var(--green)':d.realDist<2000?'var(--cyan)':'var(--amber)';
+    html+='<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)">'+
+      '<span>CID: <b>'+cid+'</b></span>'+
+      '<span style="color:'+col+'"><b>'+d.realDist+'m</b> / '+d.rssi+'dBm</span>'+
+      '<span style="font-size:7px;color:var(--td)">'+d.lat.toFixed(4)+', '+d.lon.toFixed(4)+'</span></div>';
+  });
+  html+='</div>';
+
+  // Directional geometry
+  html+='<div style="background:var(--panel);border:1px solid #ff4081;border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:#ff4081;letter-spacing:2px;margin-bottom:6px">DIRECTIONAL MULTILATERATION</div>'+
+    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
+    'Quadrant Coverage: <b>'+ds.covered+'/4</b> (N:'+ds.quadrants.N+' S:'+ds.quadrants.S+' E:'+ds.quadrants.E+' W:'+ds.quadrants.W+')<br>'+
+    'Predictions Verified: <b>'+ds.verified+'</b><br>'+
+    'Confidence: <b style="color:'+(ds.confidence>70?'var(--green)':ds.confidence>40?'var(--amber)':'var(--red)')+'">'+ds.confidence+'%</b><br>'+
+    'Per-tower Distance Biases Learned: <b>'+ds.biases+'</b>'+
+    '</div>';
+  if(ds.recentVerify.length){
+    html+='<div style="margin-top:6px;font-size:9px">';
+    ds.recentVerify.forEach(v=>{
+      const col=v.posErr<30?'var(--green)':v.posErr<100?'var(--amber)':'var(--red)';
+      html+='<span style="background:var(--bg);padding:2px 6px;margin:2px;border-radius:2px;color:'+col+'">'+v.label+': '+v.posErr+'m</span>';
+    });
+    html+='</div>';
+  }
+  html+='</div>';
+
+  // Predictor stats
+  html+='<div style="background:var(--panel);border:1px solid var(--purple);border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--purple);letter-spacing:2px;margin-bottom:6px">FLIGHT PATH PREDICTOR</div>'+
+    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
+    'Validated Predictions: <b>'+ps.validated+'</b><br>'+
+    'Average Prediction Error: <b>'+ps.avgError().toFixed(1)+'m</b><br>'+
+    'Tower Confirmations: <b style="color:var(--green)">'+ps.towerConfirmations+'</b> / Denials: <b style="color:var(--red)">'+ps.towerDenials+'</b><br>'+
+    'Confidence: <b style="color:'+(ps.confidence()>0.7?'var(--green)':ps.confidence()>0.4?'var(--amber)':'var(--red)')+'">'+Math.round(ps.confidence()*100)+'%</b><br>'+
+    'Learned Heading Bias: <b>'+ps.headingBias.toFixed(1)+'°</b><br>'+
+    'Learned Speed Bias: <b>'+ps.speedBias.toFixed(3)+'×</b>'+
+    '</div></div>';
+
+  // Anti-spoof
+  html+='<div style="background:var(--panel);border:1px solid var(--red);border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--red);letter-spacing:2px;margin-bottom:6px">ANTI-SPOOF STATUS</div>'+
+    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
+    'Spoof Score: <b style="color:'+(ss.score>40?'var(--red)':ss.score>20?'var(--amber)':'var(--green)')+'">'+ss.score+'/100</b><br>'+
+    'Total Checks: <b>'+ss.checks+'</b> | Rejected: <b>'+ss.rejected+'</b><br>'+
+    'Teleport Jumps: <b>'+ss.jumps+'</b> | Tower Mismatches: <b>'+ss.towerMismatch+'</b> | IMU Mismatches: <b>'+ss.imuMismatch+'</b>'+
+    '</div></div>';
+
+  // RF Field
+  const rfCol=rf.status==='HOSTILE'?'var(--red)':rf.status==='ALERT'?'var(--amber)':'var(--green)';
+  html+='<div style="background:var(--panel);border:1px solid '+rfCol.replace('var(','').replace(')','').replace('--','#')+';border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--amber);letter-spacing:2px;margin-bottom:6px">RF FIELD MONITOR</div>'+
+    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
+    'Field Status: <b style="color:'+rfCol+'">'+rf.status+'</b><br>'+
+    'Baseline: avg <b>'+rf.baseline.rssiAvg.toFixed(0)+'dBm</b> ±'+rf.baseline.rssiStd.toFixed(0)+' | '+rf.baseline.towerCount+' towers<br>'+
+    'Learning: <b>'+rf.learning+'%</b> | Total Alerts: <b>'+rf.totalAlerts+'</b>'+
+    '</div></div>';
+
+  // Map matching
+  html+='<div style="background:var(--panel);border:1px solid var(--green);border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--green);letter-spacing:2px;margin-bottom:6px">MAP MATCHING</div>'+
+    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
+    'Last Road: <b>'+(MAP_MATCH.lastSnap?MAP_MATCH.lastSnap.road:'--')+'</b><br>'+
+    'Snap Distance: <b>'+(MAP_MATCH.lastSnap?MAP_MATCH.lastSnap.dist.toFixed(0)+'m':'--')+'</b><br>'+
+    'Snap History: <b>'+MAP_MATCH.snapHistory.length+'</b> positions'+
+    '</div></div>';
+
+  // Route info
+  if(routeSteps.length>0){
+    html+='<div style="background:var(--panel);border:1px solid var(--red);border-radius:3px;padding:10px;margin-bottom:8px">'+
+      '<div style="font-size:10px;font-weight:700;color:var(--red);letter-spacing:2px;margin-bottom:6px">DESTINATION ROUTE</div>'+
+      '<div style="font-size:10px;color:var(--tp)">'+$('routeInfo').innerHTML+'</div></div>';
+  }
+
+  $('reportBody').innerHTML=html;
+  $('reportOverlay').style.display='block';
+}
+
+function captureMap(){
+  // Use html2canvas if available, otherwise prompt screenshot
+  if(typeof html2canvas!=='undefined'){
+    html2canvas(document.getElementById('map')).then(canvas=>{
+      const a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='upin-v5b-map-'+Date.now()+'.png';a.click();
+    });
+  }else{
+    // Fallback: open static map in new tab
+    const c=map.getCenter();const z=map.getZoom();
+    const url='https://staticmap.openstreetmap.de/staticmap.php?center='+c.lat+','+c.lng+'&zoom='+z+'&size=1200x800&maptype=osmarenderer';
+    window.open(url,'_blank');
+    log('Map image opened in new tab — save it manually','var(--cyan)');
+  }
+}
+
 log('v5b ready — DB: '+(typeof TOWERS!=='undefined'?TOWERS.length:0)+' towers ('+cachedCount+' from previous sessions). Connect board to start.','var(--cyan)');
 </script>
 </body>
