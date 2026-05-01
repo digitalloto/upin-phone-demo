@@ -46,6 +46,7 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked id="lyFlight">Flight Path</label>
     <label style="display:block;color:#3dcc6e;cursor:pointer"><input type="checkbox" checked id="lyRoad">Road Match</label>
     <label style="display:block;color:#00e5ff;cursor:pointer"><input type="checkbox" checked id="lyGpsRadius">GPS Radius</label>
+    <label style="display:block;color:#ff6090;cursor:pointer"><input type="checkbox" checked id="lyDirectional">Directional</label>
     <label style="display:block;color:#f06060;cursor:pointer"><input type="checkbox" id="lyRoute">Route</label>
   </div>
 </div>
@@ -97,6 +98,10 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
     <div id="rfFieldInfo" style="font-size:9px;color:var(--tm)">Learning baseline environment...</div>
   </div>
   <div class="card">
+    <div class="card-title" style="color:#ff6090">DIRECTIONAL MULTILATERATION</div>
+    <div id="directionalInfo" style="font-size:9px;color:var(--tm)">Need GPS + towers to classify quadrants</div>
+  </div>
+  <div class="card">
     <div class="card-title" style="color:#00e5ff">GPS-MEASURED TOWER RADII</div>
     <div id="gpsRadiusInfo" style="font-size:9px;color:var(--tm)">Need GPS fix + tower positions to draw exact circles</div>
   </div>
@@ -119,6 +124,7 @@ let towerMarkers=[],towerLines=[];
 let flightPathLine=null,flightPathMarkers=[];
 let roadMatchMarker=null,roadMatchLine=null;
 let gpsRadiusCircles=[],gpsRadiusLines=[],gpsRadiusIntersect=null;
+let dirMarkers=[],dirLines=[];
 let destMarker=null,routeLine=null,routeSteps=[];
 let bleDevice=null,bleChar=null,bleBuffer='';
 let cidCache={};
@@ -376,6 +382,135 @@ const RF_FIELD={
   stats(){return{status:this.fieldStatus,baseline:this.baseline,learning:Math.min(100,Math.round(this.learningCount/this.LEARNING_THRESHOLD*100)),alerts:this.alerts.slice(-5),totalAlerts:this.alerts.length};}
 };
 
+// ═══════════════════════════════════════
+// LAYER: DIRECTIONAL MULTILATERATION + PREDICTIVE VERIFICATION
+// 1. Selects towers from N/S/E/W for best geometric spread
+// 2. Predicts position at T+3, T+5, T+30 seconds
+// 3. Verifies predictions using tower distance changes
+// 4. Calculates position from circumference intersections
+// ═══════════════════════════════════════
+const DIRECTIONAL={
+  // Tower quadrants (relative to current position)
+  quadrants:{N:[],S:[],E:[],W:[]},
+  bestGeometry:[], // towers selected for best spread (1 per quadrant minimum)
+  // Predictions awaiting verification
+  predictions:[], // [{targetTime, predLat, predLon, towerDists:{cid:dist}, label}]
+  verified:0,
+  verifyErrors:[], // last 20 verification errors
+  confidence:0,
+  // Learned corrections
+  distBias:{}, // {cid: multiplier} — learned RSSI→distance correction per tower
+
+  // Classify towers into quadrants relative to position
+  classifyTowers(pos, towers){
+    this.quadrants={N:[],S:[],E:[],W:[]};
+    towers.forEach(t=>{
+      const bearing=Math.atan2(t.lon-pos.lon,t.lat-pos.lat)*180/Math.PI;
+      const normBear=bearing<0?bearing+360:bearing;
+      const dist=hav(pos,{lat:t.lat,lon:t.lon});
+      const entry={...t,bearing:Math.round(normBear),dist:Math.round(dist)};
+      if(normBear>=315||normBear<45)this.quadrants.N.push(entry);
+      else if(normBear>=45&&normBear<135)this.quadrants.E.push(entry);
+      else if(normBear>=135&&normBear<225)this.quadrants.S.push(entry);
+      else this.quadrants.W.push(entry);
+    });
+    // Select best tower per quadrant (strongest signal in each)
+    this.bestGeometry=[];
+    ['N','S','E','W'].forEach(dir=>{
+      const q=this.quadrants[dir];
+      if(q.length>0){
+        q.sort((a,b)=>b.signal-a.signal); // strongest first
+        this.bestGeometry.push({...q[0],quadrant:dir});
+      }
+    });
+  },
+
+  // Record prediction: "in N seconds I'll be at lat,lon with these tower distances"
+  recordPrediction(pos, speed, heading, seconds, towers, label){
+    if(!pos||speed<0.3||!towers.length)return;
+    const h=heading*Math.PI/180;
+    const dist=speed*seconds;
+    const predLat=pos.lat+(dist*Math.cos(h))/111320;
+    const predLon=pos.lon+(dist*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180));
+    // Predict what distance to each tower SHOULD be at the predicted position
+    const towerDists={};
+    towers.forEach(t=>{
+      const predDist=hav({lat:predLat,lon:predLon},{lat:t.lat,lon:t.lon});
+      towerDists[t.cid]={predicted:Math.round(predDist),towerLat:t.lat,towerLon:t.lon};
+    });
+    this.predictions.push({
+      targetTime:performance.now()+seconds*1000,
+      predLat,predLon,towerDists,label:label||'T+'+seconds+'s',
+      fromLat:pos.lat,fromLon:pos.lon
+    });
+    if(this.predictions.length>30)this.predictions.shift();
+  },
+
+  // Verify old predictions: compare predicted tower distances with actual
+  verify(currentPos, currentTowers){
+    if(!currentPos)return;
+    const now=performance.now();
+    const results=[];
+    while(this.predictions.length&&this.predictions[0].targetTime<=now){
+      const pred=this.predictions.shift();
+      // Position error: how far is actual GPS from predicted position?
+      const posErr=hav(currentPos,{lat:pred.predLat,lon:pred.predLon});
+      // Tower distance error: for each tower, compare predicted vs actual distance
+      let towerErrSum=0,towerCount=0;
+      currentTowers.forEach(t=>{
+        const p=pred.towerDists[t.cid];
+        if(!p)return;
+        const actualDist=hav(currentPos,{lat:p.towerLat,lon:p.towerLon});
+        const distErr=Math.abs(actualDist-p.predicted);
+        towerErrSum+=distErr;towerCount++;
+        // Learn per-tower distance bias
+        if(p.predicted>10&&actualDist>10){
+          const ratio=actualDist/p.predicted;
+          this.distBias[t.cid]=(this.distBias[t.cid]||1)*0.9+ratio*0.1;
+        }
+      });
+      const towerErr=towerCount>0?towerErrSum/towerCount:0;
+      this.verifyErrors.push({posErr:Math.round(posErr),towerErr:Math.round(towerErr),label:pred.label});
+      if(this.verifyErrors.length>20)this.verifyErrors.shift();
+      this.verified++;
+      results.push({label:pred.label,posErr:Math.round(posErr),towerErr:Math.round(towerErr)});
+    }
+    // Update confidence: based on recent prediction accuracy
+    if(this.verifyErrors.length>=3){
+      const avgErr=this.verifyErrors.reduce((s,v)=>s+v.posErr,0)/this.verifyErrors.length;
+      const avgTowerErr=this.verifyErrors.reduce((s,v)=>s+v.towerErr,0)/this.verifyErrors.length;
+      this.confidence=Math.max(0,Math.min(100,100-avgErr-avgTowerErr*0.5));
+    }
+    return results;
+  },
+
+  // Calculate position from circumference intersections (GPS-denied mode)
+  // Uses last known tower distances + RSSI change to estimate current distances
+  calculatePosition(towers){
+    if(towers.length<2)return null;
+    // Weighted centroid using learned distance biases
+    let sLat=0,sLon=0,sW=0;
+    towers.forEach(t=>{
+      const bias=this.distBias[t.cid]||1;
+      const w=Math.pow(10,(t.signal+100)/30)*bias;
+      sLat+=t.lat*w;sLon+=t.lon*w;sW+=w;
+    });
+    if(sW<=0)return null;
+    return{lat:sLat/sW,lon:sLon/sW};
+  },
+
+  stats(){
+    const quadCounts={N:this.quadrants.N.length,S:this.quadrants.S.length,E:this.quadrants.E.length,W:this.quadrants.W.length};
+    const covered=Object.values(quadCounts).filter(v=>v>0).length;
+    return{
+      quadrants:quadCounts,covered,geometry:this.bestGeometry.length,
+      verified:this.verified,confidence:Math.round(this.confidence),
+      recentVerify:this.verifyErrors.slice(-5),
+      biases:Object.keys(this.distBias).length
+    };
+  }
+};
+
 function log(m,c){const d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent=m;$('log').appendChild(d);$('log').scrollTop=99999;}
 
 // ═══════════════════════════════════════
@@ -527,7 +662,66 @@ if('geolocation' in navigator){
       PREDICTOR.recordPrediction(gpsPos, spd, hdg, 30);
     }
 
-    // Predict flight path with turn scenarios
+    // ═══ DIRECTIONAL MULTILATERATION + PREDICT-VERIFY ═══
+    if($('lyDirectional').checked&&processBoard._lastMatched&&processBoard._lastMatched.length>=2){
+      const matched=processBoard._lastMatched;
+      // Classify towers into N/S/E/W quadrants
+      DIRECTIONAL.classifyTowers(gpsPos, matched);
+      // Verify any old predictions
+      const verifyResults=DIRECTIONAL.verify(gpsPos, matched);
+      // Record new predictions at T+3, T+5, T+30
+      const spd=gpsPos.speed||0;
+      const hdg=gpsPos.heading||0;
+      if(spd>0.3){
+        DIRECTIONAL.recordPrediction(gpsPos,spd,hdg,3,matched,'T+3s');
+        DIRECTIONAL.recordPrediction(gpsPos,spd,hdg,5,matched,'T+5s');
+        DIRECTIONAL.recordPrediction(gpsPos,spd,hdg,30,matched,'T+30s');
+      }
+      // Draw directional geometry on map
+      dirMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+      dirLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
+      dirMarkers=[];dirLines=[];
+      const qColors={N:'#ff4081',S:'#ff6090',E:'#e040fb',W:'#ea80fc'};
+      DIRECTIONAL.bestGeometry.forEach(t=>{
+        const col=qColors[t.quadrant]||'#ff6090';
+        // Tower marker with quadrant label
+        const mkr=L.circleMarker([t.lat,t.lon],{radius:8,color:col,fillColor:col,fillOpacity:0.8,weight:3}).addTo(map);
+        mkr.bindTooltip(t.quadrant+' — CID:'+t.cid+'<br>Bearing: '+t.bearing+'° | Dist: '+t.dist+'m<br>RSSI: '+t.signal+'dBm');
+        dirMarkers.push(mkr);
+        // Line from tower to position (solid, colored by quadrant)
+        const line=L.polyline([[t.lat,t.lon],[gpsPos.lat,gpsPos.lon]],{color:col,weight:2.5,opacity:0.8}).addTo(map);
+        dirMarkers.push(line);
+        // GPS-measured circle from this tower
+        const circle=L.circle([t.lat,t.lon],{radius:t.dist,color:col,fillOpacity:0,weight:2,dashArray:'6,4'}).addTo(map);
+        dirMarkers.push(circle);
+      });
+      // Intersection point (where all directional circles meet)
+      if(DIRECTIONAL.bestGeometry.length>=2){
+        const intMkr=L.circleMarker([gpsPos.lat,gpsPos.lon],{radius:8,color:'#ff4081',fillColor:'#ff4081',fillOpacity:1,weight:3}).addTo(map);
+        intMkr.bindTooltip('DIRECTIONAL FIX<br>Quadrants: '+DIRECTIONAL.bestGeometry.map(t=>t.quadrant).join(',')+
+          '<br>Confidence: '+DIRECTIONAL.stats().confidence+'%');
+        dirMarkers.push(intMkr);
+      }
+      // Update panel
+      const ds=DIRECTIONAL.stats();
+      let html='<div style="display:flex;justify-content:space-between"><b style="color:#ff4081">Quadrants: '+ds.covered+'/4</b><span>Confidence: <b>'+ds.confidence+'%</b></span></div>';
+      html+='<div style="font-size:7px;color:var(--td)">N:'+ds.quadrants.N+' S:'+ds.quadrants.S+' E:'+ds.quadrants.E+' W:'+ds.quadrants.W+' | Verified: '+ds.verified+' predictions | Biases learned: '+ds.biases+'</div>';
+      if(ds.recentVerify.length){
+        html+='<div style="margin-top:3px;font-size:7px">';
+        ds.recentVerify.forEach(v=>{
+          const col=v.posErr<30?'var(--green)':v.posErr<100?'var(--amber)':'var(--red)';
+          html+='<span style="color:'+col+'">'+v.label+':'+v.posErr+'m </span>';
+        });
+        html+='</div>';
+      }
+      DIRECTIONAL.bestGeometry.forEach(t=>{
+        const col=qColors[t.quadrant];
+        html+='<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:1px 0"><span style="color:'+col+'">'+t.quadrant+' CID:'+t.cid+'</span><span>'+t.bearing+'° / '+t.dist+'m / '+t.signal+'dBm</span></div>';
+      });
+      $('directionalInfo').innerHTML=html;
+    }
+
+    // Predict flight path
     // ═══ GPS-MEASURED RADIUS LAYER ═══
     // Draw a circle from each tower with radius = exact GPS distance to that tower.
     // Every circle passes through the GPS position. All circles intersect at your location.

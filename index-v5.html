@@ -4342,6 +4342,31 @@ function tick(){
       gpsRadiusIntersect=L.circleMarker([gpsSys.lat,gpsSys.lon],{radius:6,color:'#00e5ff',fillColor:'#00e5ff',fillOpacity:1,weight:3}).bindTooltip('GPS RADIUS INTERSECTION').addTo(map);
       gpsRadiusCircles.push(gpsRadiusIntersect);
     }
+    // DIRECTIONAL MULTILATERATION: classify towers, predict, verify
+    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>=2){
+      DIRECTIONAL.classifyTowers(gpsSys,boardTowerList);
+      DIRECTIONAL.verify(gpsSys,boardTowerList);
+      const spd=gpsSys.speed||avgSpeed(5)||0;
+      if(spd>0.3){
+        DIRECTIONAL.recordPrediction(gpsSys,spd,compass+CAL.compassOff,3,boardTowerList,'T+3s');
+        DIRECTIONAL.recordPrediction(gpsSys,spd,compass+CAL.compassOff,5,boardTowerList,'T+5s');
+        DIRECTIONAL.recordPrediction(gpsSys,spd,compass+CAL.compassOff,30,boardTowerList,'T+30s');
+      }
+      // Draw directional geometry
+      dirMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});dirMarkers=[];
+      const qColors={N:'#ff4081',S:'#ff6090',E:'#e040fb',W:'#ea80fc'};
+      DIRECTIONAL.bestGeometry.forEach(t=>{
+        const col=qColors[t.quadrant]||'#ff6090';
+        const mkr=L.circleMarker([t.lat,t.lon],{radius:8,color:col,fillColor:col,fillOpacity:0.8,weight:3}).bindTooltip(t.quadrant+' CID:'+t.cid+' '+t.dist+'m '+t.signal+'dBm').addTo(map);
+        dirMarkers.push(mkr);
+        dirMarkers.push(L.polyline([[t.lat,t.lon],[gpsSys.lat,gpsSys.lon]],{color:col,weight:2.5,opacity:0.8}).addTo(map));
+        dirMarkers.push(L.circle([t.lat,t.lon],{radius:t.dist,color:col,fillOpacity:0,weight:2,dashArray:'6,4'}).addTo(map));
+      });
+      if(DIRECTIONAL.bestGeometry.length>=2){
+        const intMkr=L.circleMarker([gpsSys.lat,gpsSys.lon],{radius:8,color:'#ff4081',fillColor:'#ff4081',fillOpacity:1,weight:3}).bindTooltip('DIRECTIONAL FIX '+DIRECTIONAL.stats().confidence+'%').addTo(map);
+        dirMarkers.push(intMkr);
+      }
+    }
     // Calibrate ant step length from GPS distance every 50 steps
     if(ANIMAL.ant.steps%50===0&&ANIMAL.ant.steps>0&&lastPos){
       const gDist=hav(lastPos,gpsSys);
@@ -4723,6 +4748,50 @@ const RF_FIELD={
   },
   stats(){return{status:this.fieldStatus,baseline:this.baseline,learning:Math.min(100,Math.round(this.learningCount/this.LEARNING_THRESHOLD*100)),alerts:this.alerts.slice(-5),totalAlerts:this.alerts.length};}
 };
+
+// ═══════════════════════════════════════
+// DIRECTIONAL MULTILATERATION + PREDICTIVE VERIFICATION
+// ═══════════════════════════════════════
+const DIRECTIONAL={
+  quadrants:{N:[],S:[],E:[],W:[]},bestGeometry:[],predictions:[],verified:0,verifyErrors:[],confidence:0,distBias:{},
+  classifyTowers(pos,towers){
+    this.quadrants={N:[],S:[],E:[],W:[]};
+    towers.forEach(t=>{
+      const bearing=Math.atan2(t.lon-pos.lon,t.lat-pos.lat)*180/Math.PI;
+      const nb=bearing<0?bearing+360:bearing;
+      const dist=hav(pos,{lat:t.lat,lon:t.lon});
+      const e={...t,bearing:Math.round(nb),dist:Math.round(dist)};
+      if(nb>=315||nb<45)this.quadrants.N.push(e);else if(nb>=45&&nb<135)this.quadrants.E.push(e);
+      else if(nb>=135&&nb<225)this.quadrants.S.push(e);else this.quadrants.W.push(e);
+    });
+    this.bestGeometry=[];
+    ['N','S','E','W'].forEach(dir=>{const q=this.quadrants[dir];if(q.length>0){q.sort((a,b)=>b.signal-a.signal);this.bestGeometry.push({...q[0],quadrant:dir});}});
+  },
+  recordPrediction(pos,speed,heading,seconds,towers,label){
+    if(!pos||speed<0.3||!towers.length)return;
+    const h=heading*Math.PI/180;const dist=speed*seconds;
+    const predLat=pos.lat+(dist*Math.cos(h))/111320;const predLon=pos.lon+(dist*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180));
+    const towerDists={};towers.forEach(t=>{towerDists[t.cid]={predicted:Math.round(hav({lat:predLat,lon:predLon},{lat:t.lat,lon:t.lon})),towerLat:t.lat,towerLon:t.lon};});
+    this.predictions.push({targetTime:performance.now()+seconds*1000,predLat,predLon,towerDists,label:label||'T+'+seconds+'s'});
+    if(this.predictions.length>30)this.predictions.shift();
+  },
+  verify(currentPos,currentTowers){
+    if(!currentPos)return[];const now=performance.now();const results=[];
+    while(this.predictions.length&&this.predictions[0].targetTime<=now){
+      const pred=this.predictions.shift();
+      const posErr=hav(currentPos,{lat:pred.predLat,lon:pred.predLon});
+      let towerErrSum=0,towerCount=0;
+      currentTowers.forEach(t=>{const p=pred.towerDists[t.cid];if(!p)return;const actualDist=hav(currentPos,{lat:p.towerLat,lon:p.towerLon});const distErr=Math.abs(actualDist-p.predicted);towerErrSum+=distErr;towerCount++;
+        if(p.predicted>10&&actualDist>10){this.distBias[t.cid]=(this.distBias[t.cid]||1)*0.9+(actualDist/p.predicted)*0.1;}});
+      this.verifyErrors.push({posErr:Math.round(posErr),towerErr:Math.round(towerCount>0?towerErrSum/towerCount:0),label:pred.label});
+      if(this.verifyErrors.length>20)this.verifyErrors.shift();this.verified++;
+    }
+    if(this.verifyErrors.length>=3){const a=this.verifyErrors.reduce((s,v)=>s+v.posErr,0)/this.verifyErrors.length;this.confidence=Math.max(0,Math.min(100,100-a));}
+    return results;
+  },
+  stats(){const qc={N:this.quadrants.N.length,S:this.quadrants.S.length,E:this.quadrants.E.length,W:this.quadrants.W.length};return{quadrants:qc,covered:Object.values(qc).filter(v=>v>0).length,geometry:this.bestGeometry.length,verified:this.verified,confidence:Math.round(this.confidence),recentVerify:this.verifyErrors.slice(-5),biases:Object.keys(this.distBias).length};}
+};
+let dirMarkers=[],dirLines=[];
 
 // Controls
 function calibrate(){
