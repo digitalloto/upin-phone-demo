@@ -1505,7 +1505,10 @@ function processBoardData(d){
       $('ctPending').textContent=cidPending.size;
       $('ctCached').textContent=Object.keys(cidCache).filter(k=>!cidCache[k].miss).length;
       const triFix=UTIN.predict();
-      $('ctTriFix').textContent=triFix?'YES':'NO';$('ctTriFix').style.color=triFix?'var(--green)':'var(--red)';
+      // #39: Don't say FIX when 0 real positioned towers
+      const realTowers=boardTowerList.filter(t=>t.lat&&t.lon&&t.lat>6);
+      const hasFix=triFix&&realTowers.length>=2;
+      $('ctTriFix').textContent=hasFix?'YES ('+realTowers.length+'t)':'NO';$('ctTriFix').style.color=hasFix?'var(--green)':'var(--red)';
       // 4G detail
       if(d.cell4g)$('ct4gDetail').innerHTML='<div style="padding:2px 0">MCC:<b>'+d.cell4g.mcc+'</b> MNC:<b>'+d.cell4g.mnc+'</b> TAC:<b>'+d.cell4g.tac+'</b> CID:<b style="color:var(--cyan)">'+d.cell4g.cid+'</b> RSSI:<b>'+(d.cell4g.rssi>0?-113+d.cell4g.rssi*2:d.cell4g.rssi)+'dBm</b> (CSQ:'+d.cell4g.rssi+')'+(cidCache['404-84-'+(d.cell4g.tac||0)+'-'+d.cell4g.cid]&&!cidCache['404-84-'+(d.cell4g.tac||0)+'-'+d.cell4g.cid].miss?' <span style="color:var(--green)">POSITION KNOWN</span>':' <span style="color:var(--red)">POSITION UNKNOWN</span>')+'</div>';
       // 2G detail
@@ -4327,6 +4330,18 @@ function tick(){
     if(uiFrame%5===0&&MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
     if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
+    // Frozen GPS detection (#47)
+    const accelE=Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81);
+    if(FROZEN_GPS.check(gpsSys,accelE)){
+      log('GPS FROZEN — same position for 30s while IMU shows motion. Switching to tower tri.','var(--red)');
+      gpsSys=null; // force tower-only mode (#48)
+    }
+    // Position cross-check (#41-46)
+    const triCheck=UTIN.predict();
+    const upinCheck=drPos;
+    CROSS_CHECK.update(gpsTrue,triCheck?{lat:triCheck.lat,lon:triCheck.lon}:null,upinCheck);
+    // Drift tracking during GPS denial (#85)
+    if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue)trackDrift(drPos,gpsTrue);
     // GPS-MEASURED RADIUS LAYER: draw exact circles from each tower through GPS position
     if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=='undefined'&&uiFrame%5===0){
       gpsRadiusCircles.forEach(c=>{try{map.removeLayer(c);}catch(e){}});
@@ -4795,6 +4810,129 @@ const DIRECTIONAL={
   stats(){const qc={N:this.quadrants.N.length,S:this.quadrants.S.length,E:this.quadrants.E.length,W:this.quadrants.W.length};return{quadrants:qc,covered:Object.values(qc).filter(v=>v>0).length,geometry:this.bestGeometry.length,verified:this.verified,confidence:Math.round(this.confidence),recentVerify:this.verifyErrors.slice(-5),biases:Object.keys(this.distBias).length};}
 };
 let dirMarkers=[],dirLines=[];
+
+// ═══════════════════════════════════════
+// VERSION STAMP (#98)
+// ═══════════════════════════════════════
+const UPIN_VERSION='v5b-2026.05.01';
+
+// ═══════════════════════════════════════
+// FROZEN GPS DETECTION (#47, #48)
+// Same lat/lon for 30s while IMU shows motion = frozen
+// ═══════════════════════════════════════
+const FROZEN_GPS={
+  lastPos:null,lastChangeTime:0,frozen:false,
+  check(gps,accelEnergy){
+    if(!gps||!gps.lat)return false;
+    const now=performance.now();
+    if(this.lastPos&&Math.abs(gps.lat-this.lastPos.lat)<0.000001&&Math.abs(gps.lon-this.lastPos.lon)<0.000001){
+      // Position hasn't changed
+      if(accelEnergy>0.5&&(now-this.lastChangeTime)/1000>30){
+        this.frozen=true;return true; // 30s same position + IMU shows movement
+      }
+    }else{
+      this.lastPos={lat:gps.lat,lon:gps.lon};this.lastChangeTime=now;this.frozen=false;
+    }
+    return false;
+  }
+};
+
+// ═══════════════════════════════════════
+// POSITION CROSS-CHECK (#41-46)
+// Compare GPS vs Cell Tri vs UPIN prediction
+// ═══════════════════════════════════════
+const CROSS_CHECK={
+  gpsPos:null,triPos:null,upinPos:null,
+  agreement:'UNKNOWN', // ALL_AGREE / MINOR / MAJOR / REJECT
+  distances:{gpsVsTri:0,gpsVsUpin:0,triVsUpin:0},
+
+  update(gps,tri,upin){
+    this.gpsPos=gps;this.triPos=tri;this.upinPos=upin;
+    const d1=(gps&&tri)?hav(gps,tri):9999;
+    const d2=(gps&&upin)?hav(gps,upin):9999;
+    const d3=(tri&&upin)?hav(tri,upin):9999;
+    this.distances={gpsVsTri:Math.round(d1),gpsVsUpin:Math.round(d2),triVsUpin:Math.round(d3)};
+    const maxD=Math.max(d1,d2,d3);
+    if(maxD<100)this.agreement='ALL_AGREE';
+    else if(maxD<500)this.agreement='MINOR_DISAGREE';
+    else if(maxD<1000)this.agreement='MAJOR_DISAGREE';
+    else this.agreement='REJECT';
+  },
+  color(){return this.agreement==='ALL_AGREE'?'var(--green)':this.agreement==='MINOR_DISAGREE'?'var(--amber)':this.agreement==='MAJOR_DISAGREE'?'var(--red)':'var(--red)';}
+};
+
+// ═══════════════════════════════════════
+// SESSION VALIDATION (#69-74)
+// 5 checks that must pass for reliable results
+// ═══════════════════════════════════════
+const VALIDATION={
+  checks:{
+    gpsReception:{pass:false,detail:''},
+    motionSufficient:{pass:false,detail:''},
+    crossCheck:{pass:false,detail:''},
+    towerSanity:{pass:false,detail:''},
+    sensorHealth:{pass:false,detail:''}
+  },
+  reliable:false,
+
+  run(){
+    // CHECK 1: GPS healthy >70% of session
+    const gpsCount=DATA.samples.filter(s=>s.lat>6).length;
+    const gpsPct=DATA.count()>0?Math.round(gpsCount/DATA.count()*100):0;
+    this.checks.gpsReception={pass:gpsPct>70,detail:gpsPct+'% GPS coverage'+(gpsPct<=70?' — INSUFFICIENT':'')};
+
+    // CHECK 2: Motion >1km at >5 km/h
+    const moving=DATA.samples.filter(s=>s.speed>1.4).length; // 1.4 m/s = 5 km/h
+    const movePct=DATA.count()>0?Math.round(moving/DATA.count()*100):0;
+    this.checks.motionSufficient={pass:totalDist>1000&&movePct>30,detail:Math.round(totalDist)+'m total, '+movePct+'% in motion'};
+
+    // CHECK 3: Cross-check agreement
+    this.checks.crossCheck={pass:CROSS_CHECK.agreement==='ALL_AGREE'||CROSS_CHECK.agreement==='MINOR_DISAGREE',detail:CROSS_CHECK.agreement+' (GPS↔Tri: '+CROSS_CHECK.distances.gpsVsTri+'m)'};
+
+    // CHECK 4: Tower DB sanity
+    const uniqueDists=new Set(Object.values(towerDistances).map(d=>d.realDist));
+    this.checks.towerSanity={pass:uniqueDists.size>=2||Object.keys(towerDistances).length===0,detail:Object.keys(towerDistances).length+' towers, '+uniqueDists.size+' unique distances'};
+
+    // CHECK 5: Sensor health
+    const lastS=DATA.samples.length>0?DATA.samples[DATA.samples.length-1]:null;
+    const azOk=lastS?Math.abs(lastS.az-9.8)<3:false;
+    const compassOk=compassTotalCount>0?(compassBadCount/compassTotalCount<0.1):true;
+    this.checks.sensorHealth={pass:azOk&&compassOk,detail:'AccelZ:'+(lastS?lastS.az.toFixed(1):'--')+' Compass:'+(compassOk?'OK':'BAD ('+Math.round(compassBadCount/compassTotalCount*100)+'% invalid)')};
+
+    // Overall
+    const passCount=Object.values(this.checks).filter(c=>c.pass).length;
+    this.reliable=passCount>=3;
+    return{passCount,total:5,reliable:this.reliable};
+  },
+
+  // Overall grade (#62)
+  grade(){
+    const v=this.run();
+    if(v.passCount>=5)return{grade:'A',desc:'All checks pass — results are reliable'};
+    if(v.passCount>=4)return{grade:'B',desc:'Minor issues — results are mostly reliable'};
+    if(v.passCount>=3)return{grade:'C',desc:'Some issues — use results with caution'};
+    if(v.passCount>=2)return{grade:'D',desc:'Major issues — results may be misleading'};
+    return{grade:'F',desc:'Test invalid — do not use these results'};
+  }
+};
+
+// ═══════════════════════════════════════
+// DRIFT RATE TRACKING (#85)
+// ═══════════════════════════════════════
+let driftSamples=[]; // [{t, drift}] during GPS denial
+function trackDrift(drPos,gpsTrue){
+  if(!drPos||!gpsTrue)return;
+  const drift=hav(drPos,gpsTrue);
+  driftSamples.push({t:performance.now(),drift});
+  if(driftSamples.length>300)driftSamples.shift();
+}
+function getDriftRate(){
+  if(driftSamples.length<2)return 0;
+  const first=driftSamples[0],last=driftSamples[driftSamples.length-1];
+  const dtMin=(last.t-first.t)/60000;
+  if(dtMin<0.1)return 0;
+  return last.drift/dtMin; // meters per minute
+}
 
 // Controls
 function calibrate(){
@@ -5657,7 +5795,55 @@ function autoSaveV5bReport(reason){
   rpt+='th{color:#7a9bc0;font-size:8px;text-transform:uppercase;letter-spacing:1px}';
   rpt+='.g{color:#3dcc6e}.r{color:#f06060}.a{color:#e8a832}.c{color:#4da6ff}.p{color:#A855F7}b{color:#4da6ff}</style></head><body>';
   rpt+='<h1>UPIN v5b FIELD TEST REPORT</h1>';
-  rpt+='<p style="color:#7a9bc0">'+now.toLocaleString()+' | Duration: '+durStr+' | Reason: '+reason+'</p>';
+  rpt+='<p style="color:#7a9bc0">'+now.toLocaleString()+' | Duration: '+durStr+' | Version: '+UPIN_VERSION+' | Reason: '+reason+'</p>';
+  // OVERALL GRADE (#62)
+  const gradeInfo=VALIDATION.grade();
+  const gradeCol=gradeInfo.grade==='A'?'#3dcc6e':gradeInfo.grade==='B'?'#4da6ff':gradeInfo.grade==='C'?'#e8a832':'#f06060';
+  rpt+='<div style="background:#0f1520;border:3px solid '+gradeCol+';border-radius:8px;padding:16px;margin:10px 0;text-align:center">';
+  rpt+='<div style="font-size:48px;font-weight:900;color:'+gradeCol+'">'+gradeInfo.grade+'</div>';
+  rpt+='<div style="font-size:12px;color:#dce6f5">'+gradeInfo.desc+'</div></div>';
+  // VALIDATION CHECKS (#64, #69-73)
+  rpt+='<div class="card" style="border-color:'+gradeCol+'"><h2>VALIDATION CHECKS</h2><table>';
+  Object.entries(VALIDATION.checks).forEach(([name,c])=>{
+    rpt+='<tr><td style="color:'+(c.pass?'#3dcc6e':'#f06060')+';font-weight:700">'+(c.pass?'✓ PASS':'✗ FAIL')+'</td><td>'+name.replace(/([A-Z])/g,' $1').trim()+'</td><td>'+c.detail+'</td></tr>';
+  });
+  rpt+='</table></div>';
+  // POSITION CROSS-CHECK (#41-46)
+  rpt+='<div class="card"><h2>POSITION CROSS-CHECK</h2>';
+  rpt+='<p>Agreement: <b style="color:'+CROSS_CHECK.color().replace('var(--','').replace(')','')+'">'+CROSS_CHECK.agreement+'</b></p>';
+  rpt+='<p>GPS ↔ Tower Tri: '+CROSS_CHECK.distances.gpsVsTri+'m | GPS ↔ UPIN: '+CROSS_CHECK.distances.gpsVsUpin+'m | Tri ↔ UPIN: '+CROSS_CHECK.distances.triVsUpin+'m</p></div>';
+  // DRIFT RATE (#85)
+  const dRate=getDriftRate();
+  if(driftSamples.length>0){
+    rpt+='<div class="card"><h2>DRIFT RATE (GPS-DENIED)</h2>';
+    rpt+='<p style="font-size:18px;color:'+(dRate<10?'#3dcc6e':dRate<50?'#e8a832':'#f06060')+'"><b>'+dRate.toFixed(1)+' m/min</b></p>';
+    rpt+='<p style="font-size:9px;color:#7a9bc0">'+(dRate<10?'Tactical grade (<10 m/min)':dRate<50?'Acceptable (10-50 m/min)':'Needs improvement (>50 m/min)')+'</p></div>';
+  }
+  // WHAT'S WORKING (#60) + WHAT NEEDS ATTENTION (#61)
+  const working=[],attention=[];
+  if(VALIDATION.checks.gpsReception.pass)working.push('GPS reception healthy');else attention.push('GPS reception poor — check antenna/placement');
+  if(VALIDATION.checks.sensorHealth.pass)working.push('Sensors calibrated correctly');else attention.push('Sensor health issue — recalibrate');
+  if(triMarker)working.push('Cell tower triangulation active');else attention.push('No cell tower fix — check tower DB');
+  if(ds.covered>=3)working.push('Directional coverage '+ds.covered+'/4 quadrants');else attention.push('Low directional coverage ('+ds.covered+'/4) — need towers in more directions');
+  if(ps.validated>10&&ps.avgError()<30)working.push('Predictor validated ('+ps.avgError().toFixed(0)+'m avg err)');else if(ps.validated<5)attention.push('Predictor needs more training data');
+  if(ss.score<20)working.push('Anti-spoof clean');else attention.push('Spoof score elevated: '+ss.score);
+  if(rf.status==='NORMAL')working.push('RF environment stable');else attention.push('RF anomaly detected: '+rf.status);
+  rpt+='<div class="card" style="border-color:#3dcc6e"><h2 style="color:#3dcc6e">WHAT\'S WORKING</h2>';
+  working.forEach(w=>{rpt+='<p style="color:#3dcc6e">✓ '+w+'</p>';});
+  if(!working.length)rpt+='<p style="color:#7a9bc0">Nothing confirmed working yet</p>';
+  rpt+='</div>';
+  rpt+='<div class="card" style="border-color:#f06060"><h2 style="color:#f06060">WHAT NEEDS ATTENTION</h2>';
+  attention.forEach(a=>{rpt+='<p style="color:#f06060">⚠ '+a+'</p>';});
+  if(!attention.length)rpt+='<p style="color:#3dcc6e">Everything looks good!</p>';
+  rpt+='</div>';
+  // RECOMMENDED NEXT ACTION (#63)
+  let nextAction='Run a driving test to generate real data.';
+  if(attention.length>0)nextAction='Fix: '+attention[0];
+  else if(dRate>50)nextAction='Improve GPS-denied accuracy — current drift '+dRate.toFixed(0)+'m/min is too high.';
+  else if(ps.validated<20)nextAction='Drive more with GPS ON to train the predictor (need 20+ validated predictions).';
+  else nextAction='Ready for GPS-denied drill — predictor is trained.';
+  rpt+='<div class="card" style="border-color:#A855F7"><h2 class="p">RECOMMENDED NEXT ACTION</h2>';
+  rpt+='<p style="font-size:12px;color:#dce6f5">'+nextAction+'</p></div>';
   // Summary
   rpt+='<div class="card" style="border-color:#3dcc6e"><h2 style="color:#3dcc6e">WHAT HAPPENED</h2>';
   rpt+='<p style="font-size:12px;line-height:2">'+
