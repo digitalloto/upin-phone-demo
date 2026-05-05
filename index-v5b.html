@@ -173,15 +173,20 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   <div style="background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:6px 8px;margin-bottom:6px">
     <div style="font-size:7px;font-weight:700;color:var(--cyan);letter-spacing:1px;margin-bottom:4px">ROUTE NAVIGATION</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:4px">
-      <input type="text" id="routeFrom" placeholder="From lat,lon (or tap map)" style="background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
-      <input type="text" id="routeTo" placeholder="To lat,lon (destination)" style="background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+      <input type="text" id="routeFrom" placeholder="From lat,lon" style="background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
+      <input type="text" id="routeTo" placeholder="To: address or lat,lon" style="background:var(--bg);border:1px solid var(--border);color:var(--tp);font-family:inherit;font-size:8px;padding:4px;border-radius:2px">
     </div>
+    <div style="display:flex;gap:4px;margin-bottom:4px">
+      <input type="text" id="destSearch" placeholder="Search destination (e.g. Chennai Airport, Marina Beach)" style="flex:1;background:var(--bg);border:1px solid var(--green);color:var(--tp);font-family:inherit;font-size:9px;padding:5px;border-radius:2px">
+      <button class="btn btn-green" onclick="V.searchDestination()" style="font-size:7px;padding:5px 10px;white-space:nowrap">SEARCH</button>
+    </div>
+    <div id="searchResults" style="font-size:8px;color:var(--td);max-height:60px;overflow-y:auto;margin-bottom:4px"></div>
     <div style="display:flex;gap:4px">
       <button class="btn btn-cyan" onclick="V.setRoute()" style="font-size:7px;flex:1">SET ROUTE</button>
       <button class="btn btn-green" onclick="V.useCurrentAsFrom()" style="font-size:7px;flex:1">USE GPS AS FROM</button>
       <button class="btn btn-dim" onclick="V.clearRoute()" style="font-size:7px;flex:1">CLEAR</button>
     </div>
-    <div id="routeStatus" style="font-size:7px;color:var(--td);margin-top:3px">No route set. During GPS denial, the system can follow a pre-set route.</div>
+    <div id="routeStatus" style="font-size:7px;color:var(--td);margin-top:3px">Search for a destination or enter lat,lon coordinates.</div>
   </div>
   <!-- Metrics -->
   <div class="row row3">
@@ -5556,6 +5561,26 @@ function toggleGpsDenied(){
     log('GPS DENIED MODE OFF — GPS restored','var(--green)');
   }
 }
+function searchDestination(){
+  const query=$('destSearch').value.trim();
+  if(!query){$('searchResults').textContent='Type a place name';return;}
+  $('searchResults').innerHTML='<span style="color:var(--amber)">Searching...</span>';
+  // Nominatim geocoding (free, no key, OpenStreetMap)
+  fetch('https://nominatim.openstreetmap.org/search?format=json&q='+encodeURIComponent(query)+'&limit=5&countrycodes=in')
+  .then(r=>r.json()).then(results=>{
+    if(!results.length){$('searchResults').textContent='No results for "'+query+'"';return;}
+    $('searchResults').innerHTML=results.map((r,i)=>{
+      return'<div style="padding:3px 0;border-bottom:1px solid var(--border);cursor:pointer;color:var(--cyan)" onclick="V.selectSearchResult('+r.lat+','+r.lon+')">'+
+        '<b>'+(i+1)+'.</b> '+r.display_name.substring(0,80)+
+        ' <span style="color:var(--td);font-size:7px">('+parseFloat(r.lat).toFixed(4)+','+parseFloat(r.lon).toFixed(4)+')</span></div>';
+    }).join('');
+  }).catch(e=>{$('searchResults').textContent='Search error: '+e.message;});
+}
+function selectSearchResult(lat,lon){
+  $('routeTo').value=lat.toFixed(6)+','+lon.toFixed(6);
+  $('searchResults').innerHTML='<span style="color:var(--green)">Selected: '+lat.toFixed(4)+','+lon.toFixed(4)+'</span>';
+  log('Destination selected: '+lat.toFixed(4)+','+lon.toFixed(4),'var(--green)');
+}
 function setRoute(){
   const fromStr=$('routeFrom').value.trim();
   const toStr=$('routeTo').value.trim();
@@ -5883,7 +5908,7 @@ function autoSaveV5bReport(reason){
   a.click();URL.revokeObjectURL(url);
   log('Report saved: '+a.download,'var(--green)');
 }
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,_getProfile};
 })();
 </script>
 </body>
