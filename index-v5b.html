@@ -125,6 +125,7 @@ body{font-family:'SF Mono','Consolas',monospace;background:var(--bg);color:var(-
   <div id="reportBody"></div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="towers-data.js"></script>
 <script>
 const GOOGLE_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
@@ -146,7 +147,11 @@ const cidPending=new Set();
 // GPS tracking
 let gpsPos=null;
 let gpsHistory=[];
-const GPS_HIST_MAX=60; // 60 positions for better velocity averaging
+const GPS_HIST_MAX=60;
+// Session tracking for reports
+let sessionStart=null;
+let sessionRoute=[]; // [{lat,lon,t,speed}] — full journey path
+let reportAutoSaved=false; // 60 positions for better velocity averaging
 
 // Tower distance tracking (learned from GPS)
 let towerDistances={};
@@ -635,6 +640,8 @@ if('geolocation' in navigator){
     gpsPos={lat:p.coords.latitude,lon:p.coords.longitude,speed:p.coords.speed||0,heading:p.coords.heading||0,acc:p.coords.accuracy,t:now};
     gpsHistory.push({...gpsPos});
     if(gpsHistory.length>GPS_HIST_MAX)gpsHistory.shift();
+    // Record full journey for report
+    sessionRoute.push({lat:gpsPos.lat,lon:gpsPos.lon,t:now,speed:gpsPos.speed||0});
 
     // ANTI-SPOOF: check this GPS reading against towers + IMU
     const triCheck=triMarker?{lat:triMarker.getLatLng().lat,lon:triMarker.getLatLng().lng,acc:triCircle?triCircle.getRadius():9999}:null;
@@ -1193,11 +1200,11 @@ function processBoard(d){
 // BLE
 function connectBLE(){
   if(!navigator.bluetooth){log('No BLE — use Chrome on laptop','var(--red)');return;}
-  if(bleDevice&&bleDevice.gatt.connected){bleDevice.gatt.disconnect();$('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';$('status').textContent='DISCONNECTED';return;}
+  if(bleDevice&&bleDevice.gatt.connected){autoSaveReport('Manual disconnect');bleDevice.gatt.disconnect();$('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';$('status').textContent='DISCONNECTED';return;}
   log('Requesting BLE...','var(--cyan)');
   $('bleBtn').textContent='CONNECTING...';
   navigator.bluetooth.requestDevice({filters:[{name:'UPIN-BLE'}],optionalServices:[BLE_SVC]})
-  .then(d=>{bleDevice=d;d.addEventListener('gattserverdisconnected',()=>{$('status').textContent='DISCONNECTED';$('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';});return d.gatt.connect();})
+  .then(d=>{bleDevice=d;d.addEventListener('gattserverdisconnected',()=>{$('status').textContent='DISCONNECTED';$('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';autoSaveReport('BLE disconnected');});return d.gatt.connect();})
   .then(s=>s.getPrimaryService(BLE_SVC))
   .then(s=>s.getCharacteristic(BLE_TX))
   .then(c=>{bleChar=c;return c.startNotifications();})
@@ -1206,7 +1213,8 @@ function connectBLE(){
     $('status').textContent='CONNECTED — RECEIVING';
     $('bleBtn').textContent='BLE CONNECTED — TAP TO DISCONNECT';
     $('bleBtn').className='btn-hw ok';
-    log('BLE connected!','var(--green)');
+    sessionStart=performance.now();sessionRoute=[];reportAutoSaved=false;
+    log('BLE connected! Session started.','var(--green)');
   }).catch(e=>{
     log('BLE error: '+e.message,'var(--red)');
     $('bleBtn').textContent='CONNECT BOARD VIA BLE';$('bleBtn').className='btn-hw';
@@ -1234,128 +1242,143 @@ const cachedCount=Object.keys(cidCache).filter(k=>cidCache[k]&&cidCache[k].lat&&
 // ═══════════════════════════════════════
 // REPORT GENERATION
 // ═══════════════════════════════════════
-function generateReport(){
+// Auto-save report on BLE disconnect or manual trigger
+function autoSaveReport(reason){
+  if(reportAutoSaved||!sessionStart)return;
+  reportAutoSaved=true;
+  log('Auto-saving report ('+reason+')...','var(--purple)');
+  generateReport(true); // true = auto-download
+}
+
+function generateReport(autoDownload){
   const now=new Date();
   const ds=DIRECTIONAL.stats();
   const ss=ANTISPOOF.stats();
   const rf=RF_FIELD.stats();
   const ps=PREDICTOR;
+  const dur=sessionStart?(performance.now()-sessionStart)/1000:0;
+  const durStr=Math.floor(dur/60)+'m '+Math.floor(dur%60)+'s';
 
-  // Capture the current map view as an embedded mini-map
-  const mapEl=document.getElementById('map');
-  const center=map.getCenter();
-  const zoom=map.getZoom();
-  // Use a static map image from OSM
-  const mapImg='https://staticmap.openstreetmap.de/staticmap.php?center='+center.lat+','+center.lng+'&zoom='+zoom+'&size=600x300&maptype=osmarenderer';
-  $('mapSnapshot').innerHTML='<img src="'+mapImg+'" style="width:100%;height:100%;object-fit:cover" onerror="this.parentNode.textContent=\'Map image unavailable — use SAVE MAP IMAGE for screenshot\'">';
+  // Calculate journey stats
+  let totalDist=0;
+  for(let i=1;i<sessionRoute.length;i++)totalDist+=hav(sessionRoute[i-1],sessionRoute[i]);
+  const avgSpeed=sessionRoute.length>0?sessionRoute.reduce((s,p)=>s+p.speed,0)/sessionRoute.length*3.6:0;
+  const maxSpeed=sessionRoute.length>0?Math.max(...sessionRoute.map(p=>p.speed))*3.6:0;
+
+  // Capture map screenshot
+  if(typeof html2canvas!=='undefined'){
+    try{
+      html2canvas(document.getElementById('map'),{useCORS:true,allowTaint:true}).then(canvas=>{
+        $('mapSnapshot').innerHTML='';
+        $('mapSnapshot').appendChild(canvas);
+        canvas.style.width='100%';canvas.style.height='100%';canvas.style.objectFit='contain';
+        if(autoDownload)downloadReport(canvas.toDataURL('image/png'));
+      }).catch(()=>{
+        setStaticMap();
+        if(autoDownload)downloadReport(null);
+      });
+    }catch(e){setStaticMap();if(autoDownload)downloadReport(null);}
+  }else{setStaticMap();if(autoDownload)downloadReport(null);}
+
+  function setStaticMap(){
+    const c=map.getCenter();const z=map.getZoom();
+    $('mapSnapshot').innerHTML='<img src="https://staticmap.openstreetmap.de/staticmap.php?center='+c.lat+','+c.lng+'&zoom='+z+'&size=600x300&maptype=osmarenderer" style="width:100%;height:100%;object-fit:cover">';
+  }
 
   let html='';
 
-  // Summary card
-  html+='<div style="background:var(--panel);border:1px solid var(--green);border-radius:3px;padding:10px;margin-bottom:8px">'+
-    '<div style="font-size:10px;font-weight:700;color:var(--green);letter-spacing:2px;margin-bottom:6px">SUMMARY</div>'+
-    '<div style="font-size:11px;color:var(--tp);line-height:1.8">'+
-    'Report generated: <b>'+now.toLocaleString()+'</b><br>'+
-    (gpsPos?'GPS Position: <b style="color:var(--cyan)">'+gpsPos.lat.toFixed(6)+', '+gpsPos.lon.toFixed(6)+'</b> (±'+Math.round(gpsPos.acc||0)+'m)<br>':'No GPS fix<br>')+
-    'Speed: <b>'+((gpsPos?gpsPos.speed:0)*3.6).toFixed(0)+' km/h</b><br>'+
-    'Cell Towers: <b style="color:var(--amber)">7 detected, '+Object.keys(towerDistances).length+' with known positions</b><br>'+
-    'Triangulation: <b style="color:'+(triMarker?'var(--green)':'var(--red)')+'">'+( triMarker?'FIX':'NO FIX')+'</b>'+
+  // SIMPLE PLAIN-LANGUAGE SUMMARY
+  html+='<div style="background:var(--panel);border:2px solid var(--green);border-radius:3px;padding:12px;margin-bottom:8px">'+
+    '<div style="font-size:12px;font-weight:700;color:var(--green);letter-spacing:2px;margin-bottom:8px">WHAT HAPPENED</div>'+
+    '<div style="font-size:12px;color:var(--tp);line-height:2">'+
+    'You '+(totalDist>100?'drove':'stayed')+' for <b style="color:var(--cyan)">'+durStr+'</b>'+
+    (totalDist>100?' covering <b style="color:var(--cyan)">'+(totalDist>1000?(totalDist/1000).toFixed(1)+'km':Math.round(totalDist)+'m')+'</b>':'')+
+    (avgSpeed>1?' at avg <b style="color:var(--cyan)">'+avgSpeed.toFixed(0)+' km/h</b> (max '+maxSpeed.toFixed(0)+' km/h)':' (stationary)')+'.<br>'+
+    'The board detected <b style="color:var(--amber)">'+Object.keys(towerDistances).length+' cell towers</b> with known positions.<br>'+
+    'Cell triangulation was <b style="color:'+(triMarker?'var(--green)':'var(--red)')+'">'+( triMarker?'ACTIVE — position confirmed by tower geometry':'NOT AVAILABLE')+'</b>.<br>'+
+    'Directional coverage: <b>'+ds.covered+'/4 quadrants</b> ('+(['N','S','E','W'].filter(d=>ds.quadrants[d]>0).join(',')||'none')+').<br>'+
+    'Predictor validated <b>'+ps.validated+'</b> predictions with avg error <b style="color:'+(ps.avgError()<30?'var(--green)':ps.avgError()<100?'var(--amber)':'var(--red)')+'">'+ps.avgError().toFixed(1)+'m</b>. Tower confirmations: <b style="color:var(--green)">'+ps.towerConfirmations+'</b>.<br>'+
+    'Anti-spoof: <b style="color:'+(ss.score>40?'var(--red)':'var(--green)')+'">'+(ss.score>40?'SPOOF DETECTED (score:'+ss.score+')':'CLEAN (score:'+ss.score+')')+'</b>. RF field: <b style="color:'+(rf.status==='NORMAL'?'var(--green)':'var(--red)')+'">'+rf.status+'</b>.'+
     '</div></div>';
 
-  // Tower details
+  // DETAILED STATS
+  html+='<div style="background:var(--panel);border:1px solid var(--cyan);border-radius:3px;padding:10px;margin-bottom:8px">'+
+    '<div style="font-size:10px;font-weight:700;color:var(--cyan);letter-spacing:2px;margin-bottom:6px">SESSION DETAILS</div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;color:var(--tp)">'+
+    '<div>Duration: <b>'+durStr+'</b></div>'+
+    '<div>Distance: <b>'+(totalDist>1000?(totalDist/1000).toFixed(1)+'km':Math.round(totalDist)+'m')+'</b></div>'+
+    '<div>GPS Points: <b>'+sessionRoute.length+'</b></div>'+
+    '<div>Avg Speed: <b>'+avgSpeed.toFixed(0)+' km/h</b></div>'+
+    '<div>Max Speed: <b>'+maxSpeed.toFixed(0)+' km/h</b></div>'+
+    '<div>Position: <b>'+(gpsPos?gpsPos.lat.toFixed(5)+','+gpsPos.lon.toFixed(5):'--')+'</b></div>'+
+    '</div></div>';
+
+  // Tower table
   html+='<div style="background:var(--panel);border:1px solid var(--amber);border-radius:3px;padding:10px;margin-bottom:8px">'+
-    '<div style="font-size:10px;font-weight:700;color:var(--amber);letter-spacing:2px;margin-bottom:6px">CELL TOWERS</div>';
+    '<div style="font-size:10px;font-weight:700;color:var(--amber);letter-spacing:2px;margin-bottom:6px">CELL TOWERS ('+Object.keys(towerDistances).length+')</div>';
   Object.entries(towerDistances).forEach(([cid,d])=>{
-    const col=d.realDist<500?'var(--green)':d.realDist<2000?'var(--cyan)':'var(--amber)';
+    const col=d.realDist<500?'#3dcc6e':d.realDist<2000?'#4da6ff':'#e8a832';
     html+='<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)">'+
-      '<span>CID: <b>'+cid+'</b></span>'+
-      '<span style="color:'+col+'"><b>'+d.realDist+'m</b> / '+d.rssi+'dBm</span>'+
-      '<span style="font-size:7px;color:var(--td)">'+d.lat.toFixed(4)+', '+d.lon.toFixed(4)+'</span></div>';
+      '<span>CID:<b>'+cid+'</b></span><span style="color:'+col+'"><b>'+d.realDist+'m</b></span><span>'+d.rssi+'dBm</span><span style="font-size:7px;color:var(--td)">'+d.lat.toFixed(4)+','+d.lon.toFixed(4)+'</span></div>';
   });
   html+='</div>';
 
-  // Directional geometry
+  // Directional
   html+='<div style="background:var(--panel);border:1px solid #ff4081;border-radius:3px;padding:10px;margin-bottom:8px">'+
-    '<div style="font-size:10px;font-weight:700;color:#ff4081;letter-spacing:2px;margin-bottom:6px">DIRECTIONAL MULTILATERATION</div>'+
-    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
-    'Quadrant Coverage: <b>'+ds.covered+'/4</b> (N:'+ds.quadrants.N+' S:'+ds.quadrants.S+' E:'+ds.quadrants.E+' W:'+ds.quadrants.W+')<br>'+
-    'Predictions Verified: <b>'+ds.verified+'</b><br>'+
-    'Confidence: <b style="color:'+(ds.confidence>70?'var(--green)':ds.confidence>40?'var(--amber)':'var(--red)')+'">'+ds.confidence+'%</b><br>'+
-    'Per-tower Distance Biases Learned: <b>'+ds.biases+'</b>'+
-    '</div>';
-  if(ds.recentVerify.length){
-    html+='<div style="margin-top:6px;font-size:9px">';
-    ds.recentVerify.forEach(v=>{
-      const col=v.posErr<30?'var(--green)':v.posErr<100?'var(--amber)':'var(--red)';
-      html+='<span style="background:var(--bg);padding:2px 6px;margin:2px;border-radius:2px;color:'+col+'">'+v.label+': '+v.posErr+'m</span>';
-    });
-    html+='</div>';
-  }
+    '<div style="font-size:10px;font-weight:700;color:#ff4081;letter-spacing:2px;margin-bottom:6px">DIRECTIONAL FIX</div>'+
+    '<div style="font-size:10px;color:var(--tp);line-height:1.6">Quadrants: '+ds.covered+'/4 | Verified: '+ds.verified+' | Confidence: <b>'+ds.confidence+'%</b> | Biases: '+ds.biases+'</div>';
+  if(ds.recentVerify.length)html+='<div style="font-size:9px;margin-top:4px">'+ds.recentVerify.map(v=>'<span style="color:'+(v.posErr<30?'#3dcc6e':v.posErr<100?'#e8a832':'#f06060')+'">'+v.label+':'+v.posErr+'m</span> ').join('')+'</div>';
   html+='</div>';
 
-  // Predictor stats
-  html+='<div style="background:var(--panel);border:1px solid var(--purple);border-radius:3px;padding:10px;margin-bottom:8px">'+
-    '<div style="font-size:10px;font-weight:700;color:var(--purple);letter-spacing:2px;margin-bottom:6px">FLIGHT PATH PREDICTOR</div>'+
-    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
-    'Validated Predictions: <b>'+ps.validated+'</b><br>'+
-    'Average Prediction Error: <b>'+ps.avgError().toFixed(1)+'m</b><br>'+
-    'Tower Confirmations: <b style="color:var(--green)">'+ps.towerConfirmations+'</b> / Denials: <b style="color:var(--red)">'+ps.towerDenials+'</b><br>'+
-    'Confidence: <b style="color:'+(ps.confidence()>0.7?'var(--green)':ps.confidence()>0.4?'var(--amber)':'var(--red)')+'">'+Math.round(ps.confidence()*100)+'%</b><br>'+
-    'Learned Heading Bias: <b>'+ps.headingBias.toFixed(1)+'°</b><br>'+
-    'Learned Speed Bias: <b>'+ps.speedBias.toFixed(3)+'×</b>'+
-    '</div></div>';
+  // Predictor + Anti-spoof + RF
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">'+
+    '<div style="background:var(--panel);border:1px solid var(--purple);border-radius:3px;padding:8px"><div style="font-size:8px;font-weight:700;color:var(--purple);margin-bottom:4px">PREDICTOR</div><div style="font-size:9px;color:var(--tp)">Validated: '+ps.validated+'<br>Avg err: '+ps.avgError().toFixed(1)+'m<br>Conf: '+Math.round(ps.confidence()*100)+'%<br>Hdg bias: '+ps.headingBias.toFixed(1)+'°<br>Spd bias: '+ps.speedBias.toFixed(2)+'×</div></div>'+
+    '<div style="background:var(--panel);border:1px solid var(--red);border-radius:3px;padding:8px"><div style="font-size:8px;font-weight:700;color:var(--red);margin-bottom:4px">ANTI-SPOOF</div><div style="font-size:9px;color:var(--tp)">Score: '+ss.score+'/100<br>Checks: '+ss.checks+'<br>Rejected: '+ss.rejected+'<br>Jumps: '+ss.jumps+'<br>Mismatches: '+(ss.towerMismatch+ss.imuMismatch)+'</div></div>'+
+    '<div style="background:var(--panel);border:1px solid var(--amber);border-radius:3px;padding:8px"><div style="font-size:8px;font-weight:700;color:var(--amber);margin-bottom:4px">RF FIELD</div><div style="font-size:9px;color:var(--tp)">Status: '+rf.status+'<br>Baseline: '+rf.baseline.rssiAvg.toFixed(0)+'dBm<br>Learning: '+rf.learning+'%<br>Alerts: '+rf.totalAlerts+'</div></div>'+
+  '</div>';
 
-  // Anti-spoof
-  html+='<div style="background:var(--panel);border:1px solid var(--red);border-radius:3px;padding:10px;margin-bottom:8px">'+
-    '<div style="font-size:10px;font-weight:700;color:var(--red);letter-spacing:2px;margin-bottom:6px">ANTI-SPOOF STATUS</div>'+
-    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
-    'Spoof Score: <b style="color:'+(ss.score>40?'var(--red)':ss.score>20?'var(--amber)':'var(--green)')+'">'+ss.score+'/100</b><br>'+
-    'Total Checks: <b>'+ss.checks+'</b> | Rejected: <b>'+ss.rejected+'</b><br>'+
-    'Teleport Jumps: <b>'+ss.jumps+'</b> | Tower Mismatches: <b>'+ss.towerMismatch+'</b> | IMU Mismatches: <b>'+ss.imuMismatch+'</b>'+
-    '</div></div>';
-
-  // RF Field
-  const rfCol=rf.status==='HOSTILE'?'var(--red)':rf.status==='ALERT'?'var(--amber)':'var(--green)';
-  html+='<div style="background:var(--panel);border:1px solid '+rfCol.replace('var(','').replace(')','').replace('--','#')+';border-radius:3px;padding:10px;margin-bottom:8px">'+
-    '<div style="font-size:10px;font-weight:700;color:var(--amber);letter-spacing:2px;margin-bottom:6px">RF FIELD MONITOR</div>'+
-    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
-    'Field Status: <b style="color:'+rfCol+'">'+rf.status+'</b><br>'+
-    'Baseline: avg <b>'+rf.baseline.rssiAvg.toFixed(0)+'dBm</b> ±'+rf.baseline.rssiStd.toFixed(0)+' | '+rf.baseline.towerCount+' towers<br>'+
-    'Learning: <b>'+rf.learning+'%</b> | Total Alerts: <b>'+rf.totalAlerts+'</b>'+
-    '</div></div>';
-
-  // Map matching
+  // Map matching + Route
   html+='<div style="background:var(--panel);border:1px solid var(--green);border-radius:3px;padding:10px;margin-bottom:8px">'+
-    '<div style="font-size:10px;font-weight:700;color:var(--green);letter-spacing:2px;margin-bottom:6px">MAP MATCHING</div>'+
-    '<div style="font-size:10px;color:var(--tp);line-height:1.8">'+
-    'Last Road: <b>'+(MAP_MATCH.lastSnap?MAP_MATCH.lastSnap.road:'--')+'</b><br>'+
-    'Snap Distance: <b>'+(MAP_MATCH.lastSnap?MAP_MATCH.lastSnap.dist.toFixed(0)+'m':'--')+'</b><br>'+
-    'Snap History: <b>'+MAP_MATCH.snapHistory.length+'</b> positions'+
-    '</div></div>';
-
-  // Route info
-  if(routeSteps.length>0){
-    html+='<div style="background:var(--panel);border:1px solid var(--red);border-radius:3px;padding:10px;margin-bottom:8px">'+
-      '<div style="font-size:10px;font-weight:700;color:var(--red);letter-spacing:2px;margin-bottom:6px">DESTINATION ROUTE</div>'+
-      '<div style="font-size:10px;color:var(--tp)">'+$('routeInfo').innerHTML+'</div></div>';
-  }
+    '<div style="font-size:10px;font-weight:700;color:var(--green);letter-spacing:2px;margin-bottom:6px">MAP MATCHING & ROUTE</div>'+
+    '<div style="font-size:10px;color:var(--tp)">Road: <b>'+(MAP_MATCH.lastSnap?MAP_MATCH.lastSnap.road:'--')+'</b> ('+( MAP_MATCH.lastSnap?MAP_MATCH.lastSnap.dist.toFixed(0)+'m off':'--')+')<br>'+
+    (routeSteps.length>0?$('routeInfo').textContent:'No destination set')+'</div></div>';
 
   $('reportBody').innerHTML=html;
   $('reportOverlay').style.display='block';
 }
 
+function downloadReport(mapImageData){
+  // Build HTML report file and auto-download
+  const reportHtml='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>UPIN v5b Report — '+new Date().toLocaleString()+'</title>'+
+    '<style>body{font-family:monospace;background:#080c14;color:#dce6f5;padding:20px;max-width:800px;margin:0 auto}'+
+    'h1{color:#e8a832;font-size:16px;letter-spacing:3px}'+
+    '.card{background:#0f1520;border:1px solid #1a2438;border-radius:4px;padding:12px;margin:8px 0}'+
+    'b{color:#4da6ff}img{max-width:100%;border-radius:4px;margin:8px 0}</style></head><body>'+
+    '<h1>UPIN v5b FIELD TEST REPORT</h1>'+
+    '<p style="color:#7a9bc0">Generated: '+new Date().toLocaleString()+'</p>'+
+    (mapImageData?'<img src="'+mapImageData+'" alt="Map">':'<p style="color:#e8a832">Map screenshot not available</p>')+
+    $('reportBody').innerHTML+
+    '</body></html>';
+
+  const blob=new Blob([reportHtml],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='upin-v5b-report-'+new Date().toISOString().slice(0,19).replace(/[T:]/g,'-')+'.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  log('Report auto-saved: '+a.download,'var(--green)');
+}
+
 function captureMap(){
-  // Use html2canvas if available, otherwise prompt screenshot
   if(typeof html2canvas!=='undefined'){
-    html2canvas(document.getElementById('map')).then(canvas=>{
+    html2canvas(document.getElementById('map'),{useCORS:true,allowTaint:true}).then(canvas=>{
       const a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='upin-v5b-map-'+Date.now()+'.png';a.click();
+      log('Map screenshot saved','var(--green)');
     });
   }else{
-    // Fallback: open static map in new tab
     const c=map.getCenter();const z=map.getZoom();
-    const url='https://staticmap.openstreetmap.de/staticmap.php?center='+c.lat+','+c.lng+'&zoom='+z+'&size=1200x800&maptype=osmarenderer';
-    window.open(url,'_blank');
-    log('Map image opened in new tab — save it manually','var(--cyan)');
+    window.open('https://staticmap.openstreetmap.de/staticmap.php?center='+c.lat+','+c.lng+'&zoom='+z+'&size=1200x800&maptype=osmarenderer','_blank');
   }
 }
 
