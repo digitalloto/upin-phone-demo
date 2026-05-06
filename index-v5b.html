@@ -241,6 +241,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
       <button class="btn btn-red" id="bSpoof" onclick="V.spoof()">Spoof GPS</button>
     </div>
     <button class="btn btn-dim" onclick="V.endTest()" style="width:100%;margin-top:4px">End Test / Report</button>
+    <button class="btn btn-purple" onclick="V.downloadReport()" style="width:100%;margin-top:4px;background:rgba(168,85,247,.1);color:#A855F7;border:1px solid #A855F7">DOWNLOAD REPORT</button>
   </div>
   <div id="b3" class="btns" style="display:none">
     <button class="btn btn-green" onclick="V.resurface()">Resurface</button>
@@ -5799,6 +5800,10 @@ window.addEventListener('load',()=>{
 // AUTO-SAVE REPORT ON DISCONNECT/END
 // ═══════════════════════════════════════
 let v5bReportSaved=false;
+function downloadReport(){
+  v5bReportSaved=false; // allow re-download
+  autoSaveV5bReport('Manual download');
+}
 function autoSaveV5bReport(reason){
   if(v5bReportSaved)return;
   v5bReportSaved=true;
@@ -5908,7 +5913,7 @@ function autoSaveV5bReport(reason){
   a.click();URL.revokeObjectURL(url);
   log('Report saved: '+a.download,'var(--green)');
 }
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,downloadReport,_getProfile};
 })();
 </script>
 </body>

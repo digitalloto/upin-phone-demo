@@ -241,6 +241,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
       <button class="btn btn-red" id="bSpoof" onclick="V.spoof()">Spoof GPS</button>
     </div>
     <button class="btn btn-dim" onclick="V.endTest()" style="width:100%;margin-top:4px">End Test / Report</button>
+    <button onclick="V.downloadReport()" style="width:100%;margin-top:4px;background:rgba(168,85,247,.1);color:#A855F7;border:1px solid #A855F7;padding:10px;font-family:inherit;font-size:8px;font-weight:700;letter-spacing:1px;cursor:pointer;border-radius:2px">DOWNLOAD REPORT</button>
   </div>
   <div id="b3" class="btns" style="display:none">
     <button class="btn btn-green" onclick="V.resurface()">Resurface</button>
@@ -1042,6 +1043,8 @@ let bleReconnectAttempts=0;
 function onBLEDisconnect(){
   const wasBLE=(boardSource==='ble');
   if(wasBLE){boardConnected=false;useBoard=false;boardSource='none';}
+  // Auto-save report on disconnect
+  try{autoSaveV5Report('BLE disconnected');}catch(e){}
   updateBoardUI();
   if(wasBLE){initPhoneSensors();initPhoneGPS();}
   // Auto-reconnect: try 3 times with 2s delay
@@ -4901,6 +4904,78 @@ function resurface(){
   log('RESURFACE #'+drills.length+': drift='+drift.toFixed(1)+'m ['+grade+'] best='+fRes[0].name+' | PUE: '+ps.enforced+'/'+ps.total+' constrained ('+ps.pct+'%)','var(--purple)');
   CAL.learn();
 }
+// ═══════════════════════════════════════
+// DOWNLOADABLE REPORT
+// ═══════════════════════════════════════
+let v5ReportSaved=false;
+function downloadReport(){
+  v5ReportSaved=false;
+  autoSaveV5Report('Manual download');
+}
+function autoSaveV5Report(reason){
+  if(v5ReportSaved)return;v5ReportSaved=true;
+  const now=new Date();const dur=startTime?(performance.now()-startTime)/1000:0;
+  const durStr=Math.floor(dur/60)+'m '+Math.floor(dur%60)+'s';
+  const bi=bestFormulaIdx();
+  const ranked=[...F].map((f,i)=>({name:f.name,err:f.errAvg,corr:f.corrCount,spd:f.speedScale})).sort((a,b)=>a.err-b.err);
+  let rpt='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>UPIN v5 Report '+now.toLocaleString()+'</title>';
+  rpt+='<style>body{font-family:monospace;background:#080c14;color:#dce6f5;padding:20px;max-width:900px;margin:0 auto}';
+  rpt+='h1{color:#e8a832;font-size:16px;letter-spacing:3px}h2{color:#4da6ff;font-size:12px;letter-spacing:2px;margin-top:16px}';
+  rpt+='.card{background:#0f1520;border:1px solid #1a2438;border-radius:4px;padding:12px;margin:8px 0}';
+  rpt+='table{width:100%;border-collapse:collapse;font-size:10px}td,th{padding:4px 6px;border-bottom:1px solid #1a2438;text-align:left}';
+  rpt+='th{color:#7a9bc0;font-size:8px;text-transform:uppercase;letter-spacing:1px}';
+  rpt+='.g{color:#3dcc6e}.r{color:#f06060}.a{color:#e8a832}.c{color:#4da6ff}.p{color:#A855F7}b{color:#4da6ff}</style></head><body>';
+  rpt+='<h1>UPIN v5 FIELD TEST REPORT</h1>';
+  rpt+='<p style="color:#7a9bc0">'+now.toLocaleString()+' | '+durStr+' | '+reason+'</p>';
+  // SIMPLE SUMMARY
+  rpt+='<div class="card" style="border-color:#3dcc6e"><h2 style="color:#3dcc6e">WHAT HAPPENED</h2>';
+  rpt+='<p style="font-size:13px;line-height:2;color:#dce6f5">';
+  rpt+=(totalDist>100?'Drove <b>'+(totalDist>1000?(totalDist/1000).toFixed(1)+'km':Math.round(totalDist)+'m')+'</b> in <b>'+durStr+'</b>.':'Stationary test for <b>'+durStr+'</b>.');
+  rpt+=' Data source: <b>'+(boardConnected?boardSource.toUpperCase():'Phone')+'</b>.';
+  rpt+=' GPS: <b>'+(gpsTrue?gpsSource:'no fix')+'</b>.';
+  rpt+=' Cell towers: <b>'+(cellTowers4G+cellTowers2G)+'</b> detected.';
+  rpt+=' Samples: <b>'+DATA.count()+'</b>.<br>';
+  rpt+='Best formula: <b class="g">'+F[bi].name+'</b> ('+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m avg':'no data')+').';
+  rpt+=' Drills: <b>'+drills.length+'</b>'+(drills.length?' (avg drift: '+drills.reduce((s,d)=>s+d.driftM,0)/drills.length|0+'m)':'.')+'.';
+  rpt+=' Predictor: <b>'+Math.round(PREDICTOR.confidence()*100)+'%</b> confidence.';
+  rpt+=' Anti-spoof: <b class="'+(ANTISPOOF.spoofScore>40?'r':'g')+'">'+Math.round(ANTISPOOF.spoofScore)+'/100</b>.';
+  rpt+=' RF: <b>'+RF_FIELD.fieldStatus+'</b>.';
+  rpt+='</p></div>';
+  // TOP 10
+  rpt+='<div class="card"><h2>TOP 10 FORMULAS</h2><table><tr><th>#</th><th>Formula</th><th>Error</th><th>Corrections</th><th>Speed Scale</th></tr>';
+  ranked.slice(0,10).forEach((f,i)=>{
+    const col=f.err<5?'g':f.err<15?'c':f.err<50?'a':'r';
+    rpt+='<tr><td>'+(i+1)+'</td><td><b>'+f.name+'</b></td><td class="'+col+'">'+(f.err<999?f.err.toFixed(1)+'m':'--')+'</td><td>'+f.corr+'</td><td>'+f.spd.toFixed(2)+'×</td></tr>';
+  });
+  rpt+='</table></div>';
+  // ALL FORMULAS
+  rpt+='<div class="card"><h2>ALL '+F.length+' FORMULAS</h2><table><tr><th>#</th><th>Formula</th><th>Error</th><th>Corr</th></tr>';
+  ranked.forEach((f,i)=>{rpt+='<tr><td>'+(i+1)+'</td><td>'+f.name+'</td><td>'+(f.err<999?f.err.toFixed(1)+'m':'--')+'</td><td>'+f.corr+'</td></tr>';});
+  rpt+='</table></div>';
+  // DRILL RESULTS
+  if(drills.length){
+    rpt+='<div class="card"><h2 class="a">GPS DENIAL DRILLS ('+drills.length+')</h2><table><tr><th>#</th><th>Type</th><th>Duration</th><th>Drift</th><th>Grade</th><th>Best Formula</th></tr>';
+    drills.forEach((d,i)=>{
+      rpt+='<tr><td>'+(i+1)+'</td><td>'+d.type+'</td><td>'+Math.round(d.blindSec)+'s</td><td class="'+(d.driftM<20?'g':'r')+'">'+d.driftM.toFixed(1)+'m</td><td>'+d.grade+'</td><td>'+(d.formulaResults?d.formulaResults[0].name:'--')+'</td></tr>';
+    });
+    rpt+='</table></div>';
+  }
+  // SYSTEMS STATUS
+  rpt+='<div class="card"><h2 class="p">SYSTEM STATUS</h2>';
+  rpt+='<p>Predictor: '+PREDICTOR.validated+' validated, '+PREDICTOR.avgError().toFixed(1)+'m avg err, hdg bias '+PREDICTOR.headingBias.toFixed(1)+'°, spd bias '+PREDICTOR.speedBias.toFixed(2)+'×</p>';
+  rpt+='<p>Anti-Spoof: score '+Math.round(ANTISPOOF.spoofScore)+', '+ANTISPOOF.totalChecks+' checks, '+ANTISPOOF.rejected+' rejected</p>';
+  rpt+='<p>RF Field: '+RF_FIELD.fieldStatus+', '+RF_FIELD.alerts.length+' alerts</p>';
+  rpt+='<p>Towers: '+(cellTowers4G+cellTowers2G)+' detected, '+Object.keys(towerDistances||{}).length+' positioned</p>';
+  rpt+='<p>Calibration: accelScale='+CAL.accelScale.toFixed(3)+' gyroScale='+CAL.gyroScale.toFixed(3)+' compassOff='+CAL.compassOff.toFixed(1)+'° speedMult='+CAL.speedMult.toFixed(3)+'</p>';
+  rpt+='</div></body></html>';
+  const blob=new Blob([rpt],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;
+  a.download='upin-v5-report-'+now.toISOString().slice(0,19).replace(/[T:]/g,'-')+'.html';
+  a.click();URL.revokeObjectURL(url);
+  log('Report downloaded: '+a.download,'var(--green)');
+}
+
 function endTest(){
   if(alertIv)clearInterval(alertIv);clearInterval(tickIv);
   if(phase==='jammed'||phase==='spoofed')resurface();
@@ -4909,6 +4984,8 @@ function endTest(){
   try{PROFILES.saveProfile();}catch(e){}
   try{const n=saveTowerDB();if(n>0)log('Saved '+n+' discovered towers to DB','var(--green)');}catch(e){}
   showReport(dur);
+  // Auto-download report on every test end
+  try{autoSaveV5Report('Test ended');}catch(e){}
 }
 
 function showReport(dur){
@@ -5650,7 +5727,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,downloadReport,_getProfile};
 })();
 </script>
 </body>
