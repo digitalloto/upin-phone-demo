@@ -4332,6 +4332,11 @@ function tick(){
     if(uiFrame%5===0&&MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
     if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
+    // Frozen GPS + Cross-check + Drift
+    const ae=Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81);
+    if(FROZEN_GPS.check(gpsSys,ae)){log('GPS FROZEN — switching to tower tri','var(--red)');gpsSys=null;}
+    CROSS_CHECK.update(gpsTrue,UTIN.predict()?{lat:UTIN.predict().lat,lon:UTIN.predict().lon}:null,drPos);
+    if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue)trackDrift(drPos,gpsTrue);
     // GPS-MEASURED RADIUS LAYER: draw exact circles from each tower through GPS position
     if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=='undefined'&&uiFrame%5===0){
       gpsRadiusCircles.forEach(c=>{try{map.removeLayer(c);}catch(e){}});
@@ -4800,6 +4805,62 @@ const DIRECTIONAL={
   stats(){const qc={N:this.quadrants.N.length,S:this.quadrants.S.length,E:this.quadrants.E.length,W:this.quadrants.W.length};return{quadrants:qc,covered:Object.values(qc).filter(v=>v>0).length,geometry:this.bestGeometry.length,verified:this.verified,confidence:Math.round(this.confidence),recentVerify:this.verifyErrors.slice(-5),biases:Object.keys(this.distBias).length};}
 };
 let dirMarkers=[],dirLines=[];
+
+// VERSION STAMP
+const UPIN_VERSION='v5-2026.05.07';
+
+// FROZEN GPS DETECTION
+const FROZEN_GPS={
+  lastPos:null,lastChangeTime:0,frozen:false,
+  check(gps,accelEnergy){
+    if(!gps||!gps.lat)return false;
+    const now=performance.now();
+    if(this.lastPos&&Math.abs(gps.lat-this.lastPos.lat)<0.000001&&Math.abs(gps.lon-this.lastPos.lon)<0.000001){
+      if(accelEnergy>0.5&&(now-this.lastChangeTime)/1000>30){this.frozen=true;return true;}
+    }else{this.lastPos={lat:gps.lat,lon:gps.lon};this.lastChangeTime=now;this.frozen=false;}
+    return false;
+  }
+};
+
+// POSITION CROSS-CHECK
+const CROSS_CHECK={
+  gpsPos:null,triPos:null,upinPos:null,agreement:'UNKNOWN',
+  distances:{gpsVsTri:0,gpsVsUpin:0,triVsUpin:0},
+  update(gps,tri,upin){
+    this.gpsPos=gps;this.triPos=tri;this.upinPos=upin;
+    const d1=(gps&&tri)?hav(gps,tri):9999;const d2=(gps&&upin)?hav(gps,upin):9999;const d3=(tri&&upin)?hav(tri,upin):9999;
+    this.distances={gpsVsTri:Math.round(d1),gpsVsUpin:Math.round(d2),triVsUpin:Math.round(d3)};
+    const maxD=Math.max(d1,d2,d3);
+    if(maxD<100)this.agreement='ALL_AGREE';else if(maxD<500)this.agreement='MINOR_DISAGREE';
+    else if(maxD<1000)this.agreement='MAJOR_DISAGREE';else this.agreement='REJECT';
+  },
+  color(){return this.agreement==='ALL_AGREE'?'var(--green)':this.agreement==='MINOR_DISAGREE'?'var(--amber)':'var(--red)';}
+};
+
+// SESSION VALIDATION
+const VALIDATION={
+  checks:{gpsReception:{pass:false,detail:''},motionSufficient:{pass:false,detail:''},crossCheck:{pass:false,detail:''},towerSanity:{pass:false,detail:''},sensorHealth:{pass:false,detail:''}},
+  reliable:false,
+  run(){
+    const gpsCount=DATA.samples.filter(s=>s.lat>6).length;const gpsPct=DATA.count()>0?Math.round(gpsCount/DATA.count()*100):0;
+    this.checks.gpsReception={pass:gpsPct>70,detail:gpsPct+'% GPS'};
+    const moving=DATA.samples.filter(s=>s.speed>1.4).length;const movePct=DATA.count()>0?Math.round(moving/DATA.count()*100):0;
+    this.checks.motionSufficient={pass:totalDist>1000&&movePct>30,detail:Math.round(totalDist)+'m, '+movePct+'% moving'};
+    this.checks.crossCheck={pass:CROSS_CHECK.agreement==='ALL_AGREE'||CROSS_CHECK.agreement==='MINOR_DISAGREE',detail:CROSS_CHECK.agreement};
+    const uniqueDists=new Set(Object.values(towerDistances).map(d=>d.realDist));
+    this.checks.towerSanity={pass:uniqueDists.size>=2||Object.keys(towerDistances).length===0,detail:Object.keys(towerDistances).length+' towers'};
+    const lastS=DATA.samples.length>0?DATA.samples[DATA.samples.length-1]:null;
+    this.checks.sensorHealth={pass:lastS?Math.abs(lastS.az-9.8)<3:false,detail:'AccelZ:'+(lastS?lastS.az.toFixed(1):'--')};
+    const passCount=Object.values(this.checks).filter(c=>c.pass).length;
+    this.reliable=passCount>=3;return{passCount,total:5,reliable:this.reliable};
+  },
+  grade(){const v=this.run();if(v.passCount>=5)return{grade:'A',desc:'All checks pass'};if(v.passCount>=4)return{grade:'B',desc:'Minor issues'};if(v.passCount>=3)return{grade:'C',desc:'Some issues'};if(v.passCount>=2)return{grade:'D',desc:'Major issues'};return{grade:'F',desc:'Test invalid'};}
+};
+
+// DRIFT RATE TRACKING
+let driftSamples=[];
+function trackDrift(dr,gps){if(!dr||!gps)return;driftSamples.push({t:performance.now(),drift:hav(dr,gps)});if(driftSamples.length>300)driftSamples.shift();}
+function getDriftRate(){if(driftSamples.length<2)return 0;const f=driftSamples[0],l=driftSamples[driftSamples.length-1];const dt=(l.t-f.t)/60000;return dt>0.1?l.drift/dt:0;}
 
 // Controls
 function calibrate(){
