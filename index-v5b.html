@@ -5905,11 +5905,38 @@ function autoSaveV5bReport(reason){
   rpt+='<div class="card"><h2 class="r">ANTI-SPOOF</h2><p>Score: '+ss.score+'/100 | Checks: '+ss.checks+' | Rejected: '+ss.rejected+' | Jumps: '+ss.jumps+'</p></div>';
   rpt+='<div class="card"><h2 class="a">RF FIELD</h2><p>Status: '+rf.status+' | Baseline: '+rf.baseline.rssiAvg.toFixed(0)+'dBm | Alerts: '+rf.totalAlerts+'</p></div>';
   rpt+='</body></html>';
-  // Auto-download
-  const blob=new Blob([rpt],{type:'text/html'});
+  // Build plain text report + CSV data
+  const line2='═'.repeat(60);
+  let r='';
+  r+=line2+'\n  UPIN v5b FIELD TEST REPORT\n  '+now.toLocaleString()+'\n  Duration: '+durStr+' | Reason: '+reason+'\n'+line2+'\n\n';
+  r+='SUMMARY\n────────────────────────────────────────\n';
+  r+=(totalDist>100?'Drove '+(totalDist>1000?(totalDist/1000).toFixed(1)+'km':Math.round(totalDist)+'m')+' in '+durStr+'.':'Stationary test for '+durStr+'.')+'\n';
+  r+='Data source: '+(boardConnected?boardSource.toUpperCase():'Phone')+'\n';
+  r+='GPS: '+(gpsTrue?gpsSource:'no fix')+' | Towers: '+(cellTowers4G+cellTowers2G)+' detected\n';
+  r+='Best formula: '+F[bi].name+' ('+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m':'--')+')\n';
+  r+='Predictor: '+Math.round(ps.confidence()*100)+'% confidence | '+ps.validated+' validated | '+ps.avgError().toFixed(1)+'m avg err\n';
+  r+='Anti-spoof: '+ss.score+'/100 | RF: '+rf.status+'\n';
+  r+='Directional: '+ds.covered+'/4 quadrants | '+ds.verified+' verified | '+ds.confidence+'% confidence\n\n';
+  r+='TOP 10 FORMULAS\n────────────────────────────────────────\n';
+  r+='Rank  Formula                    Error     Corrections\n';
+  ranked.slice(0,10).forEach((f,i)=>{r+=String(i+1).padStart(2)+'    '+f.name.padEnd(27)+(f.err<999?f.err.toFixed(1).padStart(6)+'m':'    --').padEnd(10)+String(f.corr).padStart(8)+'\n';});
+  r+='\nALL '+F.length+' FORMULAS\n────────────────────────────────────────\n';
+  ranked.forEach((f,i)=>{r+=String(i+1).padStart(2)+'. '+f.name.padEnd(27)+(f.err<999?f.err.toFixed(1)+'m':'--')+'\n';});
+  if(drills.length){r+='\nGPS DENIAL DRILLS\n────────────────────────────────────────\n';drills.forEach((d,i)=>{r+='Drill '+(i+1)+': '+d.type+' | '+Math.round(d.blindSec)+'s | drift: '+d.driftM.toFixed(1)+'m | grade: '+d.grade+'\n';});}
+  r+='\nSYSTEM STATUS\n────────────────────────────────────────\n';
+  r+='Predictor: hdg bias '+ps.headingBias.toFixed(1)+'° | spd bias '+ps.speedBias.toFixed(2)+'x\n';
+  r+='Anti-Spoof: '+ss.checks+' checks, '+ss.rejected+' rejected, '+ss.jumps+' jumps\n';
+  r+='RF Field: '+rf.status+' | '+rf.totalAlerts+' alerts | baseline '+rf.baseline.rssiAvg.toFixed(0)+'dBm\n';
+  r+='Towers positioned: '+Object.keys(towerDistances).length+'\n';
+  Object.entries(towerDistances).forEach(([cid,d])=>{r+='  CID:'+cid+' dist:'+d.realDist+'m rssi:'+d.rssi+'dBm pos:'+d.lat.toFixed(4)+','+d.lon.toFixed(4)+'\n';});
+  r+='Calibration: accelScale='+CAL.accelScale.toFixed(3)+' gyroScale='+CAL.gyroScale.toFixed(3)+' compassOff='+CAL.compassOff.toFixed(1)+'° speedMult='+CAL.speedMult.toFixed(3)+'\n';
+  r+='\n'+line2+'\n  SENSOR DATA (CSV)\n'+line2+'\n';
+  r+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,Lat,Lon,Speed,Heading,Pressure\n';
+  DATA.samples.forEach(s=>{r+=s.t.toFixed(0)+','+(boardConnected?boardSource:'phone')+','+s.ax.toFixed(3)+','+s.ay.toFixed(3)+','+s.az.toFixed(3)+','+s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+','+s.compass.toFixed(1)+','+s.lat.toFixed(7)+','+s.lon.toFixed(7)+','+s.speed.toFixed(2)+','+s.heading.toFixed(1)+','+(s.pressure||0)+'\n';});
+  const blob=new Blob([r],{type:'text/plain'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  a.href=url;a.download='upin-v5b-report-'+now.toISOString().slice(0,19).replace(/[T:]/g,'-')+'.html';
+  a.href=url;a.download='upin-v5b-report-'+now.toISOString().slice(0,19).replace(/[T:]/g,'-')+'.txt';
   a.click();URL.revokeObjectURL(url);
   log('Report saved: '+a.download,'var(--green)');
 }

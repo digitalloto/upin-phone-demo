@@ -4918,60 +4918,64 @@ function autoSaveV5Report(reason){
   const durStr=Math.floor(dur/60)+'m '+Math.floor(dur%60)+'s';
   const bi=bestFormulaIdx();
   const ranked=[...F].map((f,i)=>({name:f.name,err:f.errAvg,corr:f.corrCount,spd:f.speedScale})).sort((a,b)=>a.err-b.err);
-  let rpt='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>UPIN v5 Report '+now.toLocaleString()+'</title>';
-  rpt+='<style>body{font-family:monospace;background:#080c14;color:#dce6f5;padding:20px;max-width:900px;margin:0 auto}';
-  rpt+='h1{color:#e8a832;font-size:16px;letter-spacing:3px}h2{color:#4da6ff;font-size:12px;letter-spacing:2px;margin-top:16px}';
-  rpt+='.card{background:#0f1520;border:1px solid #1a2438;border-radius:4px;padding:12px;margin:8px 0}';
-  rpt+='table{width:100%;border-collapse:collapse;font-size:10px}td,th{padding:4px 6px;border-bottom:1px solid #1a2438;text-align:left}';
-  rpt+='th{color:#7a9bc0;font-size:8px;text-transform:uppercase;letter-spacing:1px}';
-  rpt+='.g{color:#3dcc6e}.r{color:#f06060}.a{color:#e8a832}.c{color:#4da6ff}.p{color:#A855F7}b{color:#4da6ff}</style></head><body>';
-  rpt+='<h1>UPIN v5 FIELD TEST REPORT</h1>';
-  rpt+='<p style="color:#7a9bc0">'+now.toLocaleString()+' | '+durStr+' | '+reason+'</p>';
-  // SIMPLE SUMMARY
-  rpt+='<div class="card" style="border-color:#3dcc6e"><h2 style="color:#3dcc6e">WHAT HAPPENED</h2>';
-  rpt+='<p style="font-size:13px;line-height:2;color:#dce6f5">';
-  rpt+=(totalDist>100?'Drove <b>'+(totalDist>1000?(totalDist/1000).toFixed(1)+'km':Math.round(totalDist)+'m')+'</b> in <b>'+durStr+'</b>.':'Stationary test for <b>'+durStr+'</b>.');
-  rpt+=' Data source: <b>'+(boardConnected?boardSource.toUpperCase():'Phone')+'</b>.';
-  rpt+=' GPS: <b>'+(gpsTrue?gpsSource:'no fix')+'</b>.';
-  rpt+=' Cell towers: <b>'+(cellTowers4G+cellTowers2G)+'</b> detected.';
-  rpt+=' Samples: <b>'+DATA.count()+'</b>.<br>';
-  rpt+='Best formula: <b class="g">'+F[bi].name+'</b> ('+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m avg':'no data')+').';
-  rpt+=' Drills: <b>'+drills.length+'</b>'+(drills.length?' (avg drift: '+drills.reduce((s,d)=>s+d.driftM,0)/drills.length|0+'m)':'.')+'.';
-  rpt+=' Predictor: <b>'+Math.round(PREDICTOR.confidence()*100)+'%</b> confidence.';
-  rpt+=' Anti-spoof: <b class="'+(ANTISPOOF.spoofScore>40?'r':'g')+'">'+Math.round(ANTISPOOF.spoofScore)+'/100</b>.';
-  rpt+=' RF: <b>'+RF_FIELD.fieldStatus+'</b>.';
-  rpt+='</p></div>';
-  // TOP 10
-  rpt+='<div class="card"><h2>TOP 10 FORMULAS</h2><table><tr><th>#</th><th>Formula</th><th>Error</th><th>Corrections</th><th>Speed Scale</th></tr>';
+  const line='═'.repeat(60);
+  let r='';
+  r+=line+'\n';
+  r+='  UPIN v5 FIELD TEST REPORT\n';
+  r+='  '+now.toLocaleString()+'\n';
+  r+='  Duration: '+durStr+' | Reason: '+reason+'\n';
+  r+=line+'\n\n';
+  r+='SUMMARY\n';
+  r+='────────────────────────────────────────\n';
+  r+=(totalDist>100?'Drove '+(totalDist>1000?(totalDist/1000).toFixed(1)+'km':Math.round(totalDist)+'m')+' in '+durStr+'.':'Stationary test for '+durStr+'.')+'\n';
+  r+='Data source: '+(boardConnected?boardSource.toUpperCase():'Phone')+'\n';
+  r+='GPS: '+(gpsTrue?gpsSource:'no fix')+'\n';
+  r+='Cell towers: '+(cellTowers4G+cellTowers2G)+' detected\n';
+  r+='Samples: '+DATA.count()+'\n';
+  r+='Best formula: '+F[bi].name+' ('+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m avg':'no data')+')\n';
+  r+='Drills: '+drills.length+(drills.length?' (avg drift: '+(drills.reduce((s,d)=>s+d.driftM,0)/drills.length).toFixed(1)+'m)':'')+'\n';
+  r+='Predictor confidence: '+Math.round(PREDICTOR.confidence()*100)+'%\n';
+  r+='Anti-spoof score: '+Math.round(ANTISPOOF.spoofScore)+'/100\n';
+  r+='RF field: '+RF_FIELD.fieldStatus+'\n\n';
+  r+='TOP 10 FORMULAS\n';
+  r+='────────────────────────────────────────\n';
+  r+='Rank  Formula                    Error     Corrections  Speed\n';
   ranked.slice(0,10).forEach((f,i)=>{
-    const col=f.err<5?'g':f.err<15?'c':f.err<50?'a':'r';
-    rpt+='<tr><td>'+(i+1)+'</td><td><b>'+f.name+'</b></td><td class="'+col+'">'+(f.err<999?f.err.toFixed(1)+'m':'--')+'</td><td>'+f.corr+'</td><td>'+f.spd.toFixed(2)+'×</td></tr>';
+    r+=String(i+1).padStart(2)+'    '+f.name.padEnd(27)+(f.err<999?f.err.toFixed(1).padStart(6)+'m':'    --').padEnd(10)+String(f.corr).padStart(8)+'      '+f.spd.toFixed(2)+'x\n';
   });
-  rpt+='</table></div>';
-  // ALL FORMULAS
-  rpt+='<div class="card"><h2>ALL '+F.length+' FORMULAS</h2><table><tr><th>#</th><th>Formula</th><th>Error</th><th>Corr</th></tr>';
-  ranked.forEach((f,i)=>{rpt+='<tr><td>'+(i+1)+'</td><td>'+f.name+'</td><td>'+(f.err<999?f.err.toFixed(1)+'m':'--')+'</td><td>'+f.corr+'</td></tr>';});
-  rpt+='</table></div>';
-  // DRILL RESULTS
+  r+='\nALL '+F.length+' FORMULAS\n';
+  r+='────────────────────────────────────────\n';
+  ranked.forEach((f,i)=>{
+    r+=String(i+1).padStart(2)+'. '+f.name.padEnd(27)+(f.err<999?f.err.toFixed(1)+'m':'--')+'\n';
+  });
   if(drills.length){
-    rpt+='<div class="card"><h2 class="a">GPS DENIAL DRILLS ('+drills.length+')</h2><table><tr><th>#</th><th>Type</th><th>Duration</th><th>Drift</th><th>Grade</th><th>Best Formula</th></tr>';
+    r+='\nGPS DENIAL DRILLS\n';
+    r+='────────────────────────────────────────\n';
     drills.forEach((d,i)=>{
-      rpt+='<tr><td>'+(i+1)+'</td><td>'+d.type+'</td><td>'+Math.round(d.blindSec)+'s</td><td class="'+(d.driftM<20?'g':'r')+'">'+d.driftM.toFixed(1)+'m</td><td>'+d.grade+'</td><td>'+(d.formulaResults?d.formulaResults[0].name:'--')+'</td></tr>';
+      r+='Drill '+(i+1)+': '+d.type+' | '+Math.round(d.blindSec)+'s | drift: '+d.driftM.toFixed(1)+'m | grade: '+d.grade+' | best: '+(d.formulaResults?d.formulaResults[0].name:'--')+'\n';
     });
-    rpt+='</table></div>';
   }
-  // SYSTEMS STATUS
-  rpt+='<div class="card"><h2 class="p">SYSTEM STATUS</h2>';
-  rpt+='<p>Predictor: '+PREDICTOR.validated+' validated, '+PREDICTOR.avgError().toFixed(1)+'m avg err, hdg bias '+PREDICTOR.headingBias.toFixed(1)+'°, spd bias '+PREDICTOR.speedBias.toFixed(2)+'×</p>';
-  rpt+='<p>Anti-Spoof: score '+Math.round(ANTISPOOF.spoofScore)+', '+ANTISPOOF.totalChecks+' checks, '+ANTISPOOF.rejected+' rejected</p>';
-  rpt+='<p>RF Field: '+RF_FIELD.fieldStatus+', '+RF_FIELD.alerts.length+' alerts</p>';
-  rpt+='<p>Towers: '+(cellTowers4G+cellTowers2G)+' detected, '+Object.keys(towerDistances||{}).length+' positioned</p>';
-  rpt+='<p>Calibration: accelScale='+CAL.accelScale.toFixed(3)+' gyroScale='+CAL.gyroScale.toFixed(3)+' compassOff='+CAL.compassOff.toFixed(1)+'° speedMult='+CAL.speedMult.toFixed(3)+'</p>';
-  rpt+='</div></body></html>';
-  const blob=new Blob([rpt],{type:'text/html'});
+  r+='\nSYSTEM STATUS\n';
+  r+='────────────────────────────────────────\n';
+  r+='Predictor: '+PREDICTOR.validated+' validated, '+PREDICTOR.avgError().toFixed(1)+'m avg err\n';
+  r+='  Heading bias: '+PREDICTOR.headingBias.toFixed(1)+'° | Speed bias: '+PREDICTOR.speedBias.toFixed(2)+'x\n';
+  r+='Anti-Spoof: score '+Math.round(ANTISPOOF.spoofScore)+', '+ANTISPOOF.totalChecks+' checks, '+ANTISPOOF.rejected+' rejected\n';
+  r+='RF Field: '+RF_FIELD.fieldStatus+', '+RF_FIELD.alerts.length+' alerts\n';
+  r+='Towers: '+(cellTowers4G+cellTowers2G)+' detected, '+Object.keys(towerDistances||{}).length+' positioned\n';
+  r+='Calibration: accelScale='+CAL.accelScale.toFixed(3)+' gyroScale='+CAL.gyroScale.toFixed(3)+'\n';
+  r+='  compassOff='+CAL.compassOff.toFixed(1)+'° speedMult='+CAL.speedMult.toFixed(3)+'\n';
+  r+='\n'+line+'\n';
+  r+='  SENSOR DATA (CSV)\n';
+  r+=line+'\n';
+  r+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,Lat,Lon,Speed,Heading,Pressure\n';
+  DATA.samples.forEach(s=>{r+=s.t.toFixed(0)+','+(boardConnected?boardSource:'phone')+','+s.ax.toFixed(3)+','+s.ay.toFixed(3)+','+s.az.toFixed(3)+','+s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+','+s.compass.toFixed(1)+','+s.lat.toFixed(7)+','+s.lon.toFixed(7)+','+s.speed.toFixed(2)+','+s.heading.toFixed(1)+','+(s.pressure||0)+'\n';});
+  const blob=new Blob([r],{type:'text/plain'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;
-  a.download='upin-v5-report-'+now.toISOString().slice(0,19).replace(/[T:]/g,'-')+'.html';
+  a.download='upin-v5-report-'+now.toISOString().slice(0,19).replace(/[T:]/g,'-')+'.txt';
+  a.click();URL.revokeObjectURL(url);
+  log('Report saved: '+a.download,'var(--green)');
+}
   a.click();URL.revokeObjectURL(url);
   log('Report downloaded: '+a.download,'var(--green)');
 }
