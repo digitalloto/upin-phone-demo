@@ -1384,7 +1384,7 @@ function processBoardData(d){
     const refP=gpsTrue||lastGoodFix||calGpsPos;
     if(refP&&refP.lat>6&&typeof TOWERS!=='undefined'&&TOWERS.length>0&&typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
       // Clear old nearby markers (only every 10th packet to reduce flicker)
-      if(bleGoodPkts%3===0){
+      if(true){
         nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
         nearbyDbMarkers=[];
       // Find all towers within 2km of current position
@@ -4232,7 +4232,7 @@ function buildFormulaTable(){
 let lastTick=null;
 function tick(){
   const now=performance.now(),dt=lastTick?(now-lastTick)/1000:1;lastTick=now;uiFrame++;
-  const doUI=(uiFrame%3===0);
+  const doUI=true;
 
   // ── PREPROCESS all sensor data (6 fixes) ──
   if(!useBoard&&gpsSys){
@@ -4336,6 +4336,15 @@ function tick(){
     if(uiFrame%5===0&&MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
     if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
+    // REROUTE: if >100m off route, recalculate
+    if(v5RouteSteps.length>0&&v5DestLat&&gpsSys){
+      let minD=Infinity;v5RouteSteps.forEach(s=>{const d=hav(gpsSys,s);if(d<minD)minD=d;});
+      if(minD>100&&performance.now()-v5LastReroute>10000){
+        v5LastReroute=performance.now();
+        log("Off route by "+Math.round(minD)+"m — rerouting...","var(--amber)");
+        routeToDestV5(v5DestLat,v5DestLon);
+      }
+    }
     // Frozen GPS detection (#47)
     const accelE=Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81);
     if(FROZEN_GPS.check(gpsSys,accelE)){
@@ -4701,8 +4710,10 @@ const MAP_MATCH={
 // DESTINATION ROUTING via OSRM
 // ═══════════════════════════════════════
 let v5DestMarker=null,v5RouteLine=null,v5RouteSteps=[];
+let v5DestLat=null,v5DestLon=null,v5LastReroute=0;
 
 function routeToDestV5(destLat,destLon){
+  v5DestLat=destLat;v5DestLon=destLon;
   if(!gpsTrue){log('Need GPS for routing','var(--red)');return;}
   if(v5DestMarker&&typeof L!=='undefined')try{map.removeLayer(v5DestMarker);}catch(e){}
   if(v5RouteLine&&typeof L!=='undefined')try{map.removeLayer(v5RouteLine);}catch(e){}

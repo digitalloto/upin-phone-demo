@@ -1383,7 +1383,7 @@ function processBoardData(d){
     const refP=gpsTrue||lastGoodFix||calGpsPos;
     if(refP&&refP.lat>6&&typeof TOWERS!=='undefined'&&TOWERS.length>0&&typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
       // Clear old nearby markers (only every 10th packet to reduce flicker)
-      if(bleGoodPkts%3===0){
+      if(true){
         nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
         nearbyDbMarkers=[];
       // Find all towers within 2km of current position
@@ -1581,7 +1581,7 @@ function initPhoneGPS(){
       $('mHdg').textContent=Math.round(p.coords.heading||compass)+'°';
     }
     if(!marker&&typeof L!=='undefined'){try{map.setView([phoneFix.lat,phoneFix.lon],17);marker=L.circleMarker([phoneFix.lat,phoneFix.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);}catch(e){}}
-    else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,phoneFix)>1)){try{marker.setLatLng([phoneFix.lat,phoneFix.lon]);}catch(e){}_lastMarker={lat:phoneFix.lat,lon:phoneFix.lon};}
+    else if(marker&&(phase!=='idle'||!_lastMarker||true)){try{marker.setLatLng([phoneFix.lat,phoneFix.lon]);}catch(e){}_lastMarker={lat:phoneFix.lat,lon:phoneFix.lon};}
     $('bStart').disabled=false;$('bStart').style.opacity='1';
     $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
     $('srcGPSd').textContent='±'+Math.round(phoneFix.acc)+'m';
@@ -4228,7 +4228,7 @@ function buildFormulaTable(){
 let lastTick=null;
 function tick(){
   const now=performance.now(),dt=lastTick?(now-lastTick)/1000:1;lastTick=now;uiFrame++;
-  const doUI=(uiFrame%3===0);
+  const doUI=true; // refresh every tick
 
   // ── PREPROCESS all sensor data (6 fixes) ──
   if(!useBoard&&gpsSys){
@@ -4329,16 +4329,33 @@ function tick(){
     MANEUVER.record(gpsSys.lat,gpsSys.lon,dt);
     TOWER_CAPTURE.capture(gpsSys.lat,gpsSys.lon,boardData);
     // Map matching: snap to road every 5th tick
-    if(uiFrame%5===0&&MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
+    if(MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
     if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
+    // REROUTE CHECK: if >100m off route, recalculate like Google Maps
+    if(v5RouteSteps.length>0&&v5DestLat&&gpsSys){
+      let minDist=Infinity;
+      v5RouteSteps.forEach(s=>{const d=hav(gpsSys,s);if(d<minDist)minDist=d;});
+      if(minDist>100&&performance.now()-v5LastReroute>10000){
+        v5LastReroute=performance.now();
+        log('Off route by '+Math.round(minDist)+'m — rerouting...','var(--amber)');
+        routeToDestV5(v5DestLat,v5DestLon);
+      }
+      // Update progress
+      let nearIdx=0;v5RouteSteps.forEach((s,i)=>{if(hav(gpsSys,s)<hav(gpsSys,v5RouteSteps[nearIdx]))nearIdx=i;});
+      const progress=Math.round(nearIdx/v5RouteSteps.length*100);
+      const remaining=v5RouteSteps.slice(nearIdx);
+      let remDist=0;for(let i=1;i<remaining.length;i++)remDist+=hav(remaining[i-1],remaining[i]);
+      const eta=gpsSys.speed>0.5?Math.round(remDist/gpsSys.speed/60):0;
+      $('routeStatus').textContent='Route: '+progress+'% | '+(remDist>1000?(remDist/1000).toFixed(1)+'km':Math.round(remDist)+'m')+' left'+(eta?' | ETA: '+eta+' min':'');
+    }
     // Frozen GPS + Cross-check + Drift
     const ae=Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81);
     if(FROZEN_GPS.check(gpsSys,ae)){log('GPS FROZEN — switching to tower tri','var(--red)');gpsSys=null;}
     CROSS_CHECK.update(gpsTrue,UTIN.predict()?{lat:UTIN.predict().lat,lon:UTIN.predict().lon}:null,drPos);
     if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue)trackDrift(drPos,gpsTrue);
     // GPS-MEASURED RADIUS LAYER: draw exact circles from each tower through GPS position
-    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=="undefined"&&uiFrame%2===0){
+    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=="undefined"&&true){
       gpsRadiusCircles.forEach(c=>{try{map.removeLayer(c);}catch(e){}});
       gpsRadiusLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
       if(gpsRadiusIntersect)try{map.removeLayer(gpsRadiusIntersect);}catch(e){}
@@ -4690,15 +4707,18 @@ const MAP_MATCH={
 // DESTINATION ROUTING via OSRM
 // ═══════════════════════════════════════
 let v5DestMarker=null,v5RouteLine=null,v5RouteSteps=[];
+let v5DestLat=null,v5DestLon=null,v5LastReroute=0;
 
 function routeToDestV5(destLat,destLon){
   if(!gpsTrue){log('Need GPS for routing','var(--red)');return;}
+  v5DestLat=destLat;v5DestLon=destLon;
+  const fromLat=gpsTrue.lat,fromLon=gpsTrue.lon;
   if(v5DestMarker&&typeof L!=='undefined')try{map.removeLayer(v5DestMarker);}catch(e){}
   if(v5RouteLine&&typeof L!=='undefined')try{map.removeLayer(v5RouteLine);}catch(e){}
   if(typeof L!=='undefined'){
     v5DestMarker=L.circleMarker([destLat,destLon],{radius:10,color:'#f06060',fillColor:'#f06060',fillOpacity:0.9,weight:3}).bindTooltip('DESTINATION').addTo(map);
   }
-  fetch('https://router.project-osrm.org/route/v1/driving/'+gpsTrue.lon+','+gpsTrue.lat+';'+destLon+','+destLat+'?overview=full&geometries=geojson&steps=true')
+  fetch('https://router.project-osrm.org/route/v1/driving/'+fromLon+','+fromLat+';'+destLon+','+destLat+'?overview=full&geometries=geojson&steps=true')
   .then(r=>r.json()).then(d=>{
     if(d.code==='Ok'&&d.routes&&d.routes[0]){
       const route=d.routes[0];
