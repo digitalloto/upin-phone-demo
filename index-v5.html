@@ -4552,8 +4552,8 @@ function tick(){
         else{PUE._circle.setLatLng([pCenter.lat,pCenter.lon]);PUE._circle.setRadius(pRadius);}
       }
 
-      // Draw top 5 formula trails + position dots on map (every 5th tick)
-      if(uiFrame%5===0){
+      // Draw top 5 formula trails + position dots on map EVERY TICK
+      {
         const ranked=[...F].map((f,i)=>({i,f,err:f.drillDrift||f.errAvg||999})).filter(x=>x.f.pos).sort((a,b)=>a.err-b.err);
         const colors=['#00E5FF','#00FF88','#FFB800','#3B82F6','#A855F7'];
         for(let r=0;r<5&&r<ranked.length;r++){
@@ -4567,11 +4567,12 @@ function tick(){
           if(f.pos){
             const ll=[f.pos.lat,f.pos.lon];
             if(!f._mapDot){
-              f._mapDot=L.circleMarker(ll,{radius:5,color:colors[r],fillColor:colors[r],fillOpacity:0.8,weight:1}).addTo(map);
-              f._mapDot.bindTooltip(f.name,{permanent:false,direction:'top',offset:[0,-8]});
+              f._mapDot=L.circleMarker(ll,{radius:r===0?8:6,color:colors[r],fillColor:colors[r],fillOpacity:0.9,weight:r===0?3:2}).addTo(map);
+              f._mapDot.bindTooltip('#'+(r+1)+' '+f.name+' ('+(f.drillDrift?f.drillDrift.toFixed(0)+'m':'--')+')',{permanent:r===0,direction:'top',offset:[0,-8]});
             }else{
               f._mapDot.setLatLng(ll);
-              f._mapDot.setStyle({color:colors[r],fillColor:colors[r]});
+              f._mapDot.setStyle({color:colors[r],fillColor:colors[r],radius:r===0?8:6});
+              try{f._mapDot.setTooltipContent('#'+(r+1)+' '+f.name+' ('+(f.drillDrift?f.drillDrift.toFixed(0)+'m':'--')+')');}catch(e){}
             }
           }
         }
@@ -4990,7 +4991,7 @@ function resurface(){
 // ═══════════════════════════════════════
 let v5ReportSaved=false;
 function downloadReport(){
-  v5ReportSaved=false;
+  v5ReportSaved=false; // always allow manual download
   autoSaveV5Report('Manual download');
 }
 function autoSaveV5Report(reason){
