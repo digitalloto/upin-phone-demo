@@ -1199,7 +1199,7 @@ function processBoardData(d){
       $('ovSat').textContent=d.gps.sats;
       $('bStart').disabled=false;$('bStart').style.opacity='1';
       if(!marker&&typeof L!=='undefined'){try{map.setView([pos.lat,pos.lon],17);marker=L.circleMarker([pos.lat,pos.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);}catch(e){}}
-      else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>5)){try{marker.setLatLng([pos.lat,pos.lon]);}catch(e){}_lastMarker={lat:pos.lat,lon:pos.lon};}
+      else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,pos)>1)){try{marker.setLatLng([pos.lat,pos.lon]);}catch(e){}_lastMarker={lat:pos.lat,lon:pos.lon};}
     }
   }else if(!d.gps||!d.gps.ok){
     // Board GPS has no fix — allow phone GPS to take over
@@ -1303,8 +1303,8 @@ function processBoardData(d){
   $('srcCell2Gd').textContent=(cellTowers4G+cellTowers2G)+'t hits:'+cidHits+' miss:'+cidMisses;
 
   // BATCH GOOGLE LOOKUP: send ALL towers in ONE request if no matches yet
-  if(boardTowerList.length<2&&cidMisses>0&&!processBoardData._batchDone){
-    processBoardData._batchDone=true;
+  if(boardTowerList.length<2&&cidMisses>0&&(!processBoardData._batchDone||performance.now()-processBoardData._batchDone>30000)){
+    processBoardData._batchDone=performance.now();
     const allT=[];
     if(d.cell4g&&d.cell4g.cid)allT.push({cellId:d.cell4g.cid,locationAreaCode:d.cell4g.tac||0,mobileCountryCode:d.cell4g.mcc||404,mobileNetworkCode:d.cell4g.mnc||84,radioType:'lte',signalStrength:d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80)});
     const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
@@ -1373,7 +1373,7 @@ function processBoardData(d){
         }).catch(()=>{cidPending.delete(lacKey);});
       }
     });
-    if(bleGoodPkts<=5||bleGoodPkts%50===0){
+    if(bleGoodPkts<=5||bleGoodPkts%10===0){
       const lacList=lacEntries.map(l=>'MNC:'+l.mnc+'/LAC:'+l.lac).join(', ');
       log('Towers: '+boardTowerList.length+' positioned / '+(cellTowers4G+cellTowers2G)+' detected. '+lacList+'. API: '+cidPending.size+' pending','var(--amber)');
     }
@@ -1383,7 +1383,7 @@ function processBoardData(d){
     const refP=gpsTrue||lastGoodFix||calGpsPos;
     if(refP&&refP.lat>6&&typeof TOWERS!=='undefined'&&TOWERS.length>0&&typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
       // Clear old nearby markers (only every 10th packet to reduce flicker)
-      if(bleGoodPkts%10===0){
+      if(bleGoodPkts%3===0){
         nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
         nearbyDbMarkers=[];
       // Find all towers within 2km of current position
@@ -1493,7 +1493,7 @@ function processBoardData(d){
     towerMapMarkers=[];towerMapLines=[];
   }
   // Log tower debug — ALWAYS log first 5 packets so we can see what board sends
-  if(bleGoodPkts<=5||(bleGoodPkts%50===0)){
+  if(bleGoodPkts<=5||(bleGoodPkts%10===0)){
     const c4=d.cell4g?JSON.stringify(d.cell4g).substring(0,100):'none';
     const c2=d.cell2g?JSON.stringify(d.cell2g).substring(0,100):'none';
     log('CELL pkt#'+bleGoodPkts+': matched='+boardTowerList.length+'/'+cidMisses+' | UTIN='+(UTIN.predict()?'FIX':'waiting'),'var(--amber)');
@@ -1581,7 +1581,7 @@ function initPhoneGPS(){
       $('mHdg').textContent=Math.round(p.coords.heading||compass)+'°';
     }
     if(!marker&&typeof L!=='undefined'){try{map.setView([phoneFix.lat,phoneFix.lon],17);marker=L.circleMarker([phoneFix.lat,phoneFix.lon],{radius:7,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1}).addTo(map);}catch(e){}}
-    else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,phoneFix)>5)){try{marker.setLatLng([phoneFix.lat,phoneFix.lon]);}catch(e){}_lastMarker={lat:phoneFix.lat,lon:phoneFix.lon};}
+    else if(marker&&(phase!=='idle'||!_lastMarker||hav(_lastMarker,phoneFix)>1)){try{marker.setLatLng([phoneFix.lat,phoneFix.lon]);}catch(e){}_lastMarker={lat:phoneFix.lat,lon:phoneFix.lon};}
     $('bStart').disabled=false;$('bStart').style.opacity='1';
     $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
     $('srcGPSd').textContent='±'+Math.round(phoneFix.acc)+'m';
@@ -4338,7 +4338,7 @@ function tick(){
     CROSS_CHECK.update(gpsTrue,UTIN.predict()?{lat:UTIN.predict().lat,lon:UTIN.predict().lon}:null,drPos);
     if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue)trackDrift(drPos,gpsTrue);
     // GPS-MEASURED RADIUS LAYER: draw exact circles from each tower through GPS position
-    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=='undefined'&&uiFrame%5===0){
+    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=="undefined"&&uiFrame%2===0){
       gpsRadiusCircles.forEach(c=>{try{map.removeLayer(c);}catch(e){}});
       gpsRadiusLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
       if(gpsRadiusIntersect)try{map.removeLayer(gpsRadiusIntersect);}catch(e){}

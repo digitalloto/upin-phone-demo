@@ -1374,7 +1374,7 @@ function processBoardData(d){
         }).catch(()=>{cidPending.delete(lacKey);});
       }
     });
-    if(bleGoodPkts<=5||bleGoodPkts%50===0){
+    if(bleGoodPkts<=5||bleGoodPkts%10===0){
       const lacList=lacEntries.map(l=>'MNC:'+l.mnc+'/LAC:'+l.lac).join(', ');
       log('Towers: '+boardTowerList.length+' positioned / '+(cellTowers4G+cellTowers2G)+' detected. '+lacList+'. API: '+cidPending.size+' pending','var(--amber)');
     }
@@ -1384,7 +1384,7 @@ function processBoardData(d){
     const refP=gpsTrue||lastGoodFix||calGpsPos;
     if(refP&&refP.lat>6&&typeof TOWERS!=='undefined'&&TOWERS.length>0&&typeof L!=='undefined'&&map&&MAP_LAYERS.towers){
       // Clear old nearby markers (only every 10th packet to reduce flicker)
-      if(bleGoodPkts%10===0){
+      if(bleGoodPkts%3===0){
         nearbyDbMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
         nearbyDbMarkers=[];
       // Find all towers within 2km of current position
@@ -1494,7 +1494,7 @@ function processBoardData(d){
     towerMapMarkers=[];towerMapLines=[];
   }
   // Log tower debug — ALWAYS log first 5 packets so we can see what board sends
-  if(bleGoodPkts<=5||(bleGoodPkts%50===0)){
+  if(bleGoodPkts<=5||(bleGoodPkts%10===0)){
     const c4=d.cell4g?JSON.stringify(d.cell4g).substring(0,100):'none';
     const c2=d.cell2g?JSON.stringify(d.cell2g).substring(0,100):'none';
     log('CELL pkt#'+bleGoodPkts+': matched='+boardTowerList.length+'/'+cidMisses+' | UTIN='+(UTIN.predict()?'FIX':'waiting'),'var(--amber)');
