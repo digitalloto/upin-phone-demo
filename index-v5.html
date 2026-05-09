@@ -5039,7 +5039,7 @@ function autoSaveV5Report(reason){
   }
   r+='\nSYSTEM STATUS\n';
   r+='────────────────────────────────────────\n';
-  r+='Predictor: '+PREDICTOR.validated+' validated, '+PREDICTOR.avgError().toFixed(1)+'m avg err\n';
+  r+='Predictor: '+PREDICTOR.validated+' validated, '+PREDICTOR.avgErr().toFixed(1)+'m avg err\n';
   r+='  Heading bias: '+PREDICTOR.headingBias.toFixed(1)+'° | Speed bias: '+PREDICTOR.speedBias.toFixed(2)+'x\n';
   r+='Anti-Spoof: score '+Math.round(ANTISPOOF.spoofScore)+', '+ANTISPOOF.totalChecks+' checks, '+ANTISPOOF.rejected+' rejected\n';
   r+='RF Field: '+RF_FIELD.fieldStatus+', '+RF_FIELD.alerts.length+' alerts\n';
@@ -5164,7 +5164,7 @@ function showReport(dur){
       ${COMBOS.top5().map((c,i)=>`<div class="rr"><span>${i+1}.</span><span class="rv" style="font-size:7px">${c}</span></div>`).join('')}
     </div>
     <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER DATABASE</div>
-      <div class="rr"><span>Towers in database</span><span class="rv">${TOWERS.length}</span></div>
+      <div class="rr"><span>Towers in database</span><span class="rv">${typeof TOWERS!=='undefined'?TOWERS.length:0}</span></div>
       <div class="rr"><span>Nearby towers cached</span><span class="rv">${UTIN.lastTowers?UTIN.lastTowers.length:'--'}</span></div>
       <div class="rr"><span>Scan history depth</span><span class="rv">${UTIN.scanHistory.length}/5</span></div>
       <div class="rr"><span>Trilateration method</span><span class="rv">NLLS (5 iterations)</span></div>

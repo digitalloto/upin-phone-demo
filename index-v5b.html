@@ -5159,7 +5159,7 @@ function showReport(dur){
       ${COMBOS.top5().map((c,i)=>`<div class="rr"><span>${i+1}.</span><span class="rv" style="font-size:7px">${c}</span></div>`).join('')}
     </div>
     <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER DATABASE</div>
-      <div class="rr"><span>Towers in database</span><span class="rv">${TOWERS.length}</span></div>
+      <div class="rr"><span>Towers in database</span><span class="rv">${typeof TOWERS!=='undefined'?TOWERS.length:0}</span></div>
       <div class="rr"><span>Nearby towers cached</span><span class="rv">${UTIN.lastTowers?UTIN.lastTowers.length:'--'}</span></div>
       <div class="rr"><span>Scan history depth</span><span class="rv">${UTIN.scanHistory.length}/5</span></div>
       <div class="rr"><span>Trilateration method</span><span class="rv">NLLS (5 iterations)</span></div>
@@ -5866,7 +5866,7 @@ function autoSaveV5bReport(reason){
   if(VALIDATION.checks.sensorHealth.pass)working.push('Sensors calibrated correctly');else attention.push('Sensor health issue — recalibrate');
   if(triMarker)working.push('Cell tower triangulation active');else attention.push('No cell tower fix — check tower DB');
   if(ds.covered>=3)working.push('Directional coverage '+ds.covered+'/4 quadrants');else attention.push('Low directional coverage ('+ds.covered+'/4) — need towers in more directions');
-  if(ps.validated>10&&ps.avgError()<30)working.push('Predictor validated ('+ps.avgError().toFixed(0)+'m avg err)');else if(ps.validated<5)attention.push('Predictor needs more training data');
+  if(ps.validated>10&&ps.avgErr()<30)working.push('Predictor validated ('+ps.avgErr().toFixed(0)+'m avg err)');else if(ps.validated<5)attention.push('Predictor needs more training data');
   if(ss.score<20)working.push('Anti-spoof clean');else attention.push('Spoof score elevated: '+ss.score);
   if(rf.status==='NORMAL')working.push('RF environment stable');else attention.push('RF anomaly detected: '+rf.status);
   rpt+='<div class="card" style="border-color:#3dcc6e"><h2 style="color:#3dcc6e">WHAT\'S WORKING</h2>';
@@ -5911,7 +5911,7 @@ function autoSaveV5bReport(reason){
   rpt+='</table></div>';
   // Directional + Predictor
   rpt+='<div class="card"><h2 style="color:#ff4081">DIRECTIONAL FIX</h2><p>Quadrants: '+ds.covered+'/4 | Verified: '+ds.verified+' | Confidence: <b>'+ds.confidence+'%</b></p></div>';
-  rpt+='<div class="card"><h2 class="p">PREDICTOR</h2><p>Validated: '+PREDICTOR.validated+' | Avg err: '+PREDICTOR.avgError().toFixed(1)+'m | Hdg bias: '+PREDICTOR.headingBias.toFixed(1)+'° | Spd bias: '+PREDICTOR.speedBias.toFixed(2)+'×</p></div>';
+  rpt+='<div class="card"><h2 class="p">PREDICTOR</h2><p>Validated: '+PREDICTOR.validated+' | Avg err: '+PREDICTOR.avgErr().toFixed(1)+'m | Hdg bias: '+PREDICTOR.headingBias.toFixed(1)+'° | Spd bias: '+PREDICTOR.speedBias.toFixed(2)+'×</p></div>';
   // Anti-spoof + RF
   rpt+='<div class="card"><h2 class="r">ANTI-SPOOF</h2><p>Score: '+ss.score+'/100 | Checks: '+ss.checks+' | Rejected: '+ss.rejected+' | Jumps: '+ss.jumps+'</p></div>';
   rpt+='<div class="card"><h2 class="a">RF FIELD</h2><p>Status: '+rf.status+' | Baseline: '+rf.baseline.rssiAvg.toFixed(0)+'dBm | Alerts: '+rf.totalAlerts+'</p></div>';
@@ -5925,7 +5925,7 @@ function autoSaveV5bReport(reason){
   r+='Data source: '+(boardConnected?boardSource.toUpperCase():'Phone')+'\n';
   r+='GPS: '+(gpsTrue?gpsSource:'no fix')+' | Towers: '+(cellTowers4G+cellTowers2G)+' detected\n';
   r+='Best formula: '+F[bi].name+' ('+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m':'--')+')\n';
-  r+='Predictor: '+Math.round(ps.confidence()*100)+'% confidence | '+ps.validated+' validated | '+ps.avgError().toFixed(1)+'m avg err\n';
+  r+='Predictor: '+Math.round(ps.confidence()*100)+'% confidence | '+ps.validated+' validated | '+ps.avgErr().toFixed(1)+'m avg err\n';
   r+='Anti-spoof: '+ss.score+'/100 | RF: '+rf.status+'\n';
   r+='Directional: '+ds.covered+'/4 quadrants | '+ds.verified+' verified | '+ds.confidence+'% confidence\n\n';
   r+='TOP 10 FORMULAS\n────────────────────────────────────────\n';
