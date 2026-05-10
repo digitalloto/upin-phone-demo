@@ -1962,7 +1962,7 @@ F.push(mkF('Mag Map Match',function(pos,dt){
 }));
 
 const FORMULAS=F;
-function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
+function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.name.includes('disabled'))return;if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
   // When stationary, use frozen position as truth (GPS jitters ±15m even when still)
@@ -3994,8 +3994,8 @@ F.push(mkF('Predictor Ensemble',function(pos,dt){
 // Returns velocity-only prediction. Re-enable when TIDAL_CHART is populated
 // with real station data for your operating region.
 F.push(mkF('Tidal Drift (disabled)',function(pos,dt){
-  const v=velFromGPS(5);
-  return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  return null; // disabled - excluded from rankings
+  
 }));
 
 // F53: Depth Constrained — uses baro + laser to flag maritime zone (placeholder for chart data)

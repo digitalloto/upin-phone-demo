@@ -1958,7 +1958,10 @@ F.push(mkF('Mag Map Match',function(pos,dt){
 }));
 
 const FORMULAS=F;
-function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
+function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{
+  if(f.name.includes('disabled'))return; // skip disabled
+  if(f.errAvg<bE){bE=f.errAvg;b=i;}
+});return b;}
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
   // When stationary, use frozen position as truth (GPS jitters ±15m even when still)
@@ -3986,12 +3989,10 @@ F.push(mkF('Predictor Ensemble',function(pos,dt){
   return sW>0?{lat:sL/sW,lon:sO/sW}:pos;
 }));
 
-// F52: Tidal Drift — DISABLED: requires real tidal chart data (NOAA/ENC).
-// Returns velocity-only prediction. Re-enable when TIDAL_CHART is populated
-// with real station data for your operating region.
+// F52: Tidal Drift — DISABLED: excluded from rankings entirely.
+// Does NOT predict, does NOT compete. Placeholder only.
 F.push(mkF('Tidal Drift (disabled)',function(pos,dt){
-  const v=velFromGPS(5);
-  return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  return null; // returns null = never scores, never ranks
 }));
 
 // F53: Depth Constrained — uses baro + laser to flag maritime zone (placeholder for chart data)
@@ -4619,16 +4620,22 @@ function tick(){
       $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'err');
       // Lat/Lon column
       const fp=$('fp'+i);if(fp)fp.textContent=f._lastPredLat?f._lastPredLat.toFixed(6)+','+f._lastPredLon.toFixed(6):(f.pos?f.pos.lat.toFixed(6)+','+f.pos.lon.toFixed(6):'--');
-      // Status: RUNNING/BEST/WAITING + agent tuning info
+      // Status: detect if formula is actually predicting or just passing through
       const fs=$('fs'+i);const running=f.errAvg<999;
+      // Detect passthrough: if predicted lat/lon equals GPS lat/lon, formula isn't doing anything
+      const isPassthrough=f._lastPredLat&&gpsSys&&Math.abs(f._lastPredLat-gpsSys.lat)<0.0000001&&Math.abs(f._lastPredLon-gpsSys.lon)<0.0000001;
+      // Disabled formulas (return null)
+      const isDisabled=f.name.includes('disabled');
       // Show agent-tuned error if available
       let agentInfo='';
       if(FAGENTS.initialized&&FAGENTS.pools[i]){
         const ap=[...FAGENTS.pools[i]].sort((a,b)=>a.errAvg-b.errAvg);
         if(ap[0].errAvg<999)agentInfo=' A:'+ap[0].errAvg.toFixed(1)+'m';
       }
-      if(i===bi){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
-      else if(running){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
+      if(isDisabled){fs.textContent='DISABLED';fs.className='f-wait';$('f'+i).className='';}
+      else if(isPassthrough){fs.textContent='PASSTHROUGH';fs.className='f-wait';$('f'+i).className='';}
+      else if(i===bi&&!isPassthrough){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
+      else if(running&&!isPassthrough){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
       else{fs.textContent='WAITING';fs.className='f-wait';$('f'+i).className='';}
     });
     // Source boxes red/green
