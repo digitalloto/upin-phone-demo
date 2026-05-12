@@ -530,6 +530,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="towers-data.js"></script>
+<script src="landmarks-data.js"></script>
 <script>
 var V=(()=>{
 // ═══════════════════════════════════════
@@ -4272,6 +4273,8 @@ function tick(){
     }catch(e){}
     scoreFormulas(gpsSys,dt);
     CONE.update(gpsSys,gpsSys.speed||avgSpeed(5)||0,compass+CAL.compassOff,(gyro.z-CAL.gyroBias.z)*CAL.gyroScale,dt);
+    LANDMARK_TRI.update(gpsSys);
+    if(typeof L!=="undefined"&&map&&uiFrame%3===0)try{LANDMARK_TRI.draw(map,gpsSys,$("lyLandmarks").checked);}catch(e){}
     // ── ML LAYER TRAINING (GPS available → learn patterns) ──
     try{
       const bestErr=F[bestFormulaIdx()].errAvg;
@@ -4954,6 +4957,98 @@ function getDriftRate(){
   return last.drift/dtMin; // meters per minute
 }
 
+
+// ═══════════════════════════════════════
+
+// ═══════════════════════════════════════
+// LANDMARK TRIANGULATION LAYER
+// Uses known landmark positions as fixed reference beacons.
+// "I'm 160m east of Central, 50m north of Beach, 400m west of
+// Music Academy" → triangulate from known fixed points.
+// ═══════════════════════════════════════
+let landmarkMarkers=[],landmarkLines=[],landmarkTriMarker=null;
+const LANDMARK_TRI={
+  nearby:[], // landmarks within 5km with distances
+  triPos:null, // triangulated position from landmarks
+
+  // Find nearby landmarks and compute distances from GPS
+  update(gps){
+    if(!gps||!gps.lat||typeof LANDMARKS==='undefined')return;
+    this.nearby=LANDMARKS.map(lm=>({
+      ...lm,dist:hav(gps,{lat:lm.lat,lon:lm.lon})
+    })).filter(lm=>lm.dist<5000) // within 5km
+      .sort((a,b)=>a.dist-b.dist)
+      .slice(0,10); // top 10 nearest
+
+    // Triangulate: weighted centroid from 3+ nearest landmarks
+    if(this.nearby.length>=3){
+      let sL=0,sO=0,sW=0;
+      this.nearby.slice(0,5).forEach(lm=>{
+        const w=1/(lm.dist+10); // closer = more weight
+        sL+=lm.lat*w;sO+=lm.lon*w;sW+=w;
+      });
+      this.triPos={lat:sL/sW,lon:sO/sW,landmarks:this.nearby.length};
+    }
+  },
+
+  // During GPS denial: use last known distances + movement estimate
+  predict(pos,speed,heading,dt){
+    if(!this.nearby.length||!pos)return null;
+    // Update distances based on movement
+    const h=heading*Math.PI/180;
+    const dLat=(speed*Math.cos(h)*dt)/111320;
+    const dLon=(speed*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    // Weighted centroid from updated distances
+    let sL=0,sO=0,sW=0;
+    this.nearby.slice(0,5).forEach(lm=>{
+      const newDist=hav({lat:pos.lat+dLat,lon:pos.lon+dLon},{lat:lm.lat,lon:lm.lon});
+      const w=1/(newDist+10);
+      sL+=lm.lat*w;sO+=lm.lon*w;sW+=w;
+    });
+    return sW>0?{lat:sL/sW,lon:sO/sW}:null;
+  },
+
+  // Draw landmarks on map
+  draw(map,gps,showLayer){
+    // Clear old
+    landmarkMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+    landmarkLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
+    if(landmarkTriMarker)try{map.removeLayer(landmarkTriMarker);}catch(e){}
+    landmarkMarkers=[];landmarkLines=[];
+
+    if(!showLayer||typeof LANDMARKS==='undefined')return;
+
+    const dirColors={Centre:'#f06060',N:'#4caf50',NE:'#2196f3',E:'#ff9800',SE:'#9c27b0',S:'#00bcd4',SW:'#e91e63',W:'#8bc34a',NW:'#ff5722'};
+
+    // Draw all landmarks within 5km
+    this.nearby.forEach(lm=>{
+      const col=dirColors[lm.d]||'#ff9800';
+      const mkr=L.circleMarker([lm.lat,lm.lon],{radius:6,color:col,fillColor:col,fillOpacity:0.7,weight:2}).addTo(map);
+      mkr.bindTooltip('<b>'+lm.n+'</b><br>'+lm.id+' | '+lm.d+'<br>'+Math.round(lm.dist)+'m away',{direction:'top'});
+      landmarkMarkers.push(mkr);
+
+      // Distance line to GPS position
+      if(gps){
+        const line=L.polyline([[lm.lat,lm.lon],[gps.lat,gps.lon]],{color:col,weight:1,opacity:0.3,dashArray:'4,6'}).addTo(map);
+        landmarkLines.push(line);
+      }
+    });
+
+    // Triangulated position from landmarks
+    if(this.triPos){
+      landmarkTriMarker=L.circleMarker([this.triPos.lat,this.triPos.lon],{radius:7,color:'#ff9800',fillColor:'#ff9800',fillOpacity:0.9,weight:3}).addTo(map);
+      landmarkTriMarker.bindTooltip('LANDMARK TRI ('+this.nearby.length+' points)');
+      landmarkMarkers.push(landmarkTriMarker);
+    }
+  }
+};
+
+// Add Landmark Tri as a formula
+F.push(mkF('Landmark Tri',function(pos,dt){
+  if(typeof LANDMARKS==='undefined'||!LANDMARK_TRI.nearby.length)return null;
+  if(LANDMARK_TRI.triPos)return{lat:LANDMARK_TRI.triPos.lat,lon:LANDMARK_TRI.triPos.lon};
+  return null;
+}));
 
 // ═══════════════════════════════════════
 // MANGHNANI CONE — Position Uncertainty Constraint
