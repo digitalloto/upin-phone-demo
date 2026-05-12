@@ -138,6 +138,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('flight')" style="margin-right:3px">Flight Path</label>
     <label style="display:block;color:#00e5ff;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('gpsRadius')" style="margin-right:3px">GPS Radius</label>
     <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('landmarks')" style="margin-right:3px">Landmarks</label>
+    <label style="display:block;color:#76ff03;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('lora')" style="margin-right:3px">LoRa Beacons</label>
   </div>
 </div>
 
@@ -1605,6 +1606,10 @@ function processBoardData(d){
       }
     }
   }
+  // LoRa beacons
+  if(d.lora)LORA.processBeacons(d.lora);
+  if(gpsTrue)LORA.calibrateFromGPS(gpsTrue);
+  if(typeof L!=="undefined"&&map&&MAP_LAYERS.lora)LORA.draw(map,gpsTrue,true);
   // RF FIELD MONITOR + ANTI-SPOOF
   RF_FIELD.record(d.cell4g,d.cell2g);
   if(gpsTrue&&boardTowerList.length>0){
@@ -4907,6 +4912,167 @@ const DIRECTIONAL={
 };
 let dirMarkers=[],dirLines=[];
 
+// ═══════════════════════════════════════
+// LORA BEACON TRIANGULATION LAYER
+// For GPS-denied areas with no cell towers or WiFi.
+// Deploy 3+ LoRa beacons at known positions. Each beacon
+// broadcasts its ID + position. Receiver measures RSSI →
+// distance → triangulate from multiple beacons.
+//
+// Hardware: LoRa SX1276/SX1278 modules (~₹500 each)
+//   Beacon: ESP32 + LoRa + GPS (gets own position) + solar
+//   Receiver: ESP32 + LoRa on the UPIN board
+//   Range: 2-15km line-of-sight, 1-5km urban
+//
+// Protocol: Each beacon transmits every 2 seconds:
+//   {id:"LORA_01", lat:13.0825, lon:80.2752, rssi_tx:-2, seq:12345}
+// Receiver gets: RSSI of received signal → estimate distance
+//
+// This layer processes LoRa beacon data the same way as cell towers:
+//   known position + RSSI → distance circle → triangulate
+// ═══════════════════════════════════════
+let loraMarkers=[],loraLines=[],loraTriMarker=null;
+
+const LORA={
+  beacons:{}, // {id: {lat, lon, rssi, rssiHistory[], lastSeen, dist, name}}
+  triPos:null,
+  pathLossExp:2.7, // path loss exponent (2.0=free space, 2.7=suburban, 3.5=urban)
+  refRSSI:-40,     // RSSI at 1 meter (calibrate per beacon)
+  refDist:1,       // reference distance (1 meter)
+
+  // Process incoming LoRa beacon data from board
+  // Board sends: d.lora = {beacons: [{id, lat, lon, rssi, name}...]}
+  processBeacons(data){
+    if(!data||!data.beacons||!Array.isArray(data.beacons))return;
+    data.beacons.forEach(b=>{
+      if(!b.id||!b.lat||!b.lon)return;
+      const dist=this.rssiToDistance(b.rssi||-80);
+      if(!this.beacons[b.id])this.beacons[b.id]={lat:b.lat,lon:b.lon,rssiHistory:[],name:b.name||b.id};
+      const beacon=this.beacons[b.id];
+      beacon.lat=b.lat;beacon.lon=b.lon;
+      beacon.rssi=b.rssi||-80;
+      beacon.rssiHistory.push(beacon.rssi);
+      if(beacon.rssiHistory.length>20)beacon.rssiHistory.shift();
+      beacon.avgRssi=beacon.rssiHistory.reduce((s,v)=>s+v,0)/beacon.rssiHistory.length;
+      beacon.dist=this.rssiToDistance(beacon.avgRssi);
+      beacon.lastSeen=performance.now();
+    });
+    // Remove stale beacons (not seen for 30 seconds)
+    Object.keys(this.beacons).forEach(id=>{
+      if(performance.now()-this.beacons[id].lastSeen>30000)delete this.beacons[id];
+    });
+    this.triangulate();
+  },
+
+  // RSSI → distance using log-distance path loss model
+  rssiToDistance(rssi){
+    // d = d0 × 10^((RSSI_ref - RSSI) / (10 × n))
+    return this.refDist*Math.pow(10,(this.refRSSI-rssi)/(10*this.pathLossExp));
+  },
+
+  // Triangulate from 2+ beacons with known positions
+  triangulate(){
+    const active=Object.values(this.beacons).filter(b=>b.dist>0);
+    if(active.length<2){this.triPos=null;return;}
+    // Weighted centroid (closer beacons = more weight)
+    let sL=0,sO=0,sW=0;
+    active.forEach(b=>{
+      const w=1/(b.dist+1);
+      sL+=b.lat*w;sO+=b.lon*w;sW+=w;
+    });
+    let lat=sL/sW,lon=sO/sW;
+    // NLLS refinement if 3+ beacons
+    if(active.length>=3){
+      for(let iter=0;iter<5;iter++){
+        let gL=0,gO=0;
+        active.forEach(b=>{
+          const estDist=hav({lat,lon},{lat:b.lat,lon:b.lon});
+          const err=estDist-b.dist;
+          const dL=(lat-b.lat)/(estDist+0.0001);
+          const dO=(lon-b.lon)/(estDist+0.0001);
+          gL+=err*dL;gO+=err*dO;
+        });
+        lat-=0.00005*gL;lon-=0.00005*gO;
+      }
+    }
+    const acc=active.reduce((s,b)=>s+Math.abs(hav({lat,lon},{lat:b.lat,lon:b.lon})-b.dist),0)/active.length;
+    this.triPos={lat,lon,acc:Math.round(acc),beacons:active.length};
+  },
+
+  // GPS-learn: when GPS is available, calibrate path loss model
+  calibrateFromGPS(gps){
+    if(!gps)return;
+    Object.values(this.beacons).forEach(b=>{
+      const realDist=hav(gps,{lat:b.lat,lon:b.lon});
+      if(realDist>5&&realDist<15000&&b.avgRssi){
+        // Solve for path loss exponent: n = (RSSI_ref - RSSI) / (10 × log10(d/d0))
+        const logDist=Math.log10(realDist/this.refDist);
+        if(logDist>0.1){
+          const measuredN=(this.refRSSI-b.avgRssi)/(10*logDist);
+          this.pathLossExp=this.pathLossExp*0.9+measuredN*0.1; // EMA update
+          this.pathLossExp=Math.max(1.5,Math.min(5,this.pathLossExp));
+        }
+      }
+    });
+  },
+
+  // Draw beacons on map
+  draw(mapObj,gps,show){
+    loraMarkers.forEach(m=>{try{mapObj.removeLayer(m);}catch(e){}});
+    loraLines.forEach(l=>{try{mapObj.removeLayer(l);}catch(e){}});
+    if(loraTriMarker)try{mapObj.removeLayer(loraTriMarker);}catch(e){}
+    loraMarkers=[];loraLines=[];
+
+    if(!show)return;
+    const active=Object.values(this.beacons);
+    if(!active.length)return;
+
+    active.forEach(b=>{
+      // Beacon marker (bright yellow-green)
+      const col=b.dist<500?'#76ff03':b.dist<2000?'#c6ff00':'#ffea00';
+      const mkr=L.circleMarker([b.lat,b.lon],{radius:10,color:col,fillColor:col,fillOpacity:0.8,weight:3}).addTo(mapObj);
+      mkr.bindTooltip('<b>LoRa: '+b.name+'</b><br>RSSI: '+Math.round(b.avgRssi||b.rssi)+'dBm<br>Est dist: '+Math.round(b.dist)+'m');
+      loraMarkers.push(mkr);
+      // Distance circle from beacon
+      const circle=L.circle([b.lat,b.lon],{radius:b.dist,color:col,fillColor:col,fillOpacity:0.04,weight:2,dashArray:'8,4'}).addTo(mapObj);
+      loraMarkers.push(circle);
+      // Line to GPS or tri position
+      if(gps){
+        const line=L.polyline([[b.lat,b.lon],[gps.lat,gps.lon]],{color:col,weight:2,opacity:0.6}).addTo(mapObj);
+        loraLines.push(line);
+      }
+    });
+
+    // Triangulated position
+    if(this.triPos){
+      loraTriMarker=L.circleMarker([this.triPos.lat,this.triPos.lon],{radius:8,color:'#76ff03',fillColor:'#76ff03',fillOpacity:1,weight:3}).addTo(mapObj);
+      loraTriMarker.bindTooltip('LORA TRI: ±'+this.triPos.acc+'m ('+this.triPos.beacons+' beacons)');
+      loraMarkers.push(loraTriMarker);
+    }
+  },
+
+  stats(){
+    const active=Object.values(this.beacons);
+    return{
+      beacons:active.length,
+      triPos:this.triPos,
+      pathLossExp:this.pathLossExp.toFixed(2),
+      beaconList:active.map(b=>({name:b.name,dist:Math.round(b.dist),rssi:Math.round(b.avgRssi||b.rssi)}))
+    };
+  },
+
+  // Simulate beacons for testing (remove in production)
+  addTestBeacon(id,lat,lon,rssi,name){
+    this.processBeacons({beacons:[{id,lat,lon,rssi,name:name||id}]});
+  }
+};
+
+// LoRa Tri formula
+F.push(mkF('LoRa Tri',function(pos,dt){
+  if(!LORA.triPos)return null;
+  return{lat:LORA.triPos.lat,lon:LORA.triPos.lon};
+}));
+
 // VERSION STAMP
 const UPIN_VERSION='v5-2026.05.07';
 
@@ -5606,7 +5772,7 @@ function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish D
 // ═══════════════════════════════════════
 // MAP LAYER TOGGLES
 // ═══════════════════════════════════════
-const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true,flight:true,gpsRadius:true,landmarks:true};
+const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true,flight:true,gpsRadius:true,landmarks:true,lora:true};
 let gpsRadiusCircles=[],gpsRadiusLines=[],gpsRadiusIntersect=null;
 function toggleMapLayer(layer){
   MAP_LAYERS[layer]=!MAP_LAYERS[layer];
@@ -5623,6 +5789,7 @@ function toggleMapLayer(layer){
     if(layer==='turns'){turnMarkers.forEach(m=>{if(on)m.addTo(map);else map.removeLayer(m);});}
     if(layer==='gpsRadius'){gpsRadiusCircles.forEach(c=>{if(on)c.addTo(map);else map.removeLayer(c);});gpsRadiusLines.forEach(l=>{if(on)l.addTo(map);else map.removeLayer(l);});}
     if(layer==='landmarks'){if(typeof L!=='undefined'&&map)LANDMARK_TRI.draw(map,gpsTrue,on);}
+    if(layer==='lora'&&typeof L!=='undefined'&&map)LORA.draw(map,gpsTrue,on);
   }catch(e){}
 }
 
