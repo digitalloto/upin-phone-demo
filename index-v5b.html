@@ -1318,16 +1318,33 @@ function processBoardData(d){
         body:JSON.stringify({considerIp:false,cellTowers:allT})
       }).then(r=>r.json()).then(g=>{
         if(g.location&&g.location.lat){
-          log('Google batch fix: '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4)+' ±'+Math.round(g.accuracy)+'m','var(--green)');
+          log('Google batch fix: '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4)+' ±'+Math.round(g.accuracy)+'m — now individual lookups...','var(--green)');
           allT.forEach(t=>{
             const key=t.mobileCountryCode+'-'+t.mobileNetworkCode+'-'+t.locationAreaCode+'-'+t.cellId;
             if(!cidCache[key]||cidCache[key].miss){
-              cidCache[key]={lat:g.location.lat,lon:g.location.lng,range:g.accuracy||500};
+              cidCache[key]={lat:g.location.lat,lon:g.location.lng,range:g.accuracy||500,batch:true};
               if(TOWER_CID_IDX)TOWER_CID_IDX.set(t.cellId,{l:g.location.lat,o:g.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
-              if(typeof TOWERS!=='undefined')TOWERS.push({l:g.location.lat,o:g.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
             }
           });
-          saveCIDCache();saveTowerDB();
+          saveCIDCache();
+          // Individual lookups for each tower's UNIQUE position
+          allT.forEach(t=>{
+            const key=t.mobileCountryCode+'-'+t.mobileNetworkCode+'-'+t.locationAreaCode+'-'+t.cellId;
+            if(cidCache[key]&&cidCache[key].batch){
+              fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{
+                method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({considerIp:false,cellTowers:[{cellId:t.cellId,locationAreaCode:t.locationAreaCode,mobileCountryCode:t.mobileCountryCode,mobileNetworkCode:t.mobileNetworkCode,radioType:t.radioType,signalStrength:t.signalStrength}]})
+              }).then(r=>r.json()).then(d=>{
+                if(d.location&&d.location.lat){
+                  cidCache[key]={lat:d.location.lat,lon:d.location.lng,range:d.accuracy||500};
+                  if(TOWER_CID_IDX)TOWER_CID_IDX.set(t.cellId,{l:d.location.lat,o:d.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
+                  if(typeof TOWERS!=='undefined')TOWERS.push({l:d.location.lat,o:d.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
+                  saveCIDCache();saveTowerDB();
+                  log('Tower CID '+t.cellId+' → '+d.location.lat.toFixed(4)+','+d.location.lng.toFixed(4)+' INDIVIDUAL','var(--green)');
+                }
+              }).catch(()=>{});
+            }
+          });
         }else{
           log('Google batch: '+(g.error?g.error.message:'no result'),'var(--red)');
           processBoardData._batchDone=false;
