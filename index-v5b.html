@@ -776,7 +776,8 @@ function buildCIDIndex(){
   });
   log('Tower index: '+TOWER_CID_IDX.size+' CIDs, '+TOWER_MNC_IDX.size+' MNCs, '+TOWER_LAC_IDX.size+' LAC groups','var(--tm)');
 }
-let boardTowerList=[]; // real towers from board with positions+RSSI
+let boardTowerList=[];
+let WIFI_DB=null; // real towers from board with positions+RSSI
 
 // When CID isn't found in DB, find nearest towers with same MNC
 // (same network operator = geographically relevant)
@@ -1556,11 +1557,54 @@ function processBoardData(d){
       else $('ctTriDetail').innerHTML='<div style="color:var(--red)">NO FIX — need ≥2 towers with known positions</div><div style="color:var(--td);font-size:8px">Matched: '+boardTowerList.length+' | CIDs in local DB: 0 | API status: '+(cidPending.size>0?cidPending.size+' pending':'all checked')+'</div>';
     }catch(e){}
   }
-  // WiFi APs
+  // WiFi APs — process BSSID list when firmware sends it
   if(d.wifi){
     wifiAPs=d.wifi.aps||0;
-    $('srcWifi').innerHTML='<span class="sdot live"></span>'+wifiAPs+'ap';
+    $('srcWifi').innerHTML=(wifiAPs>0?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+wifiAPs+'ap';
     $('srcWifid').textContent=wifiAPs+' APs';
+    $('srcWifiBox').className='src '+(wifiAPs>0?'on':'off');
+    // Process individual WiFi APs when firmware sends BSSID list
+    if(d.wifi.list&&Array.isArray(d.wifi.list)&&d.wifi.list.length>0){
+      // WiFi fingerprint: record BSSID + RSSI at current GPS position
+      if(gpsTrue){
+        d.wifi.list.forEach(ap=>{
+          const bssid=ap.bssid||ap.mac||ap.BSSID;
+          const rssi=ap.rssi||ap.RSSI||-80;
+          const ssid=ap.ssid||ap.SSID||'';
+          if(!bssid)return;
+          // Save to WiFi fingerprint database
+          if(!WIFI_DB)WIFI_DB={};
+          if(!WIFI_DB[bssid])WIFI_DB[bssid]={positions:[],rssiHistory:[],ssid};
+          WIFI_DB[bssid].positions.push({lat:gpsTrue.lat,lon:gpsTrue.lon,rssi,t:performance.now()});
+          if(WIFI_DB[bssid].positions.length>50)WIFI_DB[bssid].positions.shift();
+          WIFI_DB[bssid].rssiHistory.push(rssi);
+          if(WIFI_DB[bssid].rssiHistory.length>20)WIFI_DB[bssid].rssiHistory.shift();
+        });
+        // WiFi triangulation: use known AP positions
+        const wifiMatched=[];
+        d.wifi.list.forEach(ap=>{
+          const bssid=ap.bssid||ap.mac||ap.BSSID;
+          if(bssid&&WIFI_DB[bssid]&&WIFI_DB[bssid].positions.length>=3){
+            // Average position of this AP from past sightings
+            const ps=WIFI_DB[bssid].positions;
+            const avgLat=ps.reduce((s,p)=>s+p.lat,0)/ps.length;
+            const avgLon=ps.reduce((s,p)=>s+p.lon,0)/ps.length;
+            const rssi=ap.rssi||ap.RSSI||-80;
+            wifiMatched.push({lat:avgLat,lon:avgLon,rssi,bssid,ssid:WIFI_DB[bssid].ssid});
+          }
+        });
+        // Draw WiFi APs on map
+        if(typeof L!=='undefined'&&map&&MAP_LAYERS.towers&&wifiMatched.length>0){
+          wifiMatched.forEach(ap=>{
+            const col=ap.rssi>-60?'#76ff03':ap.rssi>-70?'#69f0ae':ap.rssi>-80?'#b2ff59':'#ccff90';
+            const mkr=L.circleMarker([ap.lat,ap.lon],{radius:4,color:col,fillColor:col,fillOpacity:0.6,weight:1}).addTo(map);
+            mkr.bindTooltip('WiFi: '+(ap.ssid||ap.bssid)+'<br>RSSI: '+ap.rssi+'dBm');
+            towerMapMarkers.push(mkr); // reuse tower marker array for cleanup
+          });
+        }
+        log('WiFi: '+d.wifi.list.length+' APs scanned, '+wifiMatched.length+' with known positions','var(--teal)');
+      }
+    }
   }
   // RF FIELD MONITOR + ANTI-SPOOF
   RF_FIELD.record(d.cell4g,d.cell2g);
