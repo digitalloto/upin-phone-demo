@@ -105,7 +105,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <!-- TOP BAR -->
 <div class="topbar">
   <h1>UPIN v5b</h1>
-  <span style="font-size:7px;color:var(--td);margin-left:4px" id="appVer">v5b.2.0</span><span class="badge b-idle" id="badge">IDLE</span>
+  <span style="font-size:7px;color:var(--td);margin-left:4px" id="appVer">v5b.2.1</span><span class="badge b-idle" id="badge">IDLE</span>
 </div>
 <!-- TABS -->
 <div class="tabs">
@@ -1173,8 +1173,12 @@ function processBoardData(d){
     const raw=JSON.stringify(d).substring(0,200);
     log('BOARD PKT#'+bleGoodPkts+' keys=['+keys+'] → '+raw,'var(--amber)');
   }
+  // A9: Check age_ms for data staleness (ready for v6 firmware)
+  const imuStale=d.imu&&d.imu.age_ms&&d.imu.age_ms>2000;
+  const baroStale=d.baro&&d.baro.age_ms&&d.baro.age_ms>2000;
+  const gpsStale=d.gps&&d.gps.age_ms&&d.gps.age_ms>5000;
   // IMU (MPU9250)
-  if(d.imu&&d.imu.ok){
+  if(d.imu&&d.imu.ok&&!imuStale){
     accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
     gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
     mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
@@ -3973,11 +3977,24 @@ const PREDICTOR={
 // PREDICTOR FORMULAS — predict-ahead models added as first-class formulas
 // ═══════════════════════════════════════
 
-// F47: Predict T+5 — the validated predictor (the main idea)
-F.push(mkF('Predict T+5',(pos,dt)=>{
-  const p=PREDICTOR.predict(pos,dt);
-  return p||pos;
-}));
+// A7: T+ Prediction Horizon Ladder (13 horizons)
+// Each predicts where device will be at T+x seconds from NOW
+// Error = compare prediction made at T-x against actual position at T
+[0.2,0.5,1,2,3,4,5,10,30,60,120,300,600].forEach(horizon=>{
+  const label=horizon<60?'T+'+horizon+'s':'T+'+(horizon/60)+'m';
+  F.push(mkF(label,function(pos,dt){
+    if(!pos||DATA.samples.length<3)return null;
+    const spd=DATA.samples[DATA.samples.length-1].speed||0;
+    if(spd<0.3&&horizon>5)return null; // can't predict far ahead when stationary
+    const hdg=(compass+CAL.compassOff+PREDICTOR.headingBias)*Math.PI/180;
+    const adjSpd=spd*PREDICTOR.speedBias;
+    const dist=adjSpd*horizon;
+    return{
+      lat:pos.lat+(dist*Math.cos(hdg))/111320,
+      lon:pos.lon+(dist*Math.sin(hdg))/(111320*Math.cos(pos.lat*Math.PI/180))
+    };
+  }));
+});
 
 // F48: Accel State MA — 20-sample cruise/accel/decel aware
 F.push(mkF('Accel State MA',function(pos,dt){
@@ -5247,7 +5264,7 @@ F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat
 F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
 
 // VERSION STAMP
-const UPIN_VERSION='v5b.2.0';
+const UPIN_VERSION='v5b.2.1';
 
 // FROZEN GPS DETECTION
 const FROZEN_GPS={
