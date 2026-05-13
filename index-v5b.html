@@ -105,6 +105,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <!-- TOP BAR -->
 <div class="topbar">
   <h1>UPIN v5b</h1>
+  <span style="font-size:7px;color:var(--td);margin-left:6px" id="appVer">v5b.1.0</span>
   <span class="badge b-idle" id="badge">IDLE</span>
 </div>
 <!-- TABS -->
@@ -5246,7 +5247,7 @@ F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat
 F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
 
 // VERSION STAMP
-const UPIN_VERSION='v5-2026.05.07';
+const UPIN_VERSION='v5b.1.0';
 
 // FROZEN GPS DETECTION
 const FROZEN_GPS={
