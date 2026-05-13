@@ -105,7 +105,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <!-- TOP BAR -->
 <div class="topbar">
   <h1>UPIN v5b</h1>
-  <span style="font-size:7px;color:var(--td);margin-left:6px" id="appVer">v5b.1.0</span>
+  <span style="font-size:7px;color:var(--td);margin-left:6px" id="appVer">v5b.1.1</span>
   <span class="badge b-idle" id="badge">IDLE</span>
 </div>
 <!-- TABS -->
@@ -568,6 +568,8 @@ let pressure=0,temp=0,baroAlt=0,laserMm=0;
 let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
 let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
 let calGpsPos=null; // GPS position at calibration time — defines the "city"
+// A6: Surveyed landmark reference mode
+const LANDMARK_REF={active:false,lat:0,lon:0,name:"",id:""};
 
 // STATIONARY DETECTION — freeze position when not moving
 let isStationary=false;
@@ -2030,29 +2032,32 @@ F.push(mkF('Mag Map Match',function(pos,dt){
 
 const FORMULAS=F;
 function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{
-  if(f.name.includes('disabled'))return; // skip disabled
+  if(f.name.includes('disabled'))return;
+  if(f._status==='INSUFFICIENT_DATA')return;
   if(f.errAvg<bE){bE=f.errAvg;b=i;}
 });return b;}
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
-  // When stationary, use frozen position as truth (GPS jitters ±15m even when still)
   const truth=isStationary&&frozenPos?frozenPos:gps;
+  // Use surveyed landmark as truth if in landmark mode
+  const refTruth=LANDMARK_REF.active?{lat:LANDMARK_REF.lat,lon:LANDMARK_REF.lon}:truth;
   F.forEach(f=>{
+    // A2: Skip disabled formulas entirely — no compute, no rank, no score
+    if(f.name.includes('disabled')){f.err=999;f.errAvg=999;return;}
     if(!f.pos)f.pos={lat:truth.lat,lon:truth.lon};
     const predicted=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
-    if(predicted){
-      f.err=hav(predicted,truth);
-      // When stationary: any formula predicting movement is WRONG.
-      // Penalize distance from frozen position, not GPS jitter.
-      if(isStationary&&frozenPos){
-        const moveDist=hav(predicted,frozenPos);
-        if(moveDist>2)f.err=moveDist; // you moved when you shouldn't have
-      }
-      f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();
-      f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
-      f.learnFromGPS(predicted,truth);
-      // Store the prediction for display (not the reset position)
-      f._lastPredLat=predicted.lat;f._lastPredLon=predicted.lon;
+    // A3: If formula returned null, mark as INSUFFICIENT_DATA
+    if(!predicted){f.err=999;f._status='INSUFFICIENT_DATA';return;}
+    f._status='RUNNING';
+    f.err=hav(predicted,refTruth);
+    if(isStationary&&frozenPos){
+      const moveDist=hav(predicted,frozenPos);
+      if(moveDist>2)f.err=moveDist;
+    }
+    f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();
+    f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
+    f.learnFromGPS(predicted,refTruth);
+    f._lastPredLat=predicted.lat;f._lastPredLon=predicted.lon;
     }
     f.pos={lat:truth.lat,lon:truth.lon};
   });
@@ -4693,26 +4698,24 @@ function tick(){
     $('ovBest').textContent=F[bi].name+' '+(F[bi].errAvg<999?F[bi].errAvg.toFixed(1)+'m':'--');
     if(phase==='recording'&&F[bi].errAvg<999)$('ovErr').textContent=F[bi].errAvg.toFixed(1)+'m';
     F.forEach((f,i)=>{
+      // A2: Skip disabled formulas entirely — hide the row
+      if(f.name.includes('disabled')){const row=$('f'+i);if(row)row.style.display='none';return;}
       const el=$('fe'+i);if(!el)return;
-      el.textContent=f.errAvg<999?f.errAvg.toFixed(1)+'m':'--';
-      el.style.color=f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)';
-      $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'err');
-      // Lat/Lon column
-      const fp=$('fp'+i);if(fp)fp.textContent=f._lastPredLat?f._lastPredLat.toFixed(6)+','+f._lastPredLon.toFixed(6):(f.pos?f.pos.lat.toFixed(6)+','+f.pos.lon.toFixed(6):'--');
-      // Status: detect if formula is actually predicting or just passing through
-      const fs=$('fs'+i);const running=f.errAvg<999;
-      // Detect passthrough: if predicted lat/lon equals GPS lat/lon, formula isn't doing anything
-      const isPassthrough=f._lastPredLat&&gpsSys&&Math.abs(f._lastPredLat-gpsSys.lat)<0.0000001&&Math.abs(f._lastPredLon-gpsSys.lon)<0.0000001;
-      // Disabled formulas (return null)
-      const isDisabled=f.name.includes('disabled');
-      // Show agent-tuned error if available
+      // A3: Show NaN for formulas without data
+      const hasData=f.errAvg<999&&f._status!=='INSUFFICIENT_DATA';
+      el.textContent=hasData?f.errAvg.toFixed(1)+'m':'NaN';
+      el.style.color=hasData?(f.errAvg<5?'var(--green)':f.errAvg<15?'var(--amber)':'var(--red)'):'var(--td)';
+      $('fd'+i).className='sdot '+(hasData?(f.errAvg<10?'live':'off'):'err');
+      const fp=$('fp'+i);if(fp)fp.textContent=f._lastPredLat?f._lastPredLat.toFixed(6)+','+f._lastPredLon.toFixed(6):'--';
+      const fs=$('fs'+i);
+      const isInsufficient=f._status==='INSUFFICIENT_DATA';
       let agentInfo='';
       if(FAGENTS.initialized&&FAGENTS.pools[i]){
         const ap=[...FAGENTS.pools[i]].sort((a,b)=>a.errAvg-b.errAvg);
         if(ap[0].errAvg<999)agentInfo=' A:'+ap[0].errAvg.toFixed(1)+'m';
       }
-      if(isDisabled){fs.textContent='DISABLED';fs.className='f-wait';$('f'+i).className='';}
-      else if(isPassthrough){fs.textContent='PASSTHROUGH';fs.className='f-wait';$('f'+i).className='';}
+      if(isInsufficient){fs.textContent='NaN:INSUFFICIENT_DATA';fs.className='f-wait';$('f'+i).className='';
+      }else if(f._lastPredLat&&gpsSys&&Math.abs(f._lastPredLat-gpsSys.lat)<0.0000001){fs.textContent='PASSTHROUGH';fs.className='f-wait';$('f'+i).className='';}
       else if(i===bi&&!isPassthrough){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
       else if(running&&!isPassthrough){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
       else{fs.textContent='WAITING';fs.className='f-wait';$('f'+i).className='';}
@@ -5247,7 +5250,7 @@ F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat
 F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
 
 // VERSION STAMP
-const UPIN_VERSION='v5b.1.0';
+const UPIN_VERSION='v5b.1.1';
 
 // FROZEN GPS DETECTION
 const FROZEN_GPS={
