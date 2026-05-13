@@ -105,7 +105,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <!-- TOP BAR -->
 <div class="topbar">
   <h1>UPIN v5b</h1>
-  <span style="font-size:7px;color:var(--td);margin-left:6px" id="appVer">v5b.1.1</span>
+  <span style="font-size:7px;color:var(--td);margin-left:6px" id="appVer">v5b.1.2</span>
   <span class="badge b-idle" id="badge">IDLE</span>
 </div>
 <!-- TABS -->
@@ -4716,8 +4716,8 @@ function tick(){
       }
       if(isInsufficient){fs.textContent='NaN:INSUFFICIENT_DATA';fs.className='f-wait';$('f'+i).className='';
       }else if(f._lastPredLat&&gpsSys&&Math.abs(f._lastPredLat-gpsSys.lat)<0.0000001){fs.textContent='PASSTHROUGH';fs.className='f-wait';$('f'+i).className='';}
-      else if(i===bi&&!isPassthrough){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
-      else if(running&&!isPassthrough){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
+      else if(i===bi){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
+      else if(hasData){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
       else{fs.textContent='WAITING';fs.className='f-wait';$('f'+i).className='';}
     });
     // Source boxes red/green
@@ -5250,7 +5250,7 @@ F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat
 F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
 
 // VERSION STAMP
-const UPIN_VERSION='v5b.1.1';
+const UPIN_VERSION='v5b.1.2';
 
 // FROZEN GPS DETECTION
 const FROZEN_GPS={
