@@ -146,6 +146,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" id="layer2cToggle" onchange="if(window.LAYER2)LAYER2.cellSanity=this.checked" style="margin-right:3px">L2C: Cell Sanity</label>
     <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked id="layer3Toggle" onchange="if(window.LAYER3)LAYER3.enabled=this.checked" style="margin-right:3px">L3: NLLS Trilat</label>
     <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked id="layer6Toggle" onchange="if(window.LAYER6)LAYER6.enabled=this.checked" style="margin-right:3px">L6: Bound+Algebra</label>
+    <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" id="layer4Toggle" onchange="V.toggleSwarm(this.checked)" style="margin-right:3px">L4: Swarm Optimizer</label>
   </div>
 </div>
 
@@ -547,6 +548,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <script src="LAYER_gps_smoothing.js"></script>
 <script src="LAYER_landmark_triangulation.js"></script>
 <script src="LAYER_bounded_math.js"></script>
+<script src="LAYER_swarm_optimizer.js"></script>
 <script>
 var V=(()=>{
 // ═══════════════════════════════════════
@@ -4386,6 +4388,11 @@ function tick(){
       LAYER6.tick({accel,gyro,mag,compass,pressure,gps:gpsSys,speed:gpsSys.speed||avgSpeed(5)||0,heading:compass+CAL.compassOff,dt,stepCount,boardTowerList,CAL,isStationary},F);
       if(typeof L!=='undefined'&&map&&uiFrame%5===0)LAYER6.drawMap(map,F);
     }
+    // LAYER 4: Swarm optimizer — self-tuning variants
+    if(window.LAYER4&&LAYER4.enabled){
+      const truth=window.LAYER1&&LAYER1.enabled?LAYER1.getTruth(gpsSys):gpsSys;
+      LAYER4.tick(F,truth,dt);
+    }
     // ── ML LAYER TRAINING (GPS available → learn patterns) ──
     try{
       const bestErr=F[bestFormulaIdx()].errAvg;
@@ -5978,6 +5985,8 @@ function exportCSV(){
   if(window.LAYER2) c+='\n'+LAYER2.csvSummary();
   // Layer 6 bounded learning + algebraic reconstruction
   if(window.LAYER6) c+=LAYER6.csvTrailer(gpsSys);
+  // Layer 4 swarm optimizer converged weights
+  if(window.LAYER4&&LAYER4.enabled) c+=LAYER4.csvTrailer();
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
   a.download=runId+'.csv';a.click();
   log('CSV exported: '+runId+'.csv ('+DATA.count()+' samples, '+clusters+' clusters)','var(--green)');
@@ -5993,6 +6002,20 @@ function clearRoutes(){ROUTES.stored=[];ROUTES.save();log('All routes cleared','
 function exportTowers(){TOWER_CAPTURE.exportCSV();}
 function clearCaptured(){TOWER_CAPTURE.clear();}
 function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish DNA reset — will re-evolve','var(--amber)');}catch(e){}}
+function toggleSwarm(on){
+  if(!window.LAYER4){log('Layer 4 (swarm) not loaded','var(--red)');return;}
+  if(on){
+    // Init swarm on top 5 RUNNING formulas
+    const running=[];
+    F.forEach((f,i)=>{if(f.errAvg<999&&!f.name.includes('disabled')&&running.length<5)running.push(i);});
+    if(running.length<1){log('Need at least 1 running formula to start swarm','var(--amber)');return;}
+    LAYER4.init(F,running);
+    log('Swarm started: '+LAYER4.variantCount+' variants × '+running.length+' formulas = '+(LAYER4.variantCount*running.length)+' agents','var(--purple)');
+  } else {
+    LAYER4.enabled=false;
+    log('Swarm disabled','var(--td)');
+  }
+}
 // ═══════════════════════════════════════
 // MAP LAYER TOGGLES
 // ═══════════════════════════════════════
@@ -6543,7 +6566,7 @@ window.addEventListener('load',()=>{
     if(b){const d=document.createElement('div');d.style.color='#f06060';d.textContent='[LOAD] '+e.message;b.appendChild(d);}
   }
 });
-return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,downloadReport,_getProfile};
+return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,downloadReport,toggleSwarm,_getProfile};
 })();
 </script>
 </body>
