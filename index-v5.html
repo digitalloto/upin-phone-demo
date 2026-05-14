@@ -105,7 +105,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <!-- TOP BAR -->
 <div class="topbar">
   <h1>UPIN v5</h1>
-  <span class="badge b-idle" id="badge">IDLE</span>
+  <span style="font-size:7px;color:var(--td);margin-left:4px" id="appVer">v5b.2.2</span><span class="badge b-idle" id="badge">IDLE</span>
 </div>
 <!-- TABS -->
 <div class="tabs">
@@ -139,6 +139,12 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#00e5ff;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('gpsRadius')" style="margin-right:3px">GPS Radius</label>
     <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('landmarks')" style="margin-right:3px">Landmarks</label>
     <label style="display:block;color:#76ff03;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('lora')" style="margin-right:3px">LoRa Beacons</label>
+    <div style="border-top:1px solid var(--border);margin-top:3px;padding-top:3px;color:var(--cyan);font-weight:700;letter-spacing:1px;margin-bottom:2px">FILTERS</div>
+    <label style="display:block;color:#3dcc6e;cursor:pointer"><input type="checkbox" checked id="layer5Toggle" onchange="if(window.LAYER5)LAYER5.enabled=this.checked" style="margin-right:3px">L5: Rank Demotion</label>
+    <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" checked id="layer2aToggle" onchange="if(window.LAYER2)LAYER2.jumpReject=this.checked" style="margin-right:3px">L2A: Jump Reject</label>
+    <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" id="layer2bToggle" onchange="if(window.LAYER2)LAYER2.motionReject=this.checked" style="margin-right:3px">L2B: Motion Filter</label>
+    <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" id="layer2cToggle" onchange="if(window.LAYER2)LAYER2.cellSanity=this.checked" style="margin-right:3px">L2C: Cell Sanity</label>
+    <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked id="layer3Toggle" onchange="if(window.LAYER3)LAYER3.enabled=this.checked" style="margin-right:3px">L3: NLLS Trilat</label>
   </div>
 </div>
 
@@ -153,6 +159,8 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <button class="btn btn-red" id="gpsDeniedBtn" onclick="V.toggleGpsDenied()" style="font-size:7px;padding:5px 8px;flex:0 0 auto">GPS DENIED MODE: OFF</button>
     <span style="font-size:7px;color:var(--td)">Suppress GPS to test UPIN-only positioning</span>
   </div>
+  <!-- LAYER 1: Reference Mode selector -->
+  <div id="layer1RefMode" style="background:var(--panel);border:1px solid var(--green);border-radius:2px;padding:6px 8px;margin-bottom:6px"></div>
   <!-- Connection -->
   <div class="card">
     <div class="card-title">HARDWARE BOARD <span class="ble-badge ble-off" id="bleBadge">BLE</span> <span class="ble-badge ble-off" id="wifiBadge">WiFi</span></div>
@@ -532,6 +540,11 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="towers-data.js"></script>
 <script src="landmarks-data.js"></script>
+<!-- DELETE-SAFE LAYERS — remove any script tag to revert that layer -->
+<script src="LAYER_passthrough_demotion.js"></script>
+<script src="LAYER_landmark_reference.js"></script>
+<script src="LAYER_gps_smoothing.js"></script>
+<script src="LAYER_landmark_triangulation.js"></script>
 <script>
 var V=(()=>{
 // ═══════════════════════════════════════
@@ -567,6 +580,7 @@ let pressure=0,temp=0,baroAlt=0,laserMm=0;
 let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
 let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
 let calGpsPos=null; // GPS position at calibration time — defines the "city"
+const LANDMARK_REF={active:false,lat:0,lon:0,name:"",id:""};
 
 // STATIONARY DETECTION — freeze position when not moving
 let isStationary=false;
@@ -1172,8 +1186,12 @@ function processBoardData(d){
     const raw=JSON.stringify(d).substring(0,200);
     log('BOARD PKT#'+bleGoodPkts+' keys=['+keys+'] → '+raw,'var(--amber)');
   }
+  // A9: Check age_ms for data staleness (ready for v6 firmware)
+  const imuStale=d.imu&&d.imu.age_ms&&d.imu.age_ms>2000;
+  const baroStale=d.baro&&d.baro.age_ms&&d.baro.age_ms>2000;
+  const gpsStale=d.gps&&d.gps.age_ms&&d.gps.age_ms>5000;
   // IMU (MPU9250)
-  if(d.imu&&d.imu.ok){
+  if(d.imu&&d.imu.ok&&!imuStale){
     accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
     gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
     mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
@@ -1194,7 +1212,8 @@ function processBoardData(d){
   if(d.gps&&d.gps.ok&&!gpsDeniedMode&&phase!=='jammed'&&phase!=='spoofed'){
     const gv=validateFix(d.gps.lat,d.gps.lon,'boardGPS');
     if(gv.ok){
-      const pos={lat:gv.lat,lon:gv.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
+      let pos={lat:gv.lat,lon:gv.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
+      if(window.LAYER2) pos=LAYER2.smoothGPS(pos,0,isStationary,frozenPos);
       gpsTrue=pos;gpsSource='board';
       if(phase==='idle'||phase==='recording')gpsSys=pos;
       baroAlt=d.gps.alt||baroAlt;
@@ -1634,7 +1653,8 @@ function initPhoneGPS(){
   _gpsWatchId=navigator.geolocation.watchPosition(p=>{
     const v=validateFix(p.coords.latitude,p.coords.longitude,'phoneGPS');
     if(!v.ok)return;
-    const phoneFix={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:p.coords.speed||0};
+    let phoneFix={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:p.coords.speed||0};
+    if(window.LAYER2) phoneFix=LAYER2.smoothGPS(phoneFix,0,isStationary,frozenPos);
     // During jam/spoof: keep gpsTrue for drift measurement but don't update gpsSys
     if(phase==='jammed'||phase==='spoofed'){
       gpsTrue=phoneFix; // ground truth only — NOT fed to formulas
@@ -2028,14 +2048,17 @@ F.push(mkF('Mag Map Match',function(pos,dt){
 }));
 
 const FORMULAS=F;
-function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{
-  if(f.name.includes('disabled'))return; // skip disabled
+function bestFormulaIdx(){
+  if(window.LAYER5&&LAYER5.enabled) return LAYER5.bestRunningIdx(F,gpsSys);
+  let b=0,bE=Infinity;F.forEach((f,i)=>{
+  if(f.name.includes('disabled'))return;
   if(f.errAvg<bE){bE=f.errAvg;b=i;}
 });return b;}
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
-  // When stationary, use frozen position as truth (GPS jitters ±15m even when still)
-  const truth=isStationary&&frozenPos?frozenPos:gps;
+  // Layer 1: use surveyed landmark as truth when active
+  const rawTruth=isStationary&&frozenPos?frozenPos:gps;
+  const truth=window.LAYER1&&LAYER1.enabled?LAYER1.getTruth(rawTruth):rawTruth;
   F.forEach(f=>{
     if(!f.pos)f.pos={lat:truth.lat,lon:truth.lon};
     const predicted=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
@@ -3972,11 +3995,24 @@ const PREDICTOR={
 // PREDICTOR FORMULAS — predict-ahead models added as first-class formulas
 // ═══════════════════════════════════════
 
-// F47: Predict T+5 — the validated predictor (the main idea)
-F.push(mkF('Predict T+5',(pos,dt)=>{
-  const p=PREDICTOR.predict(pos,dt);
-  return p||pos;
-}));
+// A7: T+ Prediction Horizon Ladder (13 horizons)
+// Each predicts where device will be at T+x seconds from NOW
+// Error = compare prediction made at T-x against actual position at T
+[0.2,0.5,1,2,3,4,5,10,30,60,120,300,600].forEach(horizon=>{
+  const label=horizon<60?'T+'+horizon+'s':'T+'+(horizon/60)+'m';
+  F.push(mkF(label,function(pos,dt){
+    if(!pos||DATA.samples.length<3)return null;
+    const spd=DATA.samples[DATA.samples.length-1].speed||0;
+    if(spd<0.3&&horizon>5)return null; // can't predict far ahead when stationary
+    const hdg=(compass+CAL.compassOff+PREDICTOR.headingBias)*Math.PI/180;
+    const adjSpd=spd*PREDICTOR.speedBias;
+    const dist=adjSpd*horizon;
+    return{
+      lat:pos.lat+(dist*Math.cos(hdg))/111320,
+      lon:pos.lon+(dist*Math.sin(hdg))/(111320*Math.cos(pos.lat*Math.PI/180))
+    };
+  }));
+});
 
 // F48: Accel State MA — 20-sample cruise/accel/decel aware
 F.push(mkF('Accel State MA',function(pos,dt){
@@ -5246,7 +5282,7 @@ F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat
 F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
 
 // VERSION STAMP
-const UPIN_VERSION='v5-2026.05.07';
+const UPIN_VERSION='v5b.2.2';
 
 // FROZEN GPS DETECTION
 const FROZEN_GPS={
@@ -5890,7 +5926,7 @@ function exportCSV(){
   c+='# Started-UTC: '+(startTime?new Date(Date.now()-(performance.now()-startTime)).toISOString():'N/A')+'\n';
   c+='# Duration: '+Math.round((startTime?(performance.now()-startTime)/1000:0))+'s\n';
   c+='# Phone-Model: '+navigator.userAgent.substring(0,60)+'\n';
-  c+='# Test-Mode: phone-gps\n';
+  c+=(window.LAYER1&&LAYER1.enabled?LAYER1.csvHeader():'# Test-Mode: phone-gps\n');
   c+='# Board: '+(boardConnected?boardSource:'disconnected')+'\n';
   c+='# GPS-Source: '+gpsSource+'\n';
   c+='# Towers: '+(cellTowers4G+cellTowers2G)+' (4G:'+cellTowers4G+' 2G:'+cellTowers2G+')\n';
@@ -5900,20 +5936,23 @@ function exportCSV(){
   c+='# Profile: '+(PROFILES?PROFILES.active:'default')+'\n';
   c+='# Version: '+UPIN_VERSION+'\n';
   c+='#\n';
-  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs\n';
+  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_Anchors,LM_Tri_Resid_m\n';
   DATA.samples.forEach((s,i)=>{
     // Speed estimator: GPS delta over 2s window
     let spdEst=s.speed;
     if(i>=2){const prev=DATA.samples[i-2];const dt=(s.t-prev.t)/1000;if(dt>0&&dt<5){const d=hav({lat:s.lat,lon:s.lon},{lat:prev.lat,lon:prev.lon});spdEst=d/dt;}}
-    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0}\n`;
+    const l2f=window.LAYER2?LAYER2.csvFlags(s.t):'';
+    const l3=window.LAYER3?LAYER3.csvColumns():{landmark_tri_lat:'',landmark_tri_lon:'',landmark_tri_n_anchors:'',landmark_tri_residual_m:''};
+    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${l3.landmark_tri_lat},${l3.landmark_tri_lon},${l3.landmark_tri_n_anchors},${l3.landmark_tri_residual_m}\n`;
   });
-  // Formula rankings with status
+  // Formula rankings with status (Layer 5: RUNNING first, then PASSTHROUGH, WAITING, DISABLED)
   c+='\n# FORMULA RANKINGS\n';
   c+='Rank,Name,Error_m,Corrections,SpeedScale,Status,PredLat,PredLon\n';
-  const ranked=[...F].map((f,i)=>({n:f.name,e:f.errAvg,c:f.corrCount,s:f.speedScale,lat:f._lastPredLat||0,lon:f._lastPredLon||0,dis:f.name.includes('disabled')})).sort((a,b)=>a.e-b.e);
+  const ranked=window.LAYER5&&LAYER5.enabled
+    ? LAYER5.sortedRankings(F,gpsSys)
+    : [...F].map((f,i)=>({name:f.name,errAvg:f.errAvg,corrCount:f.corrCount,speedScale:f.speedScale,lat:f._lastPredLat||0,lon:f._lastPredLon||0,status:f.name.includes('disabled')?'DISABLED':f.errAvg>=999?'WAITING':f.errAvg<0.001?'PASSTHROUGH':'RUNNING'})).sort((a,b)=>a.errAvg-b.errAvg);
   ranked.forEach((f,i)=>{
-    const status=f.dis?'DISABLED':f.e>=999?'WAITING':f.e<0.001?'PASSTHROUGH':'RUNNING';
-    c+=`${i+1},${f.n},${f.e<999?f.e.toFixed(1):'NaN:INSUFFICIENT_DATA'},${f.c},${f.s.toFixed(3)},${status},${f.lat.toFixed(7)},${f.lon.toFixed(7)}\n`;
+    c+=`${i+1},${f.name},${f.errAvg<999?f.errAvg.toFixed(1):'NaN:INSUFFICIENT_DATA'},${f.corrCount},${f.speedScale.toFixed(3)},${f.status},${f.lat.toFixed(7)},${f.lon.toFixed(7)}\n`;
   });
   // Clustered algorithm detection
   c+='\n# CLUSTER DETECTION (pairs < 0.5m apart)\n';
@@ -5926,6 +5965,8 @@ function exportCSV(){
   }}
   if(clusters===0)c+='# No clusters detected — all formulas producing unique outputs\n';
   else c+='# WARNING: '+clusters+' formula pairs producing identical outputs — likely degenerated\n';
+  // Layer 2 GPS smoothing stats
+  if(window.LAYER2) c+='\n'+LAYER2.csvSummary();
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
   a.download=runId+'.csv';a.click();
   log('CSV exported: '+runId+'.csv ('+DATA.count()+' samples, '+clusters+' clusters)','var(--green)');
