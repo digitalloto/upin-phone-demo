@@ -1,0 +1,40 @@
+landmark_id,name,place_id,lat,lon,direction,landmark_type,density_zone,address,verified_date,dist_from_centre_m,notes
+CHN_C_01,Chennai Central Railway Station (Main Entrance),,13.0825,80.2752,Centre,transport,dense_urban,,2026-05-12,488,"Major railway hub, fixed building corner"
+CHN_C_02,Egmore Railway Station,,13.0732,80.2609,Centre,transport,dense_urban,,2026-05-12,1498,"Heritage building, clear entrance point"
+CHN_C_03,Government Museum Chennai,,13.0696,80.2549,Centre,government,urban,,2026-05-12,2247,Museum entrance gate
+CHN_N_01,Anna Nagar Tower (Park Entrance),,13.085,80.2098,N,landmark,urban,,2026-05-12,6601,"Iconic tower, clear reference point"
+CHN_N_02,Koyambedu Bus Terminal (Main Gate),,13.0694,80.196,N,transport,dense_urban,,2026-05-12,8225,Largest bus terminal in Asia
+CHN_N_03,Ambattur Industrial Estate Gate,,13.1145,80.1564,N,junction,suburban,,2026-05-12,12874,Clear gate structure
+CHN_N_04,Madhavaram Junction,,13.1486,80.2318,N,junction,suburban,,2026-05-12,8452,Major junction
+CHN_N_05,Tiruvottiyur Temple,,13.159,80.3004,N,temple,urban,,2026-05-12,9073,"Ancient temple, fixed structure"
+CHN_NE_01,Royapuram Railway Station,,13.1096,80.294,NE,transport,dense_urban,,2026-05-12,3913,Oldest railway station in South India
+CHN_NE_02,Tondiarpet Market Junction,,13.1175,80.2851,NE,junction,dense_urban,,2026-05-12,4172,Major market junction
+CHN_NE_03,Washermanpet Metro Station,,13.1122,80.2811,NE,metro_station,dense_urban,,2026-05-12,3468,Metro station entrance
+CHN_NE_04,Ennore Port Gate,,13.212,80.3205,NE,landmark,open_sky,,2026-05-12,15355,"Port entrance, open area"
+CHN_E_01,Marina Beach Lighthouse,,13.0395,80.2796,E,landmark,open_sky,,2026-05-12,4899,Lighthouse — excellent open sky test point
+CHN_E_02,Kapaleeshwarar Temple (Mylapore),,13.0336,80.2694,E,temple,dense_urban,,2026-05-12,5461,"Ancient Shiva temple, main gopuram entrance"
+CHN_E_03,San Thome Cathedral,,13.0335,80.2779,E,religious,urban,,2026-05-12,5526,"Cathedral entrance, clear reference"
+CHN_E_04,Triplicane Big Mosque,,13.0585,80.2728,E,religious,dense_urban,,2026-05-12,2701,Historic mosque
+CHN_E_05,George Town (High Court),,13.0874,80.2871,E,government,dense_urban,,2026-05-12,1852,Madras High Court entrance
+CHN_SE_01,Besant Nagar Beach (Karl Schmidt Memorial),,13.0002,80.2711,SE,landmark,open_sky,,2026-05-12,9174,"Beach landmark, open sky"
+CHN_SE_02,Thiruvanmiyur MRTS Station,,12.9833,80.2634,SE,transport,urban,,2026-05-12,11081,Railway station entrance
+CHN_SE_03,VGP Universal Kingdom Gate,,12.9735,80.2572,SE,landmark,suburban,,2026-05-12,12230,Theme park entrance
+CHN_SE_04,Tidel Park (IT Corridor),,12.9881,80.2461,SE,landmark,urban,,2026-05-12,10851,"Major IT building, clear entrance"
+CHN_S_01,Adyar Eco Park Entrance,,13.006,80.2568,S,park,open_sky,,2026-05-12,8661,"Park gate, open area"
+CHN_S_02,Velachery MRTS Station,,12.9796,80.2182,S,transport,urban,,2026-05-12,12797,MRTS station entrance
+CHN_S_03,Phoenix Marketcity Mall Entrance,,12.9917,80.2181,S,landmark,dense_urban,,2026-05-12,11613,"Major mall, clear entrance"
+CHN_S_04,Tambaram Railway Station,,12.9249,80.1179,S,transport,suburban,,2026-05-12,24124,Major junction station
+CHN_S_05,Pallikaranai Marshland Viewpoint,,12.938,80.2087,S,park,open_sky,,2026-05-12,17436,"Wetland area, very open sky"
+CHN_SW_01,Guindy National Park Gate,,13.004,80.2315,SW,park,open_sky,,2026-05-12,9727,"Park entrance, open area"
+CHN_SW_02,Chennai Airport (Domestic Terminal),,12.9941,80.1709,SW,transport,open_sky,,2026-05-12,14627,"Airport terminal entrance, open sky"
+CHN_SW_03,Chrompet Bus Depot,,12.9516,80.1414,SW,transport,suburban,,2026-05-12,20217,Bus depot entrance
+CHN_SW_04,Pallavaram Junction,,12.9679,80.1492,SW,junction,urban,,2026-05-12,18336,Major junction
+CHN_W_01,T Nagar Pondy Bazaar (North End),,13.0427,80.2354,W,junction,dense_urban,,2026-05-12,5865,"Famous shopping street, dense urban"
+CHN_W_02,Vadapalani Murugan Temple,,13.052,80.2122,W,temple,dense_urban,,2026-05-12,7197,"Major temple, clear gopuram entrance"
+CHN_W_03,Valasaravakkam Junction,,13.0467,80.1717,W,junction,suburban,,2026-05-12,11446,Junction point
+CHN_W_04,Porur Junction,,13.0365,80.1562,W,junction,suburban,,2026-05-12,13424,"Major junction, suburban"
+CHN_W_05,CMBT Metro Station,,13.0689,80.1994,W,metro_station,dense_urban,,2026-05-12,7874,Metro station near bus terminal
+CHN_NW_01,Anna Nagar West Roundtana,,13.093,80.203,NW,junction,urban,,2026-05-12,7421,Roundabout junction
+CHN_NW_02,Padi Junction Flyover,,13.1088,80.2035,NW,junction,urban,,2026-05-12,7835,Flyover junction
+CHN_NW_04,Mogappair Eri (Lake Park),,13.0927,80.1779,NW,park,open_sky,,2026-05-12,10112,"Lake park, open sky"
+CHN_NW_05,Thirumangalam Junction,,13.0866,80.2253,NW,junction,dense_urban,,2026-05-12,4936,Major junction

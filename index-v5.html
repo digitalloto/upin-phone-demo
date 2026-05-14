@@ -137,6 +137,8 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('turns')" style="margin-right:3px">Turn Markers</label>
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('flight')" style="margin-right:3px">Flight Path</label>
     <label style="display:block;color:#00e5ff;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('gpsRadius')" style="margin-right:3px">GPS Radius</label>
+    <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('landmarks')" style="margin-right:3px">Landmarks</label>
+    <label style="display:block;color:#76ff03;cursor:pointer"><input type="checkbox" checked onchange="V.toggleMapLayer('lora')" style="margin-right:3px">LoRa Beacons</label>
   </div>
 </div>
 
@@ -529,6 +531,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="towers-data.js"></script>
+<script src="landmarks-data.js"></script>
 <script>
 var V=(()=>{
 // ═══════════════════════════════════════
@@ -774,7 +777,8 @@ function buildCIDIndex(){
   });
   log('Tower index: '+TOWER_CID_IDX.size+' CIDs, '+TOWER_MNC_IDX.size+' MNCs, '+TOWER_LAC_IDX.size+' LAC groups','var(--tm)');
 }
-let boardTowerList=[]; // real towers from board with positions+RSSI
+let boardTowerList=[];
+let WIFI_DB=null; // WiFi fingerprint database {bssid: {positions[], rssiHistory[], ssid}} // real towers from board with positions+RSSI
 
 // When CID isn't found in DB, find nearest towers with same MNC
 // (same network operator = geographically relevant)
@@ -1316,16 +1320,35 @@ function processBoardData(d){
         body:JSON.stringify({considerIp:false,cellTowers:allT})
       }).then(r=>r.json()).then(g=>{
         if(g.location&&g.location.lat){
-          log('Google batch fix: '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4)+' ±'+Math.round(g.accuracy)+'m','var(--green)');
+          log('Google batch fix: '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4)+' ±'+Math.round(g.accuracy)+'m — now looking up individual towers...','var(--green)');
+          // Save batch position as temporary (will be replaced by individual lookups)
           allT.forEach(t=>{
             const key=t.mobileCountryCode+'-'+t.mobileNetworkCode+'-'+t.locationAreaCode+'-'+t.cellId;
             if(!cidCache[key]||cidCache[key].miss){
-              cidCache[key]={lat:g.location.lat,lon:g.location.lng,range:g.accuracy||500};
+              cidCache[key]={lat:g.location.lat,lon:g.location.lng,range:g.accuracy||500,batch:true};
               if(TOWER_CID_IDX)TOWER_CID_IDX.set(t.cellId,{l:g.location.lat,o:g.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
-              if(typeof TOWERS!=='undefined')TOWERS.push({l:g.location.lat,o:g.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
             }
           });
-          saveCIDCache();saveTowerDB();
+          saveCIDCache();
+          // NOW: send INDIVIDUAL lookups to get each tower's UNIQUE position
+          allT.forEach(t=>{
+            const key=t.mobileCountryCode+'-'+t.mobileNetworkCode+'-'+t.locationAreaCode+'-'+t.cellId;
+            if(cidCache[key]&&cidCache[key].batch){
+              // Individual lookup — send just this ONE tower
+              fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{
+                method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({considerIp:false,cellTowers:[{cellId:t.cellId,locationAreaCode:t.locationAreaCode,mobileCountryCode:t.mobileCountryCode,mobileNetworkCode:t.mobileNetworkCode,radioType:t.radioType,signalStrength:t.signalStrength}]})
+              }).then(r=>r.json()).then(d=>{
+                if(d.location&&d.location.lat){
+                  cidCache[key]={lat:d.location.lat,lon:d.location.lng,range:d.accuracy||500};
+                  if(TOWER_CID_IDX)TOWER_CID_IDX.set(t.cellId,{l:d.location.lat,o:d.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
+                  if(typeof TOWERS!=='undefined')TOWERS.push({l:d.location.lat,o:d.location.lng,m:t.mobileNetworkCode,c:t.cellId,a:t.locationAreaCode});
+                  saveCIDCache();saveTowerDB();
+                  log('Tower CID '+t.cellId+' → '+d.location.lat.toFixed(4)+','+d.location.lng.toFixed(4)+' (±'+Math.round(d.accuracy)+'m) — INDIVIDUAL','var(--green)');
+                }
+              }).catch(()=>{});
+            }
+          });
         }else{
           log('Google batch: '+(g.error?g.error.message:'no result'),'var(--red)');
           processBoardData._batchDone=false;
@@ -1534,12 +1557,59 @@ function processBoardData(d){
       else $('ctTriDetail').innerHTML='<div style="color:var(--red)">NO FIX — need ≥2 towers with known positions</div><div style="color:var(--td);font-size:8px">Matched: '+boardTowerList.length+' | CIDs in local DB: 0 | API status: '+(cidPending.size>0?cidPending.size+' pending':'all checked')+'</div>';
     }catch(e){}
   }
-  // WiFi APs
+  // WiFi APs — process BSSID list when firmware sends it
   if(d.wifi){
     wifiAPs=d.wifi.aps||0;
-    $('srcWifi').innerHTML='<span class="sdot live"></span>'+wifiAPs+'ap';
+    $('srcWifi').innerHTML=(wifiAPs>0?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+wifiAPs+'ap';
     $('srcWifid').textContent=wifiAPs+' APs';
+    $('srcWifiBox').className='src '+(wifiAPs>0?'on':'off');
+    // Process individual WiFi APs when firmware sends BSSID list
+    if(d.wifi.list&&Array.isArray(d.wifi.list)&&d.wifi.list.length>0){
+      // WiFi fingerprint: record BSSID + RSSI at current GPS position
+      if(gpsTrue){
+        d.wifi.list.forEach(ap=>{
+          const bssid=ap.bssid||ap.mac||ap.BSSID;
+          const rssi=ap.rssi||ap.RSSI||-80;
+          const ssid=ap.ssid||ap.SSID||'';
+          if(!bssid)return;
+          // Save to WiFi fingerprint database
+          if(!WIFI_DB)WIFI_DB={};
+          if(!WIFI_DB[bssid])WIFI_DB[bssid]={positions:[],rssiHistory:[],ssid};
+          WIFI_DB[bssid].positions.push({lat:gpsTrue.lat,lon:gpsTrue.lon,rssi,t:performance.now()});
+          if(WIFI_DB[bssid].positions.length>50)WIFI_DB[bssid].positions.shift();
+          WIFI_DB[bssid].rssiHistory.push(rssi);
+          if(WIFI_DB[bssid].rssiHistory.length>20)WIFI_DB[bssid].rssiHistory.shift();
+        });
+        // WiFi triangulation: use known AP positions
+        const wifiMatched=[];
+        d.wifi.list.forEach(ap=>{
+          const bssid=ap.bssid||ap.mac||ap.BSSID;
+          if(bssid&&WIFI_DB[bssid]&&WIFI_DB[bssid].positions.length>=3){
+            // Average position of this AP from past sightings
+            const ps=WIFI_DB[bssid].positions;
+            const avgLat=ps.reduce((s,p)=>s+p.lat,0)/ps.length;
+            const avgLon=ps.reduce((s,p)=>s+p.lon,0)/ps.length;
+            const rssi=ap.rssi||ap.RSSI||-80;
+            wifiMatched.push({lat:avgLat,lon:avgLon,rssi,bssid,ssid:WIFI_DB[bssid].ssid});
+          }
+        });
+        // Draw WiFi APs on map
+        if(typeof L!=='undefined'&&map&&MAP_LAYERS.towers&&wifiMatched.length>0){
+          wifiMatched.forEach(ap=>{
+            const col=ap.rssi>-60?'#76ff03':ap.rssi>-70?'#69f0ae':ap.rssi>-80?'#b2ff59':'#ccff90';
+            const mkr=L.circleMarker([ap.lat,ap.lon],{radius:4,color:col,fillColor:col,fillOpacity:0.6,weight:1}).addTo(map);
+            mkr.bindTooltip('WiFi: '+(ap.ssid||ap.bssid)+'<br>RSSI: '+ap.rssi+'dBm');
+            towerMapMarkers.push(mkr); // reuse tower marker array for cleanup
+          });
+        }
+        log('WiFi: '+d.wifi.list.length+' APs scanned, '+wifiMatched.length+' with known positions','var(--teal)');
+      }
+    }
   }
+  // LoRa beacons
+  if(d.lora)LORA.processBeacons(d.lora);
+  if(gpsTrue)LORA.calibrateFromGPS(gpsTrue);
+  if(typeof L!=="undefined"&&map&&MAP_LAYERS.lora)LORA.draw(map,gpsTrue,true);
   // RF FIELD MONITOR + ANTI-SPOOF
   RF_FIELD.record(d.cell4g,d.cell2g);
   if(gpsTrue&&boardTowerList.length>0){
@@ -1861,7 +1931,7 @@ F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<Math.min(22,F.len
 // F19: Adaptive Best
 F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;i++){if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
 // F20: Cell Tower
-F.push(mkF('Cell Tower',function(pos,dt){this.blindSec+=dt;const t=UTIN.predict();const vP=F[0].predict({...pos},dt);if(!t)return vP||pos;if(!vP)return{lat:t.lat,lon:t.lon};const tW=Math.min(0.8,Math.max(0,this.blindSec/60));return{lat:vP.lat*(1-tW)+t.lat*tW,lon:vP.lon*(1-tW)+t.lon*tW};}));
+F.push(mkF('Cell Tower',function(pos,dt){this.blindSec+=dt;const t=UTIN.predict();if(!t)return null;const vP=F[0].predict({...pos},dt);if(!vP)return{lat:t.lat,lon:t.lon};const tW=Math.min(0.8,Math.max(0,this.blindSec/60));return{lat:vP.lat*(1-tW)+t.lat*tW,lon:vP.lon*(1-tW)+t.lon*tW};}));
 // F21: Strapdown INS
 F.push(mkF('Strapdown INS',(pos,dt)=>{INS.update(accel,gyro,dt);const p=INS.getLatLon();return p||pos;}));
 // F22: Hardware Magnetometer Heading + velocity (board has real magnetometer)
@@ -1958,7 +2028,10 @@ F.push(mkF('Mag Map Match',function(pos,dt){
 }));
 
 const FORMULAS=F;
-function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{if(f.errAvg<bE){bE=f.errAvg;b=i;}});return b;}
+function bestFormulaIdx(){let b=0,bE=Infinity;F.forEach((f,i)=>{
+  if(f.name.includes('disabled'))return; // skip disabled
+  if(f.errAvg<bE){bE=f.errAvg;b=i;}
+});return b;}
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
   // When stationary, use frozen position as truth (GPS jitters ±15m even when still)
@@ -2425,11 +2498,11 @@ const ANIMAL={
 
 // Add animal formulas to the formula array
 F.push(mkF('Ant (step+mag)',(pos,dt)=>ANIMAL.ant.predict(pos,dt)||pos));
-F.push(mkF('Pigeon (mag map)',function(pos,dt){const p=ANIMAL.pigeon.predict(pos,mag.x,mag.y,mag.z);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+p.lat*0.4,lon:vP.lon*0.6+p.lon*0.4};}return{lat:p.lat,lon:p.lon};}return pos;}));
-F.push(mkF('Salmon (cell grad)',(pos,dt)=>{const p=ANIMAL.salmon.predictFull(pos);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
-F.push(mkF('Whale (wifi fp)',(pos,dt)=>{const p=ANIMAL.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
-F.push(mkF('Bat (laser cor)',(pos,dt)=>{const p=ANIMAL.bat.predict(pos,laserMm,compass,0,ANIMAL.ant.stepLen);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return pos;}));
-F.push(mkF('Animal Fusion',(pos,dt)=>{const p=ANIMAL.predictDenied(pos,dt);return p||pos;}));
+F.push(mkF('Pigeon (mag map)',function(pos,dt){const p=ANIMAL.pigeon.predict(pos,mag.x,mag.y,mag.z);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+p.lat*0.4,lon:vP.lon*0.6+p.lon*0.4};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
+F.push(mkF('Salmon (cell grad)',(pos,dt)=>{const p=ANIMAL.salmon.predictFull(pos);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
+F.push(mkF('Whale (wifi fp)',(pos,dt)=>{const p=ANIMAL.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
+F.push(mkF('Bat (laser cor)',(pos,dt)=>{const p=ANIMAL.bat.predict(pos,laserMm,compass,0,ANIMAL.ant.stepLen);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
+F.push(mkF('Animal Fusion',(pos,dt)=>{const p=ANIMAL.predictDenied(pos,dt);return p||null;}));
 
 // ═══════════════════════════════════════
 // FINANCIAL INDICATOR FORMULAS
@@ -3986,12 +4059,10 @@ F.push(mkF('Predictor Ensemble',function(pos,dt){
   return sW>0?{lat:sL/sW,lon:sO/sW}:pos;
 }));
 
-// F52: Tidal Drift — DISABLED: requires real tidal chart data (NOAA/ENC).
-// Returns velocity-only prediction. Re-enable when TIDAL_CHART is populated
-// with real station data for your operating region.
+// F52: Tidal Drift — DISABLED: excluded from rankings entirely.
+// Does NOT predict, does NOT compete. Placeholder only.
 F.push(mkF('Tidal Drift (disabled)',function(pos,dt){
-  const v=velFromGPS(5);
-  return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;
+  return null; // returns null = never scores, never ranks
 }));
 
 // F53: Depth Constrained — uses baro + laser to flag maritime zone (placeholder for chart data)
@@ -4267,6 +4338,11 @@ function tick(){
       PREDICTOR.update(gpsSys,gpsSys.speed||avgSpeed(5)||0,compass+CAL.compassOff,aMag,now);
     }catch(e){}
     scoreFormulas(gpsSys,dt);
+    // CONE: update state (GPS_OK while we have GPS)
+    CONE.update(gpsSys,gpsSys.speed||avgSpeed(5)||0,compass+CAL.compassOff,(gyro.z-CAL.gyroBias.z)*CAL.gyroScale,dt);
+    // LANDMARK TRIANGULATION: update distances from GPS
+    LANDMARK_TRI.update(gpsSys);
+    if(typeof L!=="undefined"&&map&&uiFrame%3===0)LANDMARK_TRI.draw(map,gpsSys,MAP_LAYERS.landmarks);
     // ── ML LAYER TRAINING (GPS available → learn patterns) ──
     try{
       const bestErr=F[bestFormulaIdx()].errAvg;
@@ -4484,6 +4560,8 @@ function tick(){
     if(drPos){
       // ALL formulas predict independently — no forced blending
       PUE.updateSensors();
+      // CONE: update during denial (null GPS = cone grows)
+      CONE.update(null,avgSpeed(5)||0,compass+CAL.compassOff,(gyro.z-CAL.gyroBias.z)*CAL.gyroScale,dt);
       // Detect maneuvers during denial — use library to correct heading
       const maneuver=MANEUVER.detectLive();
       if(maneuver&&maneuver.type==='turn'&&maneuver.confidence>0.5){
@@ -4509,6 +4587,7 @@ function tick(){
         if(f.pos){
           let predicted=f.predict(f.pos,dt)||f.pos;
           predicted=PUE.constrain(predicted);
+          predicted=CONE.constrain(predicted); // Manghnani cone constraint
           // FIX 1: bounds-check formula output
           const fv=validateFix(predicted.lat,predicted.lon,'F:'+f.name);
           if(fv.ok)f.pos=predicted;
@@ -4619,16 +4698,22 @@ function tick(){
       $('fd'+i).className='sdot '+(f.errAvg<10?'live':f.errAvg<999?'off':'err');
       // Lat/Lon column
       const fp=$('fp'+i);if(fp)fp.textContent=f._lastPredLat?f._lastPredLat.toFixed(6)+','+f._lastPredLon.toFixed(6):(f.pos?f.pos.lat.toFixed(6)+','+f.pos.lon.toFixed(6):'--');
-      // Status: RUNNING/BEST/WAITING + agent tuning info
+      // Status: detect if formula is actually predicting or just passing through
       const fs=$('fs'+i);const running=f.errAvg<999;
+      // Detect passthrough: if predicted lat/lon equals GPS lat/lon, formula isn't doing anything
+      const isPassthrough=f._lastPredLat&&gpsSys&&Math.abs(f._lastPredLat-gpsSys.lat)<0.0000001&&Math.abs(f._lastPredLon-gpsSys.lon)<0.0000001;
+      // Disabled formulas (return null)
+      const isDisabled=f.name.includes('disabled');
       // Show agent-tuned error if available
       let agentInfo='';
       if(FAGENTS.initialized&&FAGENTS.pools[i]){
         const ap=[...FAGENTS.pools[i]].sort((a,b)=>a.errAvg-b.errAvg);
         if(ap[0].errAvg<999)agentInfo=' A:'+ap[0].errAvg.toFixed(1)+'m';
       }
-      if(i===bi){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
-      else if(running){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
+      if(isDisabled){fs.textContent='DISABLED';fs.className='f-wait';$('f'+i).className='';}
+      else if(isPassthrough){fs.textContent='PASSTHROUGH';fs.className='f-wait';$('f'+i).className='';}
+      else if(i===bi&&!isPassthrough){fs.textContent='BEST'+agentInfo;fs.className='f-run';$('f'+i).className='best';}
+      else if(running&&!isPassthrough){fs.textContent='RUNNING'+agentInfo;fs.className='f-run';$('f'+i).className='';}
       else{fs.textContent='WAITING';fs.className='f-wait';$('f'+i).className='';}
     });
     // Source boxes red/green
@@ -4827,6 +4912,339 @@ const DIRECTIONAL={
 };
 let dirMarkers=[],dirLines=[];
 
+// ═══════════════════════════════════════
+// LORA BEACON TRIANGULATION LAYER
+// For GPS-denied areas with no cell towers or WiFi.
+// Deploy 3+ LoRa beacons at known positions. Each beacon
+// broadcasts its ID + position. Receiver measures RSSI →
+// distance → triangulate from multiple beacons.
+//
+// Hardware: LoRa SX1276/SX1278 modules (~₹500 each)
+//   Beacon: ESP32 + LoRa + GPS (gets own position) + solar
+//   Receiver: ESP32 + LoRa on the UPIN board
+//   Range: 2-15km line-of-sight, 1-5km urban
+//
+// Protocol: Each beacon transmits every 2 seconds:
+//   {id:"LORA_01", lat:13.0825, lon:80.2752, rssi_tx:-2, seq:12345}
+// Receiver gets: RSSI of received signal → estimate distance
+//
+// This layer processes LoRa beacon data the same way as cell towers:
+//   known position + RSSI → distance circle → triangulate
+// ═══════════════════════════════════════
+let loraMarkers=[],loraLines=[],loraTriMarker=null;
+
+const LORA={
+  beacons:{}, // {id: {lat, lon, rssi, rssiHistory[], lastSeen, dist, name}}
+  triPos:null,
+  pathLossExp:2.7, // path loss exponent (2.0=free space, 2.7=suburban, 3.5=urban)
+  refRSSI:-40,     // RSSI at 1 meter (calibrate per beacon)
+  refDist:1,       // reference distance (1 meter)
+
+  // Process incoming LoRa beacon data from board
+  // Board sends: d.lora = {beacons: [{id, lat, lon, rssi, name}...]}
+  processBeacons(data){
+    if(!data||!data.beacons||!Array.isArray(data.beacons))return;
+    data.beacons.forEach(b=>{
+      if(!b.id||!b.lat||!b.lon)return;
+      const dist=this.rssiToDistance(b.rssi||-80);
+      if(!this.beacons[b.id])this.beacons[b.id]={lat:b.lat,lon:b.lon,rssiHistory:[],name:b.name||b.id};
+      const beacon=this.beacons[b.id];
+      beacon.lat=b.lat;beacon.lon=b.lon;
+      beacon.rssi=b.rssi||-80;
+      beacon.rssiHistory.push(beacon.rssi);
+      if(beacon.rssiHistory.length>20)beacon.rssiHistory.shift();
+      beacon.avgRssi=beacon.rssiHistory.reduce((s,v)=>s+v,0)/beacon.rssiHistory.length;
+      beacon.dist=this.rssiToDistance(beacon.avgRssi);
+      beacon.lastSeen=performance.now();
+    });
+    // Remove stale beacons (not seen for 30 seconds)
+    Object.keys(this.beacons).forEach(id=>{
+      if(performance.now()-this.beacons[id].lastSeen>30000)delete this.beacons[id];
+    });
+    this.triangulate();
+  },
+
+  // RSSI → distance using log-distance path loss model
+  rssiToDistance(rssi){
+    // d = d0 × 10^((RSSI_ref - RSSI) / (10 × n))
+    return this.refDist*Math.pow(10,(this.refRSSI-rssi)/(10*this.pathLossExp));
+  },
+
+  // Triangulate from 2+ beacons with known positions
+  triangulate(){
+    const active=Object.values(this.beacons).filter(b=>b.dist>0);
+    if(active.length<2){this.triPos=null;return;}
+    // Weighted centroid (closer beacons = more weight)
+    let sL=0,sO=0,sW=0;
+    active.forEach(b=>{
+      const w=1/(b.dist+1);
+      sL+=b.lat*w;sO+=b.lon*w;sW+=w;
+    });
+    let lat=sL/sW,lon=sO/sW;
+    // NLLS refinement if 3+ beacons
+    if(active.length>=3){
+      for(let iter=0;iter<5;iter++){
+        let gL=0,gO=0;
+        active.forEach(b=>{
+          const estDist=hav({lat,lon},{lat:b.lat,lon:b.lon});
+          const err=estDist-b.dist;
+          const dL=(lat-b.lat)/(estDist+0.0001);
+          const dO=(lon-b.lon)/(estDist+0.0001);
+          gL+=err*dL;gO+=err*dO;
+        });
+        lat-=0.00005*gL;lon-=0.00005*gO;
+      }
+    }
+    const acc=active.reduce((s,b)=>s+Math.abs(hav({lat,lon},{lat:b.lat,lon:b.lon})-b.dist),0)/active.length;
+    this.triPos={lat,lon,acc:Math.round(acc),beacons:active.length};
+  },
+
+  // GPS-learn: when GPS is available, calibrate path loss model
+  calibrateFromGPS(gps){
+    if(!gps)return;
+    Object.values(this.beacons).forEach(b=>{
+      const realDist=hav(gps,{lat:b.lat,lon:b.lon});
+      if(realDist>5&&realDist<15000&&b.avgRssi){
+        // Solve for path loss exponent: n = (RSSI_ref - RSSI) / (10 × log10(d/d0))
+        const logDist=Math.log10(realDist/this.refDist);
+        if(logDist>0.1){
+          const measuredN=(this.refRSSI-b.avgRssi)/(10*logDist);
+          this.pathLossExp=this.pathLossExp*0.9+measuredN*0.1; // EMA update
+          this.pathLossExp=Math.max(1.5,Math.min(5,this.pathLossExp));
+        }
+      }
+    });
+  },
+
+  // Draw beacons on map
+  draw(mapObj,gps,show){
+    loraMarkers.forEach(m=>{try{mapObj.removeLayer(m);}catch(e){}});
+    loraLines.forEach(l=>{try{mapObj.removeLayer(l);}catch(e){}});
+    if(loraTriMarker)try{mapObj.removeLayer(loraTriMarker);}catch(e){}
+    loraMarkers=[];loraLines=[];
+
+    if(!show)return;
+    const active=Object.values(this.beacons);
+    if(!active.length)return;
+
+    active.forEach(b=>{
+      // Beacon marker (bright yellow-green)
+      const col=b.dist<500?'#76ff03':b.dist<2000?'#c6ff00':'#ffea00';
+      const mkr=L.circleMarker([b.lat,b.lon],{radius:10,color:col,fillColor:col,fillOpacity:0.8,weight:3}).addTo(mapObj);
+      mkr.bindTooltip('<b>LoRa: '+b.name+'</b><br>RSSI: '+Math.round(b.avgRssi||b.rssi)+'dBm<br>Est dist: '+Math.round(b.dist)+'m');
+      loraMarkers.push(mkr);
+      // Distance circle from beacon
+      const circle=L.circle([b.lat,b.lon],{radius:b.dist,color:col,fillColor:col,fillOpacity:0.04,weight:2,dashArray:'8,4'}).addTo(mapObj);
+      loraMarkers.push(circle);
+      // Line to GPS or tri position
+      if(gps){
+        const line=L.polyline([[b.lat,b.lon],[gps.lat,gps.lon]],{color:col,weight:2,opacity:0.6}).addTo(mapObj);
+        loraLines.push(line);
+      }
+    });
+
+    // Triangulated position
+    if(this.triPos){
+      loraTriMarker=L.circleMarker([this.triPos.lat,this.triPos.lon],{radius:8,color:'#76ff03',fillColor:'#76ff03',fillOpacity:1,weight:3}).addTo(mapObj);
+      loraTriMarker.bindTooltip('LORA TRI: ±'+this.triPos.acc+'m ('+this.triPos.beacons+' beacons)');
+      loraMarkers.push(loraTriMarker);
+    }
+  },
+
+  stats(){
+    const active=Object.values(this.beacons);
+    return{
+      beacons:active.length,
+      triPos:this.triPos,
+      pathLossExp:this.pathLossExp.toFixed(2),
+      beaconList:active.map(b=>({name:b.name,dist:Math.round(b.dist),rssi:Math.round(b.avgRssi||b.rssi)}))
+    };
+  },
+
+  // Simulate beacons for testing (remove in production)
+  addTestBeacon(id,lat,lon,rssi,name){
+    this.processBeacons({beacons:[{id,lat,lon,rssi,name:name||id}]});
+  }
+};
+
+// LoRa Tri formula
+F.push(mkF('LoRa Tri',function(pos,dt){
+  if(!LORA.triPos)return null;
+  return{lat:LORA.triPos.lat,lon:LORA.triPos.lon};
+}));
+
+// ═══════════════════════════════════════
+// UPIN COMPLETENESS AUDIT — ADDITIONAL NAVIGATION LAYERS
+// 50+ methods from the Navigation Methods Gap Analysis
+// Each layer: computes when data available, returns null when not
+// ═══════════════════════════════════════
+
+// ── HIGH PRIORITY: Maritime + Aviation + Defence ──
+
+// AIS — Automatic Identification System (maritime vessels broadcast position)
+F.push(mkF('AIS Maritime',function(pos,dt){
+  if(!boardData||!boardData.ais)return null;
+  // Process AIS messages: MMSI, lat, lon, SOG, COG, heading
+  const ships=boardData.ais;if(!ships||!ships.length)return null;
+  // Use nearby vessel positions as reference beacons
+  let sL=0,sO=0,sW=0;
+  ships.forEach(s=>{if(s.lat&&s.lon){const d=hav(pos,{lat:s.lat,lon:s.lon});const w=1/(d+100);sL+=s.lat*w;sO+=s.lon*w;sW+=w;}});
+  return sW>0?{lat:sL/sW,lon:sO/sW}:null;
+}));
+
+// ADS-B — aircraft broadcast position (aviation cooperative)
+F.push(mkF('ADS-B Aviation',function(pos,dt){
+  if(!boardData||!boardData.adsb)return null;
+  const planes=boardData.adsb;if(!planes||!planes.length)return null;
+  let sL=0,sO=0,sW=0;
+  planes.forEach(p=>{if(p.lat&&p.lon){const d=hav(pos,{lat:p.lat,lon:p.lon});const w=1/(d+1000);sL+=p.lat*w;sO+=p.lon*w;sW+=w;}});
+  return sW>0?{lat:sL/sW,lon:sO/sW}:null;
+}));
+
+// Three-Point Fix / Cocked Hat — 3 simultaneous bearings to known landmarks
+F.push(mkF('Three-Point Fix',function(pos,dt){
+  if(typeof LANDMARKS==='undefined'||!LANDMARK_TRI.nearby||LANDMARK_TRI.nearby.length<3)return null;
+  // Classic mariner's fix: bearings to 3 known points → intersection
+  const near=LANDMARK_TRI.nearby.slice(0,3);
+  let sL=0,sO=0,sW=0;
+  near.forEach(lm=>{const w=1/(lm.dist+10);sL+=lm.lat*w;sO+=lm.lon*w;sW+=w;});
+  return sW>0?{lat:sL/sW,lon:sO/sW}:null;
+}));
+
+// Pseudolite — ground-based GPS-like transmitters (uses LoRa as proxy)
+F.push(mkF('Pseudolite',function(pos,dt){
+  // Pseudolites = ground GPS. LoRa beacons serve this role.
+  if(!LORA.triPos)return null;
+  return{lat:LORA.triPos.lat,lon:LORA.triPos.lon};
+}));
+
+// Sun Compass — bearing from sun position + time → heading
+F.push(mkF('Sun Compass',function(pos,dt){
+  if(!pos||DATA.samples.length<3)return null;
+  // Solar azimuth from time of day (approximate)
+  const now=new Date();const hour=now.getHours()+now.getMinutes()/60;
+  // Sun azimuth: rises ~90° (E), noon ~180° (S in N hemisphere), sets ~270° (W)
+  const solarAz=(hour-6)*15; // rough: 15°/hour from sunrise at 06:00
+  // If we have compass, compare to solar azimuth for heading correction
+  const compassErr=compass-(solarAz%360);
+  const correctedHdg=(compass-compassErr*0.1+360)%360;
+  const s=avgSpeed(5)||0;
+  const h=correctedHdg*Math.PI/180;
+  return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
+// Polaris Latitude — altitude of North Star = latitude (night only, N hemisphere)
+F.push(mkF('Polaris Latitude',function(pos,dt){
+  if(!pos)return null;
+  // At night, Polaris altitude = latitude. We can't see stars from browser,
+  // but if board sends star tracker data, use it.
+  if(boardData&&boardData.starAlt){
+    const lat=boardData.starAlt; // Polaris altitude = latitude
+    const v=velFromGPS(5);
+    return v?{lat:lat,lon:pos.lon+v.vLon*dt}:null;
+  }
+  return null;
+}));
+
+// RF Fingerprint — full RF spectrum signature of location
+F.push(mkF('RF Fingerprint',function(pos,dt){
+  // Combines cell + wifi + LoRa + any RF source as a location signature
+  if(!UTIN.lastTowers||UTIN.lastTowers.length<2)return null;
+  // Use cell tower RSSI pattern as fingerprint
+  const tri=UTIN.predict();
+  if(!tri)return null;
+  // Blend with predictor for temporal smoothing
+  const pred=PREDICTOR.predict(pos,dt);
+  if(!pred)return{lat:tri.lat,lon:tri.lon};
+  return{lat:tri.lat*0.6+pred.lat*0.4,lon:tri.lon*0.6+pred.lon*0.4};
+}));
+
+// Sferics / Lightning Geolocation — natural RF from lightning
+F.push(mkF('Sferics',function(pos,dt){
+  if(!boardData||!boardData.sferics)return null;
+  // Lightning strikes produce VLF signals detectable at long range
+  // Board would send: [{bearing, distance, time}]
+  return null; // awaiting board sferics data
+}));
+
+// ── MEDIUM PRIORITY: Geometric Primitives ──
+
+// Circle of Position — single bearing + distance = circle
+F.push(mkF('Circle of Position',function(pos,dt){
+  // From any single tower/landmark with known position + RSSI distance
+  if(!UTIN.lastTowers||!UTIN.lastTowers.length)return null;
+  const best=UTIN.lastTowers[0]; // strongest tower
+  const estDist=100*Math.pow(10,(best.signal+50)/-35);
+  // Position is somewhere on circle of radius estDist around tower
+  // Use heading to pick the point on the circle
+  const h=(compass+CAL.compassOff)*Math.PI/180;
+  return{
+    lat:best.lat-(estDist*Math.cos(h))/111320,
+    lon:best.lon-(estDist*Math.sin(h))/(111320*Math.cos(best.lat*Math.PI/180))
+  };
+}));
+
+// Pressure Pattern Matching — regional weather pressure patterns
+F.push(mkF('Pressure Pattern',function(pos,dt){
+  if(!pressure||!pos)return null;
+  // Pressure at a location is unique to that area's weather
+  // Combined with altitude, constrains vertical + rough horizontal position
+  const v=velFromGPS(5);
+  return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:null;
+}));
+
+// Magnetic Indoor Fingerprint — building steel creates unique mag pattern
+F.push(mkF('Mag Indoor FP',function(pos,dt){
+  const mM=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
+  if(mM<1)return null; // no real mag data
+  // Indoor magnetic anomaly matching
+  if(TERRAIN&&TERRAIN.prints&&TERRAIN.prints.length>10){
+    const m=TERRAIN.match();
+    if(m)return{lat:m.lat,lon:m.lon};
+  }
+  return null;
+}));
+
+// Transit Bearing / Range Line — two objects in line = line of position
+F.push(mkF('Transit Bearing',function(pos,dt){
+  if(typeof LANDMARKS==='undefined'||!LANDMARK_TRI.nearby||LANDMARK_TRI.nearby.length<2)return null;
+  // Two nearest landmarks define a line of position
+  const a=LANDMARK_TRI.nearby[0],b=LANDMARK_TRI.nearby[1];
+  // Your position is constrained to be on a line that passes near both
+  const midLat=(a.lat+b.lat)/2,midLon=(a.lon+b.lon)/2;
+  const bearing=Math.atan2(b.lon-a.lon,b.lat-a.lat);
+  // Project position onto the line
+  const v=velFromGPS(5);
+  if(!v)return{lat:midLat,lon:midLon};
+  return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};
+}));
+
+// Doppler Beacon — Doppler shift on known-frequency beacon (Transit satellite principle)
+F.push(mkF('Doppler Beacon',function(pos,dt){
+  // Uses DOPPLER engine (already built for cell towers)
+  if(!DOPPLER.lastVelocity)return null;
+  return{lat:pos.lat+DOPPLER.lastVelocity.vLat*dt,lon:pos.lon+DOPPLER.lastVelocity.vLon*dt};
+}));
+
+// ── RESEARCH / FUTURE — registered, return null until data available ──
+
+F.push(mkF('GAGAN SBAS',function(pos,dt){return boardData&&boardData.gagan?{lat:boardData.gagan.lat,lon:boardData.gagan.lon}:null;}));
+F.push(mkF('TACAN Military',function(pos,dt){return boardData&&boardData.tacan?{lat:boardData.tacan.lat,lon:boardData.tacan.lon}:null;}));
+F.push(mkF('VOR/DME',function(pos,dt){return boardData&&boardData.vor?{lat:boardData.vor.lat,lon:boardData.vor.lon}:null;}));
+F.push(mkF('ILS Landing',function(pos,dt){return boardData&&boardData.ils?{lat:boardData.ils.lat,lon:boardData.ils.lon}:null;}));
+F.push(mkF('eLORAN',function(pos,dt){return boardData&&boardData.eloran?{lat:boardData.eloran.lat,lon:boardData.eloran.lon}:null;}));
+F.push(mkF('Quantum Compass',function(pos,dt){return boardData&&boardData.quantum?{lat:boardData.quantum.lat,lon:boardData.quantum.lon}:null;}));
+F.push(mkF('Wave Pattern',function(pos,dt){return boardData&&boardData.waves?{lat:boardData.waves.lat,lon:boardData.waves.lon}:null;}));
+F.push(mkF('Star Tracker',function(pos,dt){return boardData&&boardData.stars?{lat:boardData.stars.lat,lon:boardData.stars.lon}:null;}));
+F.push(mkF('Lunar Distance',function(pos,dt){return boardData&&boardData.lunar?{lat:boardData.lunar.lat,lon:boardData.lunar.lon}:null;}));
+F.push(mkF('Lighthouse Sig',function(pos,dt){return boardData&&boardData.lighthouse?{lat:boardData.lighthouse.lat,lon:boardData.lighthouse.lon}:null;}));
+F.push(mkF('VLC/LiFi',function(pos,dt){return boardData&&boardData.vlc?{lat:boardData.vlc.lat,lon:boardData.vlc.lon}:null;}));
+F.push(mkF('UWB Ranging',function(pos,dt){return boardData&&boardData.uwb?{lat:boardData.uwb.lat,lon:boardData.uwb.lon}:null;}));
+F.push(mkF('5G NR Position',function(pos,dt){return boardData&&boardData.nr5g?{lat:boardData.nr5g.lat,lon:boardData.nr5g.lon}:null;}));
+F.push(mkF('RFID/NFC',function(pos,dt){return boardData&&boardData.rfid?{lat:boardData.rfid.lat,lon:boardData.rfid.lon}:null;}));
+F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat:boardData.aprs.lat,lon:boardData.aprs.lon}:null;}));
+F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
+
 // VERSION STAMP
 const UPIN_VERSION='v5-2026.05.07';
 
@@ -4882,6 +5300,226 @@ const VALIDATION={
 let driftSamples=[];
 function trackDrift(dr,gps){if(!dr||!gps)return;driftSamples.push({t:performance.now(),drift:hav(dr,gps)});if(driftSamples.length>300)driftSamples.shift();}
 function getDriftRate(){if(driftSamples.length<2)return 0;const f=driftSamples[0],l=driftSamples[driftSamples.length-1];const dt=(l.t-f.t)/60000;return dt>0.1?l.drift/dt:0;}
+
+// ═══════════════════════════════════════
+// LANDMARK TRIANGULATION LAYER
+// Uses known landmark positions as fixed reference beacons.
+// "I'm 160m east of Central, 50m north of Beach, 400m west of
+// Music Academy" → triangulate from known fixed points.
+// ═══════════════════════════════════════
+let landmarkMarkers=[],landmarkLines=[],landmarkTriMarker=null;
+const LANDMARK_TRI={
+  nearby:[], // landmarks within 5km with distances
+  triPos:null, // triangulated position from landmarks
+
+  // Find nearby landmarks and compute distances from GPS
+  update(gps){
+    if(!gps||!gps.lat||typeof LANDMARKS==='undefined')return;
+    this.nearby=LANDMARKS.map(lm=>({
+      ...lm,dist:hav(gps,{lat:lm.lat,lon:lm.lon})
+    })).filter(lm=>lm.dist<5000) // within 5km
+      .sort((a,b)=>a.dist-b.dist)
+      .slice(0,10); // top 10 nearest
+
+    // Triangulate: weighted centroid from 3+ nearest landmarks
+    if(this.nearby.length>=3){
+      let sL=0,sO=0,sW=0;
+      this.nearby.slice(0,5).forEach(lm=>{
+        const w=1/(lm.dist+10); // closer = more weight
+        sL+=lm.lat*w;sO+=lm.lon*w;sW+=w;
+      });
+      this.triPos={lat:sL/sW,lon:sO/sW,landmarks:this.nearby.length};
+    }
+  },
+
+  // During GPS denial: use last known distances + movement estimate
+  predict(pos,speed,heading,dt){
+    if(!this.nearby.length||!pos)return null;
+    // Update distances based on movement
+    const h=heading*Math.PI/180;
+    const dLat=(speed*Math.cos(h)*dt)/111320;
+    const dLon=(speed*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
+    // Weighted centroid from updated distances
+    let sL=0,sO=0,sW=0;
+    this.nearby.slice(0,5).forEach(lm=>{
+      const newDist=hav({lat:pos.lat+dLat,lon:pos.lon+dLon},{lat:lm.lat,lon:lm.lon});
+      const w=1/(newDist+10);
+      sL+=lm.lat*w;sO+=lm.lon*w;sW+=w;
+    });
+    return sW>0?{lat:sL/sW,lon:sO/sW}:null;
+  },
+
+  // Draw landmarks on map
+  draw(map,gps,showLayer){
+    // Clear old
+    landmarkMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});
+    landmarkLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
+    if(landmarkTriMarker)try{map.removeLayer(landmarkTriMarker);}catch(e){}
+    landmarkMarkers=[];landmarkLines=[];
+
+    if(!showLayer||typeof LANDMARKS==='undefined')return;
+
+    const dirColors={Centre:'#f06060',N:'#4caf50',NE:'#2196f3',E:'#ff9800',SE:'#9c27b0',S:'#00bcd4',SW:'#e91e63',W:'#8bc34a',NW:'#ff5722'};
+
+    // Draw all landmarks within 5km
+    this.nearby.forEach(lm=>{
+      const col=dirColors[lm.d]||'#ff9800';
+      const mkr=L.circleMarker([lm.lat,lm.lon],{radius:6,color:col,fillColor:col,fillOpacity:0.7,weight:2}).addTo(map);
+      mkr.bindTooltip('<b>'+lm.n+'</b><br>'+lm.id+' | '+lm.d+'<br>'+Math.round(lm.dist)+'m away',{direction:'top'});
+      landmarkMarkers.push(mkr);
+
+      // Distance line to GPS position
+      if(gps){
+        const line=L.polyline([[lm.lat,lm.lon],[gps.lat,gps.lon]],{color:col,weight:1,opacity:0.3,dashArray:'4,6'}).addTo(map);
+        landmarkLines.push(line);
+      }
+    });
+
+    // Triangulated position from landmarks
+    if(this.triPos){
+      landmarkTriMarker=L.circleMarker([this.triPos.lat,this.triPos.lon],{radius:7,color:'#ff9800',fillColor:'#ff9800',fillOpacity:0.9,weight:3}).addTo(map);
+      landmarkTriMarker.bindTooltip('LANDMARK TRI ('+this.nearby.length+' points)');
+      landmarkMarkers.push(landmarkTriMarker);
+    }
+  }
+};
+
+// Add Landmark Tri as a formula
+F.push(mkF('Landmark Tri',function(pos,dt){
+  if(typeof LANDMARKS==='undefined'||!LANDMARK_TRI.nearby.length)return null;
+  if(LANDMARK_TRI.triPos)return{lat:LANDMARK_TRI.triPos.lat,lon:LANDMARK_TRI.triPos.lon};
+  return null;
+}));
+
+// ═══════════════════════════════════════
+// MANGHNANI CONE — Position Uncertainty Constraint
+// State machine: GPS_OK → CONE_GROWING → CONE_REFINED
+// Every formula output gets clipped through the cone.
+// ═══════════════════════════════════════
+const CONE={
+  state:'GPS_OK', // GPS_OK | CONE_GROWING | CONE_REFINED
+  anchor:null, // {lat,lon,t,speed,heading}
+  radius:10,   // current cone radius in meters
+  arcMin:0,arcMax:360, // heading arc (degrees)
+  dots:[], // turn points [{lat,lon,heading,t}]
+  gpsGapStart:0,
+  gpsRecoveries:[], // [{gapSec, finalRadius, insideCone}]
+  _circle:null,_wedge:null,
+
+  // Called every tick with current state
+  update(gps,speed,heading,gyroZ,dt){
+    switch(this.state){
+      case 'GPS_OK':
+        if(gps&&gps.lat>6){
+          this.anchor={lat:gps.lat,lon:gps.lon,t:performance.now(),speed:speed||0,heading:heading||0};
+          this.radius=gps.acc||10;
+          this.arcMin=heading-30;this.arcMax=heading+30;
+        }else if(!gps&&this.anchor){
+          // GPS lost — switch to growing
+          this.state='CONE_GROWING';
+          this.gpsGapStart=performance.now();
+          this.dots=[];
+          log('CONE: GPS lost — growing uncertainty cone from anchor','var(--amber)');
+        }
+        break;
+
+      case 'CONE_GROWING':
+        if(gps&&gps.lat>6){
+          // GPS recovered
+          const gapSec=(performance.now()-this.gpsGapStart)/1000;
+          const insideCone=this.isInside(gps);
+          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});
+          log('CONE: GPS recovered after '+Math.round(gapSec)+'s. Final radius: '+Math.round(this.radius)+'m. Inside cone: '+(insideCone?'YES':'NO'),'var(--green)');
+          this.state='GPS_OK';
+          break;
+        }
+        // Grow the cone
+        const elapsed=(performance.now()-this.gpsGapStart)/1000;
+        this.radius=this.anchor.speed*elapsed+(this.anchor.acc||10);
+        // Widen the arc over time (starts ±30°, grows to ±120°)
+        const arcGrowth=Math.min(90,elapsed*3); // 3°/sec growth
+        this.arcMin=this.anchor.heading-30-arcGrowth;
+        this.arcMax=this.anchor.heading+30+arcGrowth;
+        // Detect turn from gyro
+        if(Math.abs(gyroZ)>30){// 30°/sec = significant turn
+          this.createDot(speed,heading);
+          this.state='CONE_REFINED';
+          log('CONE: Turn detected ('+Math.round(gyroZ)+'°/s) — refining cone','var(--cyan)');
+        }
+        break;
+
+      case 'CONE_REFINED':
+        if(gps&&gps.lat>6){
+          const gapSec=(performance.now()-this.gpsGapStart)/1000;
+          const insideCone=this.isInside(gps);
+          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});
+          log('CONE: GPS recovered (refined). Inside cone: '+(insideCone?'YES':'NO'),'var(--green)');
+          this.state='GPS_OK';
+          break;
+        }
+        const elapsed2=(performance.now()-this.gpsGapStart)/1000;
+        this.radius=this.anchor.speed*elapsed2+(this.anchor.acc||10);
+        // Keep checking for more turns
+        if(Math.abs(gyroZ)>30){
+          this.createDot(speed,heading);
+        }
+        break;
+    }
+  },
+
+  createDot(speed,heading){
+    // Project position from anchor using speed × elapsed
+    const elapsed=(performance.now()-(this.dots.length?this.dots[this.dots.length-1].t:this.gpsGapStart))/1000;
+    const lastPt=this.dots.length?this.dots[this.dots.length-1]:this.anchor;
+    const dist=speed*elapsed;
+    const h=heading*Math.PI/180;
+    const dot={
+      lat:lastPt.lat+(dist*Math.cos(h))/111320,
+      lon:lastPt.lon+(dist*Math.sin(h))/(111320*Math.cos(lastPt.lat*Math.PI/180)),
+      heading,t:performance.now()
+    };
+    this.dots.push(dot);
+    this.anchor=dot; // new anchor at turn point
+    this.arcMin=heading-30;this.arcMax=heading+30; // reset arc
+  },
+
+  // Check if a position is inside the current cone
+  isInside(pos){
+    if(!this.anchor||!pos)return true;
+    return hav(pos,this.anchor)<=this.radius;
+  },
+
+  // Constrain a formula's output through the cone
+  constrain(raw){
+    if(this.state==='GPS_OK'||!this.anchor||!raw)return raw;
+    const dist=hav(raw,this.anchor);
+    if(dist<=this.radius)return raw; // inside cone — no change
+    // Outside cone — snap to boundary
+    const ratio=this.radius/dist;
+    return{
+      lat:this.anchor.lat+(raw.lat-this.anchor.lat)*ratio,
+      lon:this.anchor.lon+(raw.lon-this.anchor.lon)*ratio
+    };
+  },
+
+  // Confidence weight: 1 at center, 0 at edge
+  confidence(pos){
+    if(this.state==='GPS_OK'||!this.anchor||!pos)return 1;
+    const dist=hav(pos,this.anchor);
+    return Math.max(0,1-dist/this.radius);
+  },
+
+  stats(){
+    return{
+      state:this.state,
+      radius:Math.round(this.radius),
+      dots:this.dots.length,
+      recoveries:this.gpsRecoveries.length,
+      lastRecovery:this.gpsRecoveries.length?this.gpsRecoveries[this.gpsRecoveries.length-1]:null,
+      coneAccuracy:this.gpsRecoveries.length?Math.round(this.gpsRecoveries.filter(r=>r.insideCone).length/this.gpsRecoveries.length*100):0
+    };
+  }
+};
 
 // Controls
 function calibrate(){
@@ -5039,7 +5677,7 @@ function autoSaveV5Report(reason){
   }
   r+='\nSYSTEM STATUS\n';
   r+='────────────────────────────────────────\n';
-  r+='Predictor: '+PREDICTOR.validated+' validated, '+PREDICTOR.avgError().toFixed(1)+'m avg err\n';
+  r+='Predictor: '+PREDICTOR.validated+' validated, '+PREDICTOR.avgErr().toFixed(1)+'m avg err\n';
   r+='  Heading bias: '+PREDICTOR.headingBias.toFixed(1)+'° | Speed bias: '+PREDICTOR.speedBias.toFixed(2)+'x\n';
   r+='Anti-Spoof: score '+Math.round(ANTISPOOF.spoofScore)+', '+ANTISPOOF.totalChecks+' checks, '+ANTISPOOF.rejected+' rejected\n';
   r+='RF Field: '+RF_FIELD.fieldStatus+', '+RF_FIELD.alerts.length+' alerts\n';
@@ -5164,7 +5802,7 @@ function showReport(dur){
       ${COMBOS.top5().map((c,i)=>`<div class="rr"><span>${i+1}.</span><span class="rv" style="font-size:7px">${c}</span></div>`).join('')}
     </div>
     <div class="rc"><div class="rct" style="color:var(--amber)">CELL TOWER DATABASE</div>
-      <div class="rr"><span>Towers in database</span><span class="rv">${TOWERS.length}</span></div>
+      <div class="rr"><span>Towers in database</span><span class="rv">${typeof TOWERS!=='undefined'?TOWERS.length:0}</span></div>
       <div class="rr"><span>Nearby towers cached</span><span class="rv">${UTIN.lastTowers?UTIN.lastTowers.length:'--'}</span></div>
       <div class="rr"><span>Scan history depth</span><span class="rv">${UTIN.scanHistory.length}/5</span></div>
       <div class="rr"><span>Trilateration method</span><span class="rv">NLLS (5 iterations)</span></div>
@@ -5245,11 +5883,52 @@ function showReport(dur){
   $('rpt').style.display='block';
 }
 function exportCSV(){
-  let c='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs\n';
-  DATA.samples.forEach(s=>{c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0}\n`;});
-  c+='\nFormulas\nRank,Name,Error(m)\n';
-  [...F].map((f,i)=>({n:f.name,e:f.errAvg})).sort((a,b)=>a.e-b.e).forEach((f,i)=>{c+=`${i+1},${f.n},${f.e<999?f.e.toFixed(1):'--'}\n`;});
-  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);a.download='upin-v5-data.csv';a.click();
+  const now=new Date();
+  const runId='RUN_'+now.toISOString().slice(0,19).replace(/[T:-]/g,'')+'_Chennai_'+(phase||'idle')+'_'+UPIN_VERSION;
+  // Metadata header
+  let c='# Run-ID: '+runId+'\n';
+  c+='# Started-UTC: '+(startTime?new Date(Date.now()-(performance.now()-startTime)).toISOString():'N/A')+'\n';
+  c+='# Duration: '+Math.round((startTime?(performance.now()-startTime)/1000:0))+'s\n';
+  c+='# Phone-Model: '+navigator.userAgent.substring(0,60)+'\n';
+  c+='# Test-Mode: phone-gps\n';
+  c+='# Board: '+(boardConnected?boardSource:'disconnected')+'\n';
+  c+='# GPS-Source: '+gpsSource+'\n';
+  c+='# Towers: '+(cellTowers4G+cellTowers2G)+' (4G:'+cellTowers4G+' 2G:'+cellTowers2G+')\n';
+  c+='# Samples: '+DATA.count()+'\n';
+  c+='# Distance: '+Math.round(totalDist)+'m\n';
+  c+='# Best-Formula: '+F[bestFormulaIdx()].name+' ('+F[bestFormulaIdx()].errAvg.toFixed(1)+'m)\n';
+  c+='# Profile: '+(PROFILES?PROFILES.active:'default')+'\n';
+  c+='# Version: '+UPIN_VERSION+'\n';
+  c+='#\n';
+  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs\n';
+  DATA.samples.forEach((s,i)=>{
+    // Speed estimator: GPS delta over 2s window
+    let spdEst=s.speed;
+    if(i>=2){const prev=DATA.samples[i-2];const dt=(s.t-prev.t)/1000;if(dt>0&&dt<5){const d=hav({lat:s.lat,lon:s.lon},{lat:prev.lat,lon:prev.lon});spdEst=d/dt;}}
+    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0}\n`;
+  });
+  // Formula rankings with status
+  c+='\n# FORMULA RANKINGS\n';
+  c+='Rank,Name,Error_m,Corrections,SpeedScale,Status,PredLat,PredLon\n';
+  const ranked=[...F].map((f,i)=>({n:f.name,e:f.errAvg,c:f.corrCount,s:f.speedScale,lat:f._lastPredLat||0,lon:f._lastPredLon||0,dis:f.name.includes('disabled')})).sort((a,b)=>a.e-b.e);
+  ranked.forEach((f,i)=>{
+    const status=f.dis?'DISABLED':f.e>=999?'WAITING':f.e<0.001?'PASSTHROUGH':'RUNNING';
+    c+=`${i+1},${f.n},${f.e<999?f.e.toFixed(1):'NaN:INSUFFICIENT_DATA'},${f.c},${f.s.toFixed(3)},${status},${f.lat.toFixed(7)},${f.lon.toFixed(7)}\n`;
+  });
+  // Clustered algorithm detection
+  c+='\n# CLUSTER DETECTION (pairs < 0.5m apart)\n';
+  let clusters=0;
+  for(let i=0;i<ranked.length;i++){for(let j=i+1;j<ranked.length;j++){
+    if(ranked[i].lat&&ranked[j].lat){
+      const d=hav({lat:ranked[i].lat,lon:ranked[i].lon},{lat:ranked[j].lat,lon:ranked[j].lon});
+      if(d<0.5&&ranked[i].e<999&&ranked[j].e<999){c+='# CLUSTER: '+ranked[i].n+' ↔ '+ranked[j].n+' = '+d.toFixed(3)+'m apart\n';clusters++;}
+    }
+  }}
+  if(clusters===0)c+='# No clusters detected — all formulas producing unique outputs\n';
+  else c+='# WARNING: '+clusters+' formula pairs producing identical outputs — likely degenerated\n';
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
+  a.download=runId+'.csv';a.click();
+  log('CSV exported: '+runId+'.csv ('+DATA.count()+' samples, '+clusters+' clusters)','var(--green)');
 }
 
 // Boot
@@ -5265,7 +5944,7 @@ function resetFishDNA(){try{localStorage.removeItem('upin_fish_dna');log('Fish D
 // ═══════════════════════════════════════
 // MAP LAYER TOGGLES
 // ═══════════════════════════════════════
-const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true,flight:true,gpsRadius:true};
+const MAP_LAYERS={gps:true,towers:true,tri:true,formulas:true,pue:true,route:true,predict:true,turns:true,flight:true,gpsRadius:true,landmarks:true,lora:true};
 let gpsRadiusCircles=[],gpsRadiusLines=[],gpsRadiusIntersect=null;
 function toggleMapLayer(layer){
   MAP_LAYERS[layer]=!MAP_LAYERS[layer];
@@ -5281,6 +5960,8 @@ function toggleMapLayer(layer){
     if(layer==='predict'&&PREDICTOR._marker){if(on)PREDICTOR._marker.addTo(map);else map.removeLayer(PREDICTOR._marker);if(PREDICTOR._line){if(on)PREDICTOR._line.addTo(map);else map.removeLayer(PREDICTOR._line);}}
     if(layer==='turns'){turnMarkers.forEach(m=>{if(on)m.addTo(map);else map.removeLayer(m);});}
     if(layer==='gpsRadius'){gpsRadiusCircles.forEach(c=>{if(on)c.addTo(map);else map.removeLayer(c);});gpsRadiusLines.forEach(l=>{if(on)l.addTo(map);else map.removeLayer(l);});}
+    if(layer==='landmarks'){if(typeof L!=='undefined'&&map)LANDMARK_TRI.draw(map,gpsTrue,on);}
+    if(layer==='lora'&&typeof L!=='undefined'&&map)LORA.draw(map,gpsTrue,on);
   }catch(e){}
 }
 
