@@ -145,6 +145,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" id="layer2bToggle" onchange="if(window.LAYER2)LAYER2.motionReject=this.checked" style="margin-right:3px">L2B: Motion Filter</label>
     <label style="display:block;color:#e8a832;cursor:pointer"><input type="checkbox" id="layer2cToggle" onchange="if(window.LAYER2)LAYER2.cellSanity=this.checked" style="margin-right:3px">L2C: Cell Sanity</label>
     <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked id="layer3Toggle" onchange="if(window.LAYER3)LAYER3.enabled=this.checked" style="margin-right:3px">L3: NLLS Trilat</label>
+    <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked id="layer6Toggle" onchange="if(window.LAYER6)LAYER6.enabled=this.checked" style="margin-right:3px">L6: Bound+Algebra</label>
   </div>
 </div>
 
@@ -545,6 +546,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <script src="LAYER_landmark_reference.js"></script>
 <script src="LAYER_gps_smoothing.js"></script>
 <script src="LAYER_landmark_triangulation.js"></script>
+<script src="LAYER_bounded_math.js"></script>
 <script>
 var V=(()=>{
 // ═══════════════════════════════════════
@@ -4379,6 +4381,11 @@ function tick(){
     // LANDMARK TRIANGULATION: update distances from GPS
     LANDMARK_TRI.update(gpsSys);
     if(typeof L!=="undefined"&&map&&uiFrame%3===0)LANDMARK_TRI.draw(map,gpsSys,MAP_LAYERS.landmarks);
+    // LAYER 6: Bounded learning + algebraic reconstruction
+    if(window.LAYER6&&LAYER6.enabled){
+      LAYER6.tick({accel,gyro,mag,compass,pressure,gps:gpsSys,speed:gpsSys.speed||avgSpeed(5)||0,heading:compass+CAL.compassOff,dt,stepCount,boardTowerList,CAL,isStationary},F);
+      if(typeof L!=='undefined'&&map&&uiFrame%5===0)LAYER6.drawMap(map,F);
+    }
     // ── ML LAYER TRAINING (GPS available → learn patterns) ──
     try{
       const bestErr=F[bestFormulaIdx()].errAvg;
@@ -5936,23 +5943,25 @@ function exportCSV(){
   c+='# Profile: '+(PROFILES?PROFILES.active:'default')+'\n';
   c+='# Version: '+UPIN_VERSION+'\n';
   c+='#\n';
-  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_Anchors,LM_Tri_Resid_m\n';
+  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_Anchors,LM_Tri_Resid_m'+(window.LAYER6?','+LAYER6.csvHeaderCols:'')+'\n';
   DATA.samples.forEach((s,i)=>{
     // Speed estimator: GPS delta over 2s window
     let spdEst=s.speed;
     if(i>=2){const prev=DATA.samples[i-2];const dt=(s.t-prev.t)/1000;if(dt>0&&dt<5){const d=hav({lat:s.lat,lon:s.lon},{lat:prev.lat,lon:prev.lon});spdEst=d/dt;}}
     const l2f=window.LAYER2?LAYER2.csvFlags(s.t):'';
     const l3=window.LAYER3?LAYER3.csvColumns():{landmark_tri_lat:'',landmark_tri_lon:'',landmark_tri_n_anchors:'',landmark_tri_residual_m:''};
-    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${l3.landmark_tri_lat},${l3.landmark_tri_lon},${l3.landmark_tri_n_anchors},${l3.landmark_tri_residual_m}\n`;
+    const l6=window.LAYER6?','+LAYER6.csvRowData(bestFormulaIdx()):'';
+    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${l3.landmark_tri_lat},${l3.landmark_tri_lon},${l3.landmark_tri_n_anchors},${l3.landmark_tri_residual_m}${l6}\n`;
   });
   // Formula rankings with status (Layer 5: RUNNING first, then PASSTHROUGH, WAITING, DISABLED)
   c+='\n# FORMULA RANKINGS\n';
-  c+='Rank,Name,Error_m,Corrections,SpeedScale,Status,PredLat,PredLon\n';
+  c+='Rank,Name,Error_m,Corrections,SpeedScale,Status,PredLat,PredLon,Bound_Score_60s\n';
   const ranked=window.LAYER5&&LAYER5.enabled
     ? LAYER5.sortedRankings(F,gpsSys)
-    : [...F].map((f,i)=>({name:f.name,errAvg:f.errAvg,corrCount:f.corrCount,speedScale:f.speedScale,lat:f._lastPredLat||0,lon:f._lastPredLon||0,status:f.name.includes('disabled')?'DISABLED':f.errAvg>=999?'WAITING':f.errAvg<0.001?'PASSTHROUGH':'RUNNING'})).sort((a,b)=>a.errAvg-b.errAvg);
+    : [...F].map((f,i)=>({idx:i,name:f.name,errAvg:f.errAvg,corrCount:f.corrCount,speedScale:f.speedScale,lat:f._lastPredLat||0,lon:f._lastPredLon||0,status:f.name.includes('disabled')?'DISABLED':f.errAvg>=999?'WAITING':f.errAvg<0.001?'PASSTHROUGH':'RUNNING'})).sort((a,b)=>a.errAvg-b.errAvg);
   ranked.forEach((f,i)=>{
-    c+=`${i+1},${f.name},${f.errAvg<999?f.errAvg.toFixed(1):'NaN:INSUFFICIENT_DATA'},${f.corrCount},${f.speedScale.toFixed(3)},${f.status},${f.lat.toFixed(7)},${f.lon.toFixed(7)}\n`;
+    const bs=window.LAYER6?LAYER6.BOUND.getScore(f.idx||i).toFixed(3):'';
+    c+=`${i+1},${f.name},${f.errAvg<999?f.errAvg.toFixed(1):'NaN:INSUFFICIENT_DATA'},${f.corrCount},${f.speedScale.toFixed(3)},${f.status},${f.lat.toFixed(7)},${f.lon.toFixed(7)},${bs}\n`;
   });
   // Clustered algorithm detection
   c+='\n# CLUSTER DETECTION (pairs < 0.5m apart)\n';
@@ -5967,6 +5976,8 @@ function exportCSV(){
   else c+='# WARNING: '+clusters+' formula pairs producing identical outputs — likely degenerated\n';
   // Layer 2 GPS smoothing stats
   if(window.LAYER2) c+='\n'+LAYER2.csvSummary();
+  // Layer 6 bounded learning + algebraic reconstruction
+  if(window.LAYER6) c+=LAYER6.csvTrailer(gpsSys);
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
   a.download=runId+'.csv';a.click();
   log('CSV exported: '+runId+'.csv ('+DATA.count()+' samples, '+clusters+' clusters)','var(--green)');
