@@ -7,40 +7,42 @@
 <style>
 :root{--bg:#080c14;--panel:#0f1520;--border:#1a2438;--cyan:#4da6ff;--green:#3dcc6e;--amber:#e8a832;--red:#f06060;--purple:#A855F7;--teal:#2dd4bf;--tp:#dce6f5;--tm:#7a9bc0;--td:#4a6080}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(--bg);color:var(--tp);font-size:11px;padding:8px}
-h1{font-size:14px;color:var(--cyan);letter-spacing:3px;margin-bottom:8px}
-.sub{font-size:8px;color:var(--td);letter-spacing:1px;margin-bottom:12px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:8px;margin-bottom:6px}
-.card-title{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;color:var(--cyan)}
-.row{display:grid;gap:4px;margin-bottom:4px}
-.row2{grid-template-columns:1fr 1fr}
-.row3{grid-template-columns:1fr 1fr 1fr}
-.row4{grid-template-columns:1fr 1fr 1fr 1fr}
-.mc{background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:5px 4px;text-align:center}
-.mc .ml{font-size:7px;font-weight:700;color:var(--td);text-transform:uppercase;letter-spacing:1px}
-.mc .mv{font-size:14px;font-weight:700;color:var(--tp);line-height:1.2}
-.mc .mu{font-size:7px;color:var(--td)}
-.mc.on{border-color:var(--green)}.mc.off{border-color:var(--red)}
-.btn{padding:12px;border:2px solid var(--cyan);background:rgba(77,166,255,.04);color:var(--cyan);font-family:inherit;font-size:12px;font-weight:900;letter-spacing:2px;text-transform:uppercase;cursor:pointer;border-radius:3px;width:100%;margin-bottom:8px;transition:all .2s}
+body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(--bg);color:var(--tp);font-size:11px;padding:8px;max-width:500px;margin:0 auto}
+h1{font-size:14px;color:var(--cyan);letter-spacing:3px;margin-bottom:4px}
+.sub{font-size:8px;color:var(--td);letter-spacing:1px;margin-bottom:10px}
+.btn{padding:14px;border:2px solid var(--cyan);background:rgba(77,166,255,.04);color:var(--cyan);font-family:inherit;font-size:12px;font-weight:900;letter-spacing:2px;text-transform:uppercase;cursor:pointer;border-radius:3px;width:100%;margin-bottom:8px;transition:all .2s}
 .btn:active{background:rgba(77,166,255,.15);transform:scale(.98)}
 .btn.ok{color:var(--green);border-color:var(--green);background:rgba(61,204,110,.06)}
 .btn.err{color:var(--red);border-color:var(--red)}
 .btn.wait{color:var(--amber);border-color:var(--amber);animation:pulse 1.5s infinite}
-.sdot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle}
-.sdot.live{background:var(--green)}.sdot.off{background:var(--td)}.sdot.err{background:var(--red)}
-.log{background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:4px 6px;font-size:8px;line-height:1.5;max-height:150px;overflow-y:auto;color:var(--td);margin-bottom:6px;word-break:break-all}
-.raw{background:#000;border:1px solid var(--border);border-radius:2px;padding:6px;font-size:8px;line-height:1.4;max-height:200px;overflow-y:auto;color:var(--green);word-break:break-all;white-space:pre-wrap}
-.tbl{width:100%;font-size:9px;border-collapse:collapse}
-.tbl th{text-align:left;color:var(--td);font-size:7px;text-transform:uppercase;letter-spacing:1px;padding:3px;border-bottom:1px solid var(--border)}
-.tbl td{padding:3px;border-bottom:1px solid var(--border);color:var(--tm)}
-.tbl td.v{font-weight:700;color:var(--tp)}
-.badge{font-size:8px;font-weight:700;padding:2px 6px;border-radius:2px;letter-spacing:1px}
-.b-ok{background:var(--green);color:#000}
-.b-err{background:var(--red);color:#fff}
-.b-wait{background:var(--amber);color:#000}
-.b-off{background:var(--border);color:var(--td)}
-.stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;font-size:8px}
+.stats{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:8px}
 .stats span{padding:2px 6px;background:var(--panel);border:1px solid var(--border);border-radius:2px}
+/* Sensor widget */
+.sensor-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px}
+.sw{background:var(--panel);border:2px solid var(--red);border-radius:3px;padding:6px 8px;transition:border-color .3s}
+.sw.on{border-color:var(--green)}
+.sw .sh{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.sw .sn{font-size:9px;font-weight:900;letter-spacing:1px;color:var(--red);transition:color .3s}
+.sw.on .sn{color:var(--green)}
+.sw .sc{font-size:7px;color:var(--td)}
+.sw .sb{font-size:8px;color:var(--tm);line-height:1.5}
+.sw .sb b{color:var(--tp);font-size:10px}
+.sw .sb .lbl{color:var(--td);font-size:7px;text-transform:uppercase;letter-spacing:1px}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;background:var(--red);transition:background .3s}
+.sw.on .dot{background:var(--green)}
+/* Tables */
+.card{background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:8px;margin-bottom:6px}
+.card-title{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;color:var(--cyan)}
+.tbl{width:100%;font-size:8px;border-collapse:collapse}
+.tbl th{text-align:left;color:var(--td);font-size:7px;text-transform:uppercase;letter-spacing:1px;padding:2px 3px;border-bottom:1px solid var(--border)}
+.tbl td{padding:2px 3px;border-bottom:1px solid var(--border);color:var(--tm)}
+.tbl td.v{font-weight:700;color:var(--tp)}
+.badge{font-size:8px;font-weight:700;padding:2px 6px;border-radius:2px;letter-spacing:1px;margin-left:4px}
+.b-ok{background:var(--green);color:#000}.b-off{background:var(--border);color:var(--td)}
+/* Log & raw */
+.log{background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:4px 6px;font-size:7px;line-height:1.5;max-height:120px;overflow-y:auto;color:var(--td);margin-bottom:6px;word-break:break-all}
+.raw{background:#000;border:1px solid var(--border);border-radius:2px;padding:6px;font-size:7px;line-height:1.4;max-height:150px;overflow-y:auto;color:var(--green);word-break:break-all;white-space:pre-wrap}
+.clr{float:right;background:none;border:1px solid var(--border);color:var(--td);font-family:inherit;font-size:7px;padding:2px 6px;cursor:pointer;border-radius:2px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 </style>
 </head>
@@ -48,140 +50,109 @@ h1{font-size:14px;color:var(--cyan);letter-spacing:3px;margin-bottom:8px}
 <h1>UPIN BLE TEST</h1>
 <div class="sub">FIRMWARE v6.0 — 10Hz IMU + 5s CELL + 10s WiFi | AIMCRS INTELLIGENCE</div>
 
-<!-- CONNECT -->
 <button class="btn" id="bleBtn" onclick="toggleBLE()">CONNECT BLE</button>
-<div class="stats" id="stats">
+<div class="stats">
   <span>Pkts: <b id="pktCount">0</b></span>
   <span>Good: <b id="pktGood" style="color:var(--green)">0</b></span>
   <span>Err: <b id="pktErr" style="color:var(--red)">0</b></span>
-  <span>Rate: <b id="pktRate">0</b> Hz</span>
-  <span>BLE: <b id="bleState">OFF</b></span>
+  <span>Rate: <b id="pktRate">0</b>Hz</span>
+  <span>Buf: <b id="bufLen">0</b></span>
 </div>
 
-<!-- SENSOR STATUS -->
-<div class="card">
-  <div class="card-title">SENSOR STATUS</div>
-  <div class="row row4">
-    <div class="mc off" id="sIMU"><div class="ml">IMU</div><div class="mv" id="imuV">--</div><div class="mu">MPU6500</div></div>
-    <div class="mc off" id="sCOMP"><div class="ml">COMPASS</div><div class="mv" id="compV">--</div><div class="mu">QMC5883L</div></div>
-    <div class="mc off" id="sBARO"><div class="ml">BARO</div><div class="mv" id="baroV">--</div><div class="mu">BME280</div></div>
-    <div class="mc off" id="sLASER"><div class="ml">LASER</div><div class="mv" id="laserV">--</div><div class="mu">VL53L1X</div></div>
+<!-- ALL SENSORS IN ONE WIDGET GRID — red=offline, green=live with values -->
+<div class="sensor-grid">
+  <div class="sw" id="swIMU">
+    <div class="sh"><span class="sn"><span class="dot"></span>IMU (MPU6500)</span><span class="sc" id="imuAge"></span></div>
+    <div class="sb">
+      <span class="lbl">Acc:</span> <b id="vAx">--</b> <b id="vAy">--</b> <b id="vAz">--</b> m/s²<br>
+      <span class="lbl">Gyr:</span> <b id="vGx">--</b> <b id="vGy">--</b> <b id="vGz">--</b> °/s
+    </div>
   </div>
-  <div class="row row4">
-    <div class="mc off" id="sGPS"><div class="ml">GPS</div><div class="mv" id="gpsV">--</div><div class="mu" id="gpsSats">--</div></div>
-    <div class="mc off" id="s4G"><div class="ml">4G CELL</div><div class="mv" id="cell4gV">--</div><div class="mu" id="cell4gD">--</div></div>
-    <div class="mc off" id="s2G"><div class="ml">2G TOWERS</div><div class="mv" id="cell2gV">0</div><div class="mu">neighbors</div></div>
-    <div class="mc off" id="sWIFI"><div class="ml">WiFi APs</div><div class="mv" id="wifiV">0</div><div class="mu" id="wifiD">scan</div></div>
+  <div class="sw" id="swCOMP">
+    <div class="sh"><span class="sn"><span class="dot"></span>COMPASS (QMC5883L)</span></div>
+    <div class="sb">
+      <span class="lbl">Hdg:</span> <b id="vHdg">--</b>°<br>
+      <span class="lbl">Mag:</span> <b id="vMx">--</b> <b id="vMy">--</b> <b id="vMz">--</b>
+    </div>
   </div>
-</div>
-
-<!-- IMU DETAIL -->
-<div class="card">
-  <div class="card-title">IMU — ACCELEROMETER + GYROSCOPE</div>
-  <div class="row row3">
-    <div class="mc"><div class="ml">Accel X</div><div class="mv" id="ax">--</div><div class="mu">m/s²</div></div>
-    <div class="mc"><div class="ml">Accel Y</div><div class="mv" id="ay">--</div><div class="mu">m/s²</div></div>
-    <div class="mc"><div class="ml">Accel Z</div><div class="mv" id="az">--</div><div class="mu">m/s²</div></div>
+  <div class="sw" id="swBARO">
+    <div class="sh"><span class="sn"><span class="dot"></span>BARO (BME280)</span><span class="sc" id="baroAge"></span></div>
+    <div class="sb">
+      <b id="vHpa">--</b> hPa &nbsp; <b id="vTemp">--</b>°C<br>
+      <span class="lbl">Alt:</span> <b id="vBAlt">--</b> m
+    </div>
   </div>
-  <div class="row row3">
-    <div class="mc"><div class="ml">Gyro X</div><div class="mv" id="gx">--</div><div class="mu">°/s</div></div>
-    <div class="mc"><div class="ml">Gyro Y</div><div class="mv" id="gy">--</div><div class="mu">°/s</div></div>
-    <div class="mc"><div class="ml">Gyro Z</div><div class="mv" id="gz">--</div><div class="mu">°/s</div></div>
+  <div class="sw" id="swLASER">
+    <div class="sh"><span class="sn"><span class="dot"></span>LASER (VL53L1X)</span></div>
+    <div class="sb">
+      <b id="vLmm" style="font-size:14px">--</b> <span style="font-size:9px">mm</span><br>
+      <span class="lbl">=</span> <b id="vLm">--</b> m
+    </div>
   </div>
-  <div class="row row3">
-    <div class="mc"><div class="ml">Mag X</div><div class="mv" id="mx">--</div></div>
-    <div class="mc"><div class="ml">Mag Y</div><div class="mv" id="my">--</div></div>
-    <div class="mc"><div class="ml">Mag Z</div><div class="mv" id="mz">--</div></div>
+  <div class="sw" id="swGPS">
+    <div class="sh"><span class="sn"><span class="dot"></span>GPS</span><span class="sc" id="gpsAge"></span></div>
+    <div class="sb">
+      <b id="vLat">--</b>, <b id="vLon">--</b><br>
+      <span class="lbl">Spd:</span> <b id="vSpd">--</b> m/s &nbsp; <span class="lbl">Sats:</span> <b id="vSats">--</b> &nbsp; <span class="lbl">HDOP:</span> <b id="vHdop">--</b>
+    </div>
   </div>
-  <div class="row row3">
-    <div class="mc"><div class="ml">Heading</div><div class="mv" id="hdg">--</div><div class="mu">deg</div></div>
-    <div class="mc"><div class="ml">Pitch</div><div class="mv" id="pitch">--</div><div class="mu">deg</div></div>
-    <div class="mc"><div class="ml">Roll</div><div class="mv" id="roll">--</div><div class="mu">deg</div></div>
+  <div class="sw" id="sw4G">
+    <div class="sh"><span class="sn"><span class="dot"></span>4G LTE</span></div>
+    <div class="sb">
+      <span class="lbl">CID:</span> <b id="vCid" style="color:var(--cyan)">--</b><br>
+      <span class="lbl">MCC:</span> <b id="vMcc">--</b> <span class="lbl">MNC:</span> <b id="vMnc">--</b> <span class="lbl">TAC:</span> <b id="vTac">--</b><br>
+      <span class="lbl">RSSI:</span> <b id="vRssi4g">--</b> dBm &nbsp; <span class="lbl">Net:</span> <b id="vInet">--</b>
+    </div>
   </div>
-</div>
-
-<!-- BARO + LASER -->
-<div class="card">
-  <div class="card-title">BAROMETER + LASER</div>
-  <div class="row row4">
-    <div class="mc"><div class="ml">Pressure</div><div class="mv" id="hpa">--</div><div class="mu">hPa</div></div>
-    <div class="mc"><div class="ml">Temp</div><div class="mv" id="temp">--</div><div class="mu">°C</div></div>
-    <div class="mc"><div class="ml">Alt (Baro)</div><div class="mv" id="bAlt">--</div><div class="mu">m</div></div>
-    <div class="mc"><div class="ml">Laser</div><div class="mv" id="lmm">--</div><div class="mu">mm</div></div>
+  <div class="sw" id="sw2G">
+    <div class="sh"><span class="sn"><span class="dot"></span>2G NEIGHBORS</span><span class="badge b-off" id="n2gBadge">0</span></div>
+    <div class="sb" id="v2gList">No towers</div>
   </div>
-</div>
-
-<!-- GPS -->
-<div class="card">
-  <div class="card-title">GPS</div>
-  <div class="row row4">
-    <div class="mc"><div class="ml">Latitude</div><div class="mv" id="gLat">--</div></div>
-    <div class="mc"><div class="ml">Longitude</div><div class="mv" id="gLon">--</div></div>
-    <div class="mc"><div class="ml">Speed</div><div class="mv" id="gSpd">--</div><div class="mu">m/s</div></div>
-    <div class="mc"><div class="ml">HDOP</div><div class="mv" id="gHdop">--</div></div>
-  </div>
-  <div class="row row3">
-    <div class="mc"><div class="ml">Altitude</div><div class="mv" id="gAlt">--</div><div class="mu">m</div></div>
-    <div class="mc"><div class="ml">Sats</div><div class="mv" id="gSats">--</div></div>
-    <div class="mc"><div class="ml">Age</div><div class="mv" id="gAge">--</div><div class="mu">ms</div></div>
+  <div class="sw" id="swWIFI">
+    <div class="sh"><span class="sn"><span class="dot"></span>WiFi APs</span><span class="badge b-off" id="wifiBadge">0</span></div>
+    <div class="sb" id="vWifiList">No APs</div>
   </div>
 </div>
 
-<!-- 4G CELL -->
-<div class="card">
-  <div class="card-title">4G LTE CELL</div>
-  <div class="row row4">
-    <div class="mc"><div class="ml">CID</div><div class="mv" id="cid">--</div></div>
-    <div class="mc"><div class="ml">MCC</div><div class="mv" id="mcc">--</div></div>
-    <div class="mc"><div class="ml">MNC</div><div class="mv" id="mnc">--</div></div>
-    <div class="mc"><div class="ml">TAC/LAC</div><div class="mv" id="tac">--</div></div>
-  </div>
-  <div class="row row3">
-    <div class="mc"><div class="ml">RSSI (CSQ)</div><div class="mv" id="rssi4g">--</div></div>
-    <div class="mc"><div class="ml">RSSI (dBm)</div><div class="mv" id="dbm4g">--</div></div>
-    <div class="mc"><div class="ml">Internet</div><div class="mv" id="inet4g">--</div></div>
-  </div>
-</div>
-
-<!-- 2G NEIGHBOR TOWERS -->
-<div class="card">
-  <div class="card-title">2G NEIGHBOR TOWERS <span class="badge b-off" id="n2gBadge">0</span></div>
-  <table class="tbl" id="tbl2g">
+<!-- 2G TOWER TABLE -->
+<div class="card" id="tbl2gCard" style="display:none">
+  <div class="card-title">2G NEIGHBOR TOWERS <span class="badge b-off" id="n2gBadge2">0</span></div>
+  <table class="tbl">
     <thead><tr><th>#</th><th>MCC</th><th>MNC</th><th>LAC</th><th>CID</th><th>RSSI</th><th>dBm</th></tr></thead>
-    <tbody id="tbody2g"><tr><td colspan="7" style="color:var(--td)">No 2G towers yet</td></tr></tbody>
+    <tbody id="tbody2g"></tbody>
   </table>
 </div>
 
-<!-- WiFi APs -->
-<div class="card">
-  <div class="card-title">WiFi ACCESS POINTS <span class="badge b-off" id="wifiBadge">0</span></div>
-  <table class="tbl" id="tblWifi">
-    <thead><tr><th>#</th><th>SSID</th><th>BSSID</th><th>RSSI</th><th>Channel</th></tr></thead>
-    <tbody id="tbodyWifi"><tr><td colspan="5" style="color:var(--td)">No WiFi APs yet</td></tr></tbody>
+<!-- WiFi TABLE -->
+<div class="card" id="tblWifiCard" style="display:none">
+  <div class="card-title">WiFi ACCESS POINTS <span class="badge b-off" id="wifiBadge2">0</span></div>
+  <table class="tbl">
+    <thead><tr><th>#</th><th>SSID</th><th>BSSID</th><th>RSSI</th><th>Ch</th></tr></thead>
+    <tbody id="tbodyWifi"></tbody>
   </table>
 </div>
 
 <!-- RAW JSON -->
 <div class="card">
-  <div class="card-title">RAW JSON <button onclick="rawEl.textContent=''" style="float:right;background:none;border:1px solid var(--border);color:var(--td);font-family:inherit;font-size:7px;padding:2px 6px;cursor:pointer;border-radius:2px">CLEAR</button></div>
-  <div class="raw" id="rawJson">Waiting for BLE connection...</div>
+  <div class="card-title">RAW JSON <button class="clr" onclick="rawEl.textContent=''">CLEAR</button></div>
+  <div class="raw" id="rawJson">Waiting for BLE...</div>
 </div>
 
-<!-- EVENT LOG -->
+<!-- LOG -->
 <div class="card">
-  <div class="card-title">EVENT LOG <button onclick="logEl.innerHTML=''" style="float:right;background:none;border:1px solid var(--border);color:var(--td);font-family:inherit;font-size:7px;padding:2px 6px;cursor:pointer;border-radius:2px">CLEAR</button></div>
+  <div class="card-title">EVENT LOG <button class="clr" onclick="logEl.innerHTML=''">CLEAR</button></div>
   <div class="log" id="logBox"></div>
 </div>
 
-<!-- EXPORT -->
+<!-- BUTTONS -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px">
-  <button class="btn" style="font-size:9px;padding:8px" onclick="exportLog()">EXPORT LOG CSV</button>
+  <button class="btn" style="font-size:9px;padding:8px" onclick="exportLog()">EXPORT CSV</button>
   <button class="btn" style="font-size:9px;padding:8px;color:var(--red);border-color:var(--red)" onclick="toggleBLE()">DISCONNECT</button>
 </div>
 
 <div style="font-size:7px;color:var(--td);text-align:center;padding:8px">
   UPIN BLE Test v6.0 — AIMCRS Intelligence Pvt Ltd<br>
-  Nordic UART Service (NUS) • 6e400001-b5a3-f393-e0a9-e50e24dcca9e
+  Nordic UART Service • 6e400001-b5a3-f393-e0a9-e50e24dcca9e
 </div>
 
 <script>
@@ -189,16 +160,15 @@ const $=id=>document.getElementById(id);
 const rawEl=$('rawJson');
 const logEl=$('logBox');
 
-// BLE
 const BLE_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const BLE_TX_CHAR='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
-let bleDevice=null, bleChar=null, connected=false;
+let bleDevice=null,bleChar=null,connected=false;
 let bleBuffer='';
-let pktTotal=0, pktGood=0, pktErr=0;
-let pktRateCount=0, lastRateTime=performance.now();
-let allPackets=[]; // for export
+let pktTotal=0,pktGood=0,pktErr=0;
+let rateCount=0,lastRateT=performance.now();
+let allPackets=[];
 
-function log(msg, color){
+function log(msg,color){
   const d=document.createElement('div');
   d.style.color=color||'var(--td)';
   d.textContent='['+new Date().toLocaleTimeString()+'] '+msg;
@@ -212,7 +182,6 @@ async function toggleBLE(){
     if(bleDevice&&bleDevice.gatt.connected)bleDevice.gatt.disconnect();
     connected=false;
     $('bleBtn').className='btn';$('bleBtn').textContent='CONNECT BLE';
-    $('bleState').textContent='OFF';$('bleState').style.color='';
     log('Disconnected','var(--amber)');
     return;
   }
@@ -226,8 +195,7 @@ async function toggleBLE(){
     bleDevice.addEventListener('gattserverdisconnected',()=>{
       connected=false;
       $('bleBtn').className='btn err';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
-      $('bleState').textContent='LOST';$('bleState').style.color='var(--red)';
-      log('BLE disconnected','var(--red)');
+      log('BLE lost','var(--red)');
     });
     $('bleBtn').textContent='CONNECTING...';
     log('Connecting to '+bleDevice.name+'...','var(--cyan)');
@@ -238,7 +206,6 @@ async function toggleBLE(){
     bleChar.addEventListener('characteristicvaluechanged',onData);
     connected=true;
     $('bleBtn').className='btn ok';$('bleBtn').textContent='CONNECTED: '+bleDevice.name;
-    $('bleState').textContent='ON';$('bleState').style.color='var(--green)';
     log('Connected to '+bleDevice.name+' — receiving data','var(--green)');
   }catch(e){
     $('bleBtn').className='btn err';$('bleBtn').textContent='FAILED — TAP TO RETRY';
@@ -249,147 +216,168 @@ async function toggleBLE(){
 function onData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
-  const chunks=bleBuffer.split('$');
-  bleBuffer=chunks.pop();
-  for(let json of chunks){
-    json=json.trim();
+  $('bufLen').textContent=bleBuffer.length;
+
+  // Split on $ delimiter (firmware sends JSON$JSON$JSON$...)
+  // Also try newline as delimiter for some firmware versions
+  let endIdx;
+  while((endIdx=bleBuffer.indexOf('$'))!==-1||(endIdx=bleBuffer.indexOf('\n'))!==-1){
+    // Find the earliest delimiter
+    const idxDollar=bleBuffer.indexOf('$');
+    const idxNewline=bleBuffer.indexOf('\n');
+    if(idxDollar>=0&&idxNewline>=0) endIdx=Math.min(idxDollar,idxNewline);
+    else if(idxDollar>=0) endIdx=idxDollar;
+    else endIdx=idxNewline;
+
+    let json=bleBuffer.substring(0,endIdx).trim();
+    bleBuffer=bleBuffer.substring(endIdx+1);
+    pktTotal++;rateCount++;
     if(!json)continue;
-    pktTotal++;pktRateCount++;
-    // Fix partial JSON
+
+    // Find start of JSON
     const brace=json.indexOf('{');
+    if(brace<0){pktErr++;continue;}
     if(brace>0)json=json.substring(brace);
-    if(json[0]!=='{'){pktErr++;continue;}
+
+    // Fix firmware JSON quirks
     json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
+    // Fix unquoted NaN/Infinity
+    json=json.replace(/:\s*NaN/g,':null').replace(/:\s*Infinity/g,':null').replace(/:\s*-Infinity/g,':null');
+
     try{
       const d=JSON.parse(json);
-      if(d.k!==undefined)continue; // keepalive
-      pktGood++;
-      processPacket(d);
-      // Raw display (last 5)
-      const line=JSON.stringify(d);
-      const lines=rawEl.textContent.split('\n').slice(-4);
-      lines.push(line);
-      rawEl.textContent=lines.join('\n');
-      rawEl.scrollTop=rawEl.scrollHeight;
-      // Store for export
-      allPackets.push({t:Date.now(),d:d});
-      if(allPackets.length>5000)allPackets.shift();
+      if(d.k!==undefined)continue;
+      if(d.imu||d.gps||d.baro||d.t!==undefined||d.fw){
+        pktGood++;
+        processPacket(d);
+        // Show last raw JSON
+        rawEl.textContent=JSON.stringify(d,null,1);
+        rawEl.scrollTop=rawEl.scrollHeight;
+        allPackets.push({t:Date.now(),d:d});
+        if(allPackets.length>5000)allPackets.shift();
+      } else {
+        pktErr++;
+      }
     }catch(e){
       pktErr++;
-      if(pktErr<=5)log('Parse error: '+json.substring(0,60)+'...','var(--red)');
+      if(pktErr<=10)log('Parse err: '+json.substring(0,80)+'...','var(--red)');
     }
   }
-  if(bleBuffer.length>4000){bleBuffer='';pktErr++;}
-  // Update rate
+
+  // Overflow protection
+  if(bleBuffer.length>8000){
+    log('Buffer overflow ('+bleBuffer.length+') — resync','var(--red)');
+    bleBuffer='';pktErr++;
+  }
+
+  // Rate calc
   const now=performance.now();
-  if(now-lastRateTime>1000){
-    $('pktRate').textContent=(pktRateCount/((now-lastRateTime)/1000)).toFixed(1);
-    pktRateCount=0;lastRateTime=now;
+  if(now-lastRateT>1000){
+    $('pktRate').textContent=(rateCount/((now-lastRateT)/1000)).toFixed(1);
+    rateCount=0;lastRateT=now;
   }
   $('pktCount').textContent=pktTotal;
   $('pktGood').textContent=pktGood;
   $('pktErr').textContent=pktErr;
 }
 
+function on(id){$(id).classList.add('on');}
+function off(id){$(id).classList.remove('on');}
+
 function processPacket(d){
   // IMU
   if(d.imu&&d.imu.ok){
-    $('sIMU').className='mc on';
-    $('imuV').textContent='OK';
-    $('ax').textContent=(d.imu.ax||0).toFixed(3);
-    $('ay').textContent=(d.imu.ay||0).toFixed(3);
-    $('az').textContent=(d.imu.az||0).toFixed(3);
-    $('gx').textContent=(d.imu.gx||0).toFixed(2);
-    $('gy').textContent=(d.imu.gy||0).toFixed(2);
-    $('gz').textContent=(d.imu.gz||0).toFixed(2);
-    $('mx').textContent=(d.imu.mx||0).toFixed(1);
-    $('my').textContent=(d.imu.my||0).toFixed(1);
-    $('mz').textContent=(d.imu.mz||0).toFixed(1);
-    $('hdg').textContent=(d.imu.hdg||0).toFixed(1);
-    $('pitch').textContent=(d.imu.pitch||0).toFixed(1);
-    $('roll').textContent=(d.imu.roll||0).toFixed(1);
-    if(d.imu.age_ms) $('imuV').textContent='OK ('+d.imu.age_ms+'ms)';
-  } else {
-    $('sIMU').className='mc off';$('imuV').textContent=d.imu?'ERR':'--';
-  }
+    on('swIMU');
+    $('vAx').textContent=(d.imu.ax||0).toFixed(2);
+    $('vAy').textContent=(d.imu.ay||0).toFixed(2);
+    $('vAz').textContent=(d.imu.az||0).toFixed(2);
+    $('vGx').textContent=(d.imu.gx||0).toFixed(1);
+    $('vGy').textContent=(d.imu.gy||0).toFixed(1);
+    $('vGz').textContent=(d.imu.gz||0).toFixed(1);
+    $('imuAge').textContent=d.imu.age_ms?d.imu.age_ms+'ms':'';
+  } else off('swIMU');
 
-  // Compass (may be separate from IMU in v6)
-  if(d.imu&&d.imu.hdg!==undefined){
-    $('sCOMP').className='mc on';
-    $('compV').textContent=Math.round(d.imu.hdg)+'°';
-  }
+  // Compass
+  if(d.imu&&(d.imu.hdg!==undefined||d.imu.mx!==undefined)){
+    on('swCOMP');
+    $('vHdg').textContent=(d.imu.hdg||0).toFixed(1);
+    $('vMx').textContent=(d.imu.mx||0).toFixed(0);
+    $('vMy').textContent=(d.imu.my||0).toFixed(0);
+    $('vMz').textContent=(d.imu.mz||0).toFixed(0);
+  } else off('swCOMP');
 
   // Baro
   if(d.baro&&d.baro.ok){
-    $('sBARO').className='mc on';
-    $('baroV').textContent=(d.baro.hpa||0).toFixed(0);
-    $('hpa').textContent=(d.baro.hpa||0).toFixed(1);
-    $('temp').textContent=(d.baro.temp||0).toFixed(1);
-    $('bAlt').textContent=(d.baro.alt||0).toFixed(1);
-    if(d.baro.age_ms) $('baroV').textContent=(d.baro.hpa||0).toFixed(0)+' ('+d.baro.age_ms+'ms)';
-  } else {
-    $('sBARO').className='mc off';$('baroV').textContent='--';
-  }
+    on('swBARO');
+    $('vHpa').textContent=(d.baro.hpa||0).toFixed(1);
+    $('vTemp').textContent=(d.baro.temp||0).toFixed(1);
+    $('vBAlt').textContent=(d.baro.alt||0).toFixed(1);
+    $('baroAge').textContent=d.baro.age_ms?d.baro.age_ms+'ms':'';
+  } else off('swBARO');
 
   // Laser
   if(d.laser&&d.laser.ok){
-    $('sLASER').className='mc on';
-    $('laserV').textContent=d.laser.mm;
-    $('lmm').textContent=d.laser.mm;
-  } else {
-    $('sLASER').className='mc off';$('laserV').textContent='--';
-  }
+    on('swLASER');
+    $('vLmm').textContent=d.laser.mm||0;
+    $('vLm').textContent=((d.laser.mm||0)/1000).toFixed(3);
+  } else off('swLASER');
 
   // GPS
   if(d.gps&&d.gps.ok){
-    $('sGPS').className='mc on';
-    $('gpsV').textContent='FIX';
-    $('gpsSats').textContent=(d.gps.sats||0)+' sats';
-    $('gLat').textContent=(d.gps.lat||0).toFixed(7);
-    $('gLon').textContent=(d.gps.lon||0).toFixed(7);
-    $('gSpd').textContent=(d.gps.speed||0).toFixed(1);
-    $('gHdop').textContent=(d.gps.hdop||0).toFixed(1);
-    $('gAlt').textContent=(d.gps.alt||0).toFixed(1);
-    $('gSats').textContent=d.gps.sats||0;
-    $('gAge').textContent=d.gps.age_ms||'--';
-  } else {
-    $('sGPS').className='mc off';$('gpsV').textContent='--';$('gpsSats').textContent='no fix';
-  }
+    on('swGPS');
+    $('vLat').textContent=(d.gps.lat||0).toFixed(7);
+    $('vLon').textContent=(d.gps.lon||0).toFixed(7);
+    $('vSpd').textContent=(d.gps.speed||0).toFixed(1);
+    $('vSats').textContent=d.gps.sats||0;
+    $('vHdop').textContent=(d.gps.hdop||0).toFixed(1);
+    $('gpsAge').textContent=d.gps.age_ms?d.gps.age_ms+'ms':'';
+  } else off('swGPS');
 
-  // 4G Cell
-  if(d.cell4g){
-    const has=d.cell4g.ok||d.cell4g.cid;
-    $('s4G').className='mc '+(has?'on':'off');
-    $('cell4gV').textContent=d.cell4g.cid||'--';
+  // 4G
+  if(d.cell4g&&(d.cell4g.ok||d.cell4g.cid)){
+    on('sw4G');
+    $('vCid').textContent=d.cell4g.cid||'--';
+    $('vMcc').textContent=d.cell4g.mcc||'--';
+    $('vMnc').textContent=d.cell4g.mnc||'--';
+    $('vTac').textContent=d.cell4g.tac||'--';
     const csq=d.cell4g.rssi||0;
     const dbm=csq>0&&csq<=31?-113+csq*2:csq;
-    $('cell4gD').textContent=dbm+'dBm';
-    $('cid').textContent=d.cell4g.cid||'--';
-    $('mcc').textContent=d.cell4g.mcc||'--';
-    $('mnc').textContent=d.cell4g.mnc||'--';
-    $('tac').textContent=d.cell4g.tac||'--';
-    $('rssi4g').textContent=csq;
-    $('dbm4g').textContent=dbm+'dBm';
-    $('inet4g').textContent=d.cell4g.inet?'YES':'NO';
-    $('inet4g').style.color=d.cell4g.inet?'var(--green)':'var(--red)';
-  }
+    $('vRssi4g').textContent=dbm;
+    $('vInet').textContent=d.cell4g.inet?'YES':'NO';
+    $('vInet').style.color=d.cell4g.inet?'var(--green)':'var(--red)';
+  } else off('sw4G');
 
-  // 2G Neighbor Towers
+  // 2G Neighbors
   if(d.cell2g){
     const list=d.cell2g.data||d.cell2g.list||[];
     const count=Array.isArray(list)?list.length:(d.cell2g.towers||0);
-    $('s2G').className='mc '+(count>0?'on':'off');
-    $('cell2gV').textContent=count;
-    $('n2gBadge').textContent=count;
-    $('n2gBadge').className='badge '+(count>0?'b-ok':'b-off');
-    if(Array.isArray(list)&&list.length>0){
-      let h='';
-      list.forEach((t,i)=>{
-        const csq=t.rssi||t.rxl||0;
-        const dbm=csq>0&&csq<=31?-113+csq*2:(csq>=-120?csq:-113+csq*2);
-        h+='<tr><td>'+(i+1)+'</td><td class="v">'+(t.mcc||404)+'</td><td class="v">'+(t.mnc||'--')+'</td><td class="v">'+(t.lac||'--')+'</td><td class="v" style="color:var(--cyan)">'+(t.cid||t.cellid||'--')+'</td><td>'+csq+'</td><td class="v">'+dbm+'</td></tr>';
-      });
-      $('tbody2g').innerHTML=h;
+    if(count>0){
+      on('sw2G');
+      $('n2gBadge').textContent=count;$('n2gBadge').className='badge b-ok';
+      $('n2gBadge2').textContent=count;$('n2gBadge2').className='badge b-ok';
+      // Summary in widget
+      let summary='';
+      if(Array.isArray(list)){
+        list.forEach((t,i)=>{
+          const csq=t.rssi||t.rxl||0;
+          const dbm=csq>0&&csq<=31?-113+csq*2:(csq>=-120?csq:-113+csq*2);
+          summary+='<b>'+(t.cid||t.cellid||'?')+'</b> '+dbm+'dBm';
+          if(i<list.length-1)summary+=' · ';
+        });
+        // Full table
+        let h='';
+        list.forEach((t,i)=>{
+          const csq=t.rssi||t.rxl||0;
+          const dbm=csq>0&&csq<=31?-113+csq*2:(csq>=-120?csq:-113+csq*2);
+          h+='<tr><td>'+(i+1)+'</td><td class="v">'+(t.mcc||404)+'</td><td class="v">'+(t.mnc||'--')+'</td><td class="v">'+(t.lac||'--')+'</td><td class="v" style="color:var(--cyan)">'+(t.cid||t.cellid||'--')+'</td><td>'+csq+'</td><td class="v">'+dbm+'</td></tr>';
+        });
+        $('tbody2g').innerHTML=h;
+        $('tbl2gCard').style.display='block';
+      }
+      $('v2gList').innerHTML=summary||count+' towers';
+    } else {
+      off('sw2G');
+      $('n2gBadge').textContent='0';$('n2gBadge').className='badge b-off';
     }
   }
 
@@ -397,50 +385,64 @@ function processPacket(d){
   if(d.wifi){
     const aps=d.wifi.aps||0;
     const list=d.wifi.list||[];
-    $('sWIFI').className='mc '+(aps>0?'on':'off');
-    $('wifiV').textContent=aps;
-    $('wifiD').textContent=list.length+' details';
-    $('wifiBadge').textContent=aps;
-    $('wifiBadge').className='badge '+(aps>0?'b-ok':'b-off');
-    if(Array.isArray(list)&&list.length>0){
-      let h='';
-      list.forEach((ap,i)=>{
-        h+='<tr><td>'+(i+1)+'</td><td class="v">'+(ap.s||ap.ssid||'hidden')+'</td><td style="font-size:7px">'+(ap.b||ap.bssid||'--')+'</td><td class="v">'+(ap.r||ap.rssi||'--')+'</td><td>'+(ap.c||ap.ch||'--')+'</td></tr>';
-      });
-      $('tbodyWifi').innerHTML=h;
+    if(aps>0||list.length>0){
+      on('swWIFI');
+      const n=list.length||aps;
+      $('wifiBadge').textContent=n;$('wifiBadge').className='badge b-ok';
+      $('wifiBadge2').textContent=n;$('wifiBadge2').className='badge b-ok';
+      // Summary
+      let summary='';
+      if(Array.isArray(list)&&list.length>0){
+        list.slice(0,4).forEach((ap,i)=>{
+          summary+='<b>'+(ap.s||ap.ssid||'hidden')+'</b> '+(ap.r||ap.rssi||'?')+'dBm';
+          if(i<Math.min(list.length,4)-1)summary+=' · ';
+        });
+        if(list.length>4)summary+=' +<b>'+(list.length-4)+'</b> more';
+        // Full table
+        let h='';
+        list.forEach((ap,i)=>{
+          h+='<tr><td>'+(i+1)+'</td><td class="v">'+(ap.s||ap.ssid||'<i>hidden</i>')+'</td><td style="font-size:6px">'+(ap.b||ap.bssid||'--')+'</td><td class="v">'+(ap.r||ap.rssi||'--')+'</td><td>'+(ap.c||ap.ch||'--')+'</td></tr>';
+        });
+        $('tbodyWifi').innerHTML=h;
+        $('tblWifiCard').style.display='block';
+      }
+      $('vWifiList').innerHTML=summary||aps+' APs';
+    } else {
+      off('swWIFI');
+      $('wifiBadge').textContent='0';$('wifiBadge').className='badge b-off';
     }
   }
 }
 
 function exportLog(){
-  if(!allPackets.length){log('No packets to export','var(--amber)');return;}
-  let csv='timestamp,keys,imu_ok,ax,ay,az,gx,gy,gz,mx,my,mz,hdg,pitch,roll,baro_ok,hpa,temp,baro_alt,laser_mm,gps_ok,gps_lat,gps_lon,gps_speed,gps_hdop,gps_sats,cell4g_cid,cell4g_rssi,cell2g_count,wifi_aps\n';
+  if(!allPackets.length){log('No data','var(--amber)');return;}
+  let csv='timestamp,fw,imu_ok,ax,ay,az,gx,gy,gz,mx,my,mz,hdg,pitch,roll,baro_ok,hpa,temp,baro_alt,laser_mm,gps_ok,lat,lon,speed,hdop,sats,cell4g_cid,cell4g_mcc,cell4g_mnc,cell4g_tac,cell4g_rssi_dbm,cell2g_count,wifi_aps\n';
   allPackets.forEach(p=>{
-    const d=p.d;
-    const imu=d.imu||{};const baro=d.baro||{};const gps=d.gps||{};
+    const d=p.d;const imu=d.imu||{};const baro=d.baro||{};const gps=d.gps||{};
     const c4=d.cell4g||{};const c2=d.cell2g||{};const w=d.wifi||{};
     const c2list=c2.data||c2.list||[];
-    csv+=p.t+','+Object.keys(d).join('|')+','
-      +(imu.ok||false)+','+(imu.ax||0)+','+(imu.ay||0)+','+(imu.az||0)+','
+    const csq=c4.rssi||0;const dbm=csq>0&&csq<=31?-113+csq*2:csq;
+    csv+=p.t+','+(d.fw||'')+','
+      +(imu.ok||'')+','+(imu.ax||0)+','+(imu.ay||0)+','+(imu.az||0)+','
       +(imu.gx||0)+','+(imu.gy||0)+','+(imu.gz||0)+','
       +(imu.mx||0)+','+(imu.my||0)+','+(imu.mz||0)+','
       +(imu.hdg||0)+','+(imu.pitch||0)+','+(imu.roll||0)+','
-      +(baro.ok||false)+','+(baro.hpa||0)+','+(baro.temp||0)+','+(baro.alt||0)+','
-      +(d.laser&&d.laser.mm||0)+','
-      +(gps.ok||false)+','+(gps.lat||0)+','+(gps.lon||0)+','+(gps.speed||0)+','+(gps.hdop||0)+','+(gps.sats||0)+','
-      +(c4.cid||0)+','+(c4.rssi||0)+','
+      +(baro.ok||'')+','+(baro.hpa||0)+','+(baro.temp||0)+','+(baro.alt||0)+','
+      +(d.laser?d.laser.mm||0:0)+','
+      +(gps.ok||'')+','+(gps.lat||0)+','+(gps.lon||0)+','+(gps.speed||0)+','+(gps.hdop||0)+','+(gps.sats||0)+','
+      +(c4.cid||0)+','+(c4.mcc||0)+','+(c4.mnc||0)+','+(c4.tac||0)+','+dbm+','
       +(Array.isArray(c2list)?c2list.length:(c2.towers||0))+','
       +(w.aps||0)+'\n';
   });
   const a=document.createElement('a');
   a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download='upin_ble_test_'+new Date().toISOString().slice(0,19).replace(/[T:-]/g,'')+'.csv';
+  a.download='upin_ble_v6_'+new Date().toISOString().slice(0,19).replace(/[T:-]/g,'')+'.csv';
   a.click();
   log('Exported '+allPackets.length+' packets','var(--green)');
 }
 
-log('Ready — tap CONNECT BLE to start','var(--cyan)');
-log('Firmware v6.0: 10Hz IMU, 5s cell, 10s WiFi scan','var(--td)');
+log('Tap CONNECT BLE to start','var(--cyan)');
+log('Firmware v6: expects JSON packets delimited by $ or newline','var(--td)');
 </script>
 </body>
 </html>
