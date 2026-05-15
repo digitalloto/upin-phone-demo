@@ -216,6 +216,10 @@ async function toggleBLE(){
 function onData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
+  // v6 firmware injects keepalive {"k":1} between chunks of the main JSON.
+  // This corrupts data: "rssi":{"k":1}-78 → invalid JSON.
+  // Strip ALL keepalives before parsing.
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');
   $('bufLen').textContent=bleBuffer.length;
 
   // Extract complete JSON using 3 strategies:

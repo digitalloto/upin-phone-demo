@@ -1009,14 +1009,18 @@ let bleGoodPkts=0;
 function onBLEData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
+  // v6 firmware injects keepalive {"k":1} as separate BLE notifications
+  // between chunks of the main JSON packet. This corrupts the data:
+  //   "rssi":{"k":1}-78  →  invalid JSON
+  // Strip ALL keepalives from the buffer before parsing.
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');
   // Extract complete JSON objects using multiple strategies:
-  // 1. Try $ delimiter (old firmware)
-  // 2. Try \n delimiter
-  // 3. Brace-matching: find balanced {} (v6 firmware sends large packets without delimiters)
+  // 1. Try $ delimiter (old firmware) or \n
+  // 2. Brace-matching: find balanced {} (v6 firmware — large packets, no delimiter)
   let found=true;
   while(found){
     found=false;
-    // Strategy 1 & 2: delimiter-based
+    // Strategy 1: delimiter-based
     let delimIdx=bleBuffer.indexOf('$');
     const nlIdx=bleBuffer.indexOf('\n');
     if(delimIdx<0||(nlIdx>=0&&nlIdx<delimIdx))delimIdx=nlIdx;
@@ -1027,7 +1031,7 @@ function onBLEData(event){
       found=true;
       continue;
     }
-    // Strategy 3: brace-matching — find the first complete {...} in buffer
+    // Strategy 2: brace-matching — find the first complete {...} in buffer
     const braceStart=bleBuffer.indexOf('{');
     if(braceStart>=0){
       let depth=0,i=braceStart,inStr=false,esc=false;
@@ -1043,7 +1047,6 @@ function onBLEData(event){
       if(depth===0&&i<=bleBuffer.length){
         const json=bleBuffer.substring(braceStart,i);
         bleBuffer=bleBuffer.substring(i);
-        // Discard any garbage before the opening brace
         tryParse(json);
         found=true;
       }
