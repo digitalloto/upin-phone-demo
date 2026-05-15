@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>BLE RAW DUMP</title>
+<style>
+body{font-family:monospace;background:#000;color:#0f0;font-size:10px;padding:8px}
+button{font-size:14px;padding:12px 24px;background:#111;color:#0f0;border:2px solid #0f0;font-family:monospace;cursor:pointer;width:100%;margin-bottom:8px}
+#out{white-space:pre-wrap;word-break:break-all;line-height:1.4}
+.chunk{border-bottom:1px solid #333;padding:2px 0;margin:1px 0}
+.hex{color:#888}
+.ascii{color:#0f0}
+.info{color:#ff0}
+</style>
+</head><body>
+<button id="btn" onclick="go()">CONNECT BLE — RAW DUMP</button>
+<div><span class="info" id="stats">Notifications: 0 | Total bytes: 0</span></div>
+<hr style="border-color:#333">
+<div id="out"></div>
+<script>
+const out=document.getElementById('out');
+const btn=document.getElementById('btn');
+const stats=document.getElementById('stats');
+let notifCount=0,totalBytes=0;
+let allChunks=[];
+
+async function go(){
+  try{
+    btn.textContent='SCANNING...';
+    const device=await navigator.bluetooth.requestDevice({
+      filters:[{namePrefix:'UPIN'}],
+      optionalServices:['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+    });
+    btn.textContent='CONNECTING...';
+    const server=await device.gatt.connect();
+    const service=await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+    const char=await service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+    await char.startNotifications();
+    char.addEventListener('characteristicvaluechanged',e=>{
+      const bytes=new Uint8Array(e.target.value.buffer);
+      const ascii=new TextDecoder().decode(bytes);
+      const hex=[...bytes].map(b=>b.toString(16).padStart(2,'0')).join(' ');
+      notifCount++;
+      totalBytes+=bytes.length;
+      allChunks.push({n:notifCount,len:bytes.length,ascii:ascii,hex:hex,t:Date.now()});
+      stats.textContent='Notifications: '+notifCount+' | Total bytes: '+totalBytes+' | Last chunk: '+bytes.length+' bytes';
+      const div=document.createElement('div');
+      div.className='chunk';
+      div.innerHTML='<span class="info">#'+notifCount+' ('+bytes.length+'B)</span> <span class="ascii">'+ascii.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</span>';
+      out.appendChild(div);
+      if(out.children.length>200)out.removeChild(out.firstChild);
+      window.scrollTo(0,document.body.scrollHeight);
+    });
+    btn.textContent='CONNECTED: '+device.name+' — DUMPING RAW BLE';
+    btn.style.borderColor='#0f0';
+    device.addEventListener('gattserverdisconnected',()=>{
+      btn.textContent='DISCONNECTED — TAP TO RECONNECT';
+      btn.style.borderColor='#f00';
+    });
+  }catch(e){
+    btn.textContent='ERROR: '+e.message;
+    btn.style.borderColor='#f00';
+  }
+}
+</script>
+</body></html>
