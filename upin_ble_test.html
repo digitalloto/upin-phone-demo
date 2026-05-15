@@ -288,6 +288,7 @@ function tryParsePacket(json){
   if(b>0)json=json.substring(b);
   json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
   json=json.replace(/:\s*NaN/g,':null').replace(/:\s*Infinity/g,':null').replace(/:\s*-Infinity/g,':null');
+  json=json.replace(/"sources":(\d+)\/(\d+)/g,'"sources":"$1/$2"');
   try{
     const d=JSON.parse(json);
     if(d.k!==undefined)return;
@@ -321,13 +322,14 @@ function processPacket(d){
     $('imuAge').textContent=d.imu.age_ms?d.imu.age_ms+'ms':'';
   } else off('swIMU');
 
-  // Compass
-  if(d.imu&&(d.imu.hdg!==undefined||d.imu.mx!==undefined)){
+  // Compass (v6: separate d.compass object; v5: inside d.imu)
+  const cmp=d.compass||d.imu||{};
+  if(cmp.hdg!==undefined||cmp.mx!==undefined){
     on('swCOMP');
-    $('vHdg').textContent=(d.imu.hdg||0).toFixed(1);
-    $('vMx').textContent=(d.imu.mx||0).toFixed(0);
-    $('vMy').textContent=(d.imu.my||0).toFixed(0);
-    $('vMz').textContent=(d.imu.mz||0).toFixed(0);
+    $('vHdg').textContent=(cmp.hdg||0).toFixed(1);
+    $('vMx').textContent=(cmp.mx||0).toFixed(0);
+    $('vMy').textContent=(cmp.my||0).toFixed(0);
+    $('vMz').textContent=(cmp.mz||0).toFixed(0);
   } else off('swCOMP');
 
   // Baro
@@ -408,7 +410,7 @@ function processPacket(d){
   // WiFi
   if(d.wifi){
     const aps=d.wifi.aps||0;
-    const list=d.wifi.list||[];
+    const list=d.wifi.list||d.wifi.data||[];
     if(aps>0||list.length>0){
       on('swWIFI');
       const n=list.length||aps;
