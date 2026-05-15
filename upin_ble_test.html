@@ -218,54 +218,48 @@ function onData(event){
   bleBuffer+=raw;
   $('bufLen').textContent=bleBuffer.length;
 
-  // Split on $ delimiter (firmware sends JSON$JSON$JSON$...)
-  // Also try newline as delimiter for some firmware versions
-  let endIdx;
-  while((endIdx=bleBuffer.indexOf('$'))!==-1||(endIdx=bleBuffer.indexOf('\n'))!==-1){
-    // Find the earliest delimiter
-    const idxDollar=bleBuffer.indexOf('$');
-    const idxNewline=bleBuffer.indexOf('\n');
-    if(idxDollar>=0&&idxNewline>=0) endIdx=Math.min(idxDollar,idxNewline);
-    else if(idxDollar>=0) endIdx=idxDollar;
-    else endIdx=idxNewline;
-
-    let json=bleBuffer.substring(0,endIdx).trim();
-    bleBuffer=bleBuffer.substring(endIdx+1);
-    pktTotal++;rateCount++;
-    if(!json)continue;
-
-    // Find start of JSON
-    const brace=json.indexOf('{');
-    if(brace<0){pktErr++;continue;}
-    if(brace>0)json=json.substring(brace);
-
-    // Fix firmware JSON quirks
-    json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
-    // Fix unquoted NaN/Infinity
-    json=json.replace(/:\s*NaN/g,':null').replace(/:\s*Infinity/g,':null').replace(/:\s*-Infinity/g,':null');
-
-    try{
-      const d=JSON.parse(json);
-      if(d.k!==undefined)continue;
-      if(d.imu||d.gps||d.baro||d.t!==undefined||d.fw){
-        pktGood++;
-        processPacket(d);
-        // Show last raw JSON
-        rawEl.textContent=JSON.stringify(d,null,1);
-        rawEl.scrollTop=rawEl.scrollHeight;
-        allPackets.push({t:Date.now(),d:d});
-        if(allPackets.length>5000)allPackets.shift();
-      } else {
-        pktErr++;
+  // Extract complete JSON using 3 strategies:
+  // 1. $ delimiter (old firmware)
+  // 2. \n delimiter
+  // 3. Brace-matching: count {} depth (v6 firmware — large packets, no delimiter)
+  let found=true;
+  while(found){
+    found=false;
+    // Strategy 1 & 2: delimiter-based
+    let delimIdx=bleBuffer.indexOf('$');
+    const nlIdx=bleBuffer.indexOf('\n');
+    if(delimIdx<0||(nlIdx>=0&&nlIdx<delimIdx))delimIdx=nlIdx;
+    if(delimIdx>=0){
+      let json=bleBuffer.substring(0,delimIdx).trim();
+      bleBuffer=bleBuffer.substring(delimIdx+1);
+      if(json)tryParsePacket(json);
+      found=true;
+      continue;
+    }
+    // Strategy 3: brace-matching — find first complete {...}
+    const braceStart=bleBuffer.indexOf('{');
+    if(braceStart>=0){
+      let depth=0,i=braceStart,inStr=false,esc=false;
+      for(;i<bleBuffer.length;i++){
+        const ch=bleBuffer[i];
+        if(esc){esc=false;continue;}
+        if(ch==='\\'){esc=true;continue;}
+        if(ch==='"'){inStr=!inStr;continue;}
+        if(inStr)continue;
+        if(ch==='{')depth++;
+        else if(ch==='}'){depth--;if(depth===0){i++;break;}}
       }
-    }catch(e){
-      pktErr++;
-      if(pktErr<=10)log('Parse err: '+json.substring(0,80)+'...','var(--red)');
+      if(depth===0&&i<=bleBuffer.length){
+        const json=bleBuffer.substring(braceStart,i);
+        bleBuffer=bleBuffer.substring(i);
+        tryParsePacket(json);
+        found=true;
+      }
     }
   }
 
   // Overflow protection
-  if(bleBuffer.length>8000){
+  if(bleBuffer.length>16000){
     log('Buffer overflow ('+bleBuffer.length+') — resync','var(--red)');
     bleBuffer='';pktErr++;
   }
@@ -279,6 +273,32 @@ function onData(event){
   $('pktCount').textContent=pktTotal;
   $('pktGood').textContent=pktGood;
   $('pktErr').textContent=pktErr;
+  $('bufLen').textContent=bleBuffer.length;
+}
+
+function tryParsePacket(json){
+  pktTotal++;rateCount++;
+  if(!json)return;
+  const b=json.indexOf('{');
+  if(b<0){pktErr++;return;}
+  if(b>0)json=json.substring(b);
+  json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
+  json=json.replace(/:\s*NaN/g,':null').replace(/:\s*Infinity/g,':null').replace(/:\s*-Infinity/g,':null');
+  try{
+    const d=JSON.parse(json);
+    if(d.k!==undefined)return;
+    if(d.imu||d.gps||d.baro||d.t!==undefined||d.fw){
+      pktGood++;
+      processPacket(d);
+      rawEl.textContent=JSON.stringify(d,null,1);
+      rawEl.scrollTop=rawEl.scrollHeight;
+      allPackets.push({t:Date.now(),d:d});
+      if(allPackets.length>5000)allPackets.shift();
+    }else{pktErr++;}
+  }catch(e){
+    pktErr++;
+    if(pktErr<=10)log('Parse err: '+json.substring(0,80)+'...','var(--red)');
+  }
 }
 
 function on(id){$(id).classList.add('on');}

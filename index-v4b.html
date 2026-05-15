@@ -1009,56 +1009,75 @@ let bleGoodPkts=0;
 function onBLEData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
-  let endIdx;
-  while((endIdx=bleBuffer.indexOf('$'))!==-1){
-    let json=bleBuffer.substring(0,endIdx).trim();
-    bleBuffer=bleBuffer.substring(endIdx+1);
-    blePackets++;
-    // Skip empty messages
-    if(!json)continue;
-    // Must start with '{' — if not, we lost the start of this message
-    if(json[0]!=='{'){
-      bleErrors++;
-      // Try to find a '{' in the string (partial recovery)
-      const braceIdx=json.indexOf('{');
-      if(braceIdx>0)json=json.substring(braceIdx);
-      else continue; // no '{' at all, skip entirely
+  // Extract complete JSON objects using multiple strategies:
+  // 1. Try $ delimiter (old firmware)
+  // 2. Try \n delimiter
+  // 3. Brace-matching: find balanced {} (v6 firmware sends large packets without delimiters)
+  let found=true;
+  while(found){
+    found=false;
+    // Strategy 1 & 2: delimiter-based
+    let delimIdx=bleBuffer.indexOf('$');
+    const nlIdx=bleBuffer.indexOf('\n');
+    if(delimIdx<0||(nlIdx>=0&&nlIdx<delimIdx))delimIdx=nlIdx;
+    if(delimIdx>=0){
+      let json=bleBuffer.substring(0,delimIdx).trim();
+      bleBuffer=bleBuffer.substring(delimIdx+1);
+      if(json)tryParse(json);
+      found=true;
+      continue;
     }
-    // Fix common firmware JSON issues:
-    // 1. Empty values like "ble":, → "ble":null,
-    json=json.replace(/:,/g,':null,');
-    // 2. Trailing comma before } like ,"} → }
-    json=json.replace(/,\s*}/g,'}');
-    // 3. Empty value at end like :"} → :null}
-    json=json.replace(/:}/g,':null}');
-    try{
-      const d=JSON.parse(json);
-      // Skip keepalive messages (contain "k" key)
-      if(d.k!==undefined)continue;
-      // Validate: must have at least one expected field
-      if(d.imu||d.gps||d.baro||d.t!==undefined){
-        boardData=d;processBoardData(d);bleGoodPkts++;
-      }else{
-        bleErrors++;
+    // Strategy 3: brace-matching — find the first complete {...} in buffer
+    const braceStart=bleBuffer.indexOf('{');
+    if(braceStart>=0){
+      let depth=0,i=braceStart,inStr=false,esc=false;
+      for(;i<bleBuffer.length;i++){
+        const ch=bleBuffer[i];
+        if(esc){esc=false;continue;}
+        if(ch==='\\'){esc=true;continue;}
+        if(ch==='"'){inStr=!inStr;continue;}
+        if(inStr)continue;
+        if(ch==='{')depth++;
+        else if(ch==='}'){depth--;if(depth===0){i++;break;}}
       }
-    }catch(e){
-      bleErrors++;
-      // Log first few errors with a snippet of the bad JSON for debugging
-      if(bleErrors<=5){
-        const snippet=json.length>80?json.substring(0,40)+'...'+json.substring(json.length-40):json;
-        log('BLE parse err #'+bleErrors+': '+snippet,'var(--red)');
-      }
-      // Show error rate periodically
-      if(blePackets>0&&blePackets%50===0){
-        const rate=Math.round(bleGoodPkts/blePackets*100);
-        log('BLE: '+bleGoodPkts+'/'+blePackets+' ok ('+rate+'%)','var(--amber)');
+      if(depth===0&&i<=bleBuffer.length){
+        const json=bleBuffer.substring(braceStart,i);
+        bleBuffer=bleBuffer.substring(i);
+        // Discard any garbage before the opening brace
+        tryParse(json);
+        found=true;
       }
     }
   }
-  // Safety: buffer too large means we missed a '$' delimiter
-  if(bleBuffer.length>4000){
+  if(bleBuffer.length>16000){
     bleBuffer='';bleErrors++;
     log('BLE buffer overflow — resync','var(--red)');
+  }
+}
+function tryParse(json){
+  blePackets++;
+  if(!json||json[0]!=='{'){
+    const b=json.indexOf('{');
+    if(b>0)json=json.substring(b);else{bleErrors++;return;}
+  }
+  json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
+  json=json.replace(/:\s*NaN/g,':null').replace(/:\s*Infinity/g,':null').replace(/:\s*-Infinity/g,':null');
+  try{
+    const d=JSON.parse(json);
+    if(d.k!==undefined)return;
+    if(d.imu||d.gps||d.baro||d.t!==undefined||d.fw){
+      boardData=d;processBoardData(d);bleGoodPkts++;
+    }else{bleErrors++;}
+  }catch(e){
+    bleErrors++;
+    if(bleErrors<=5){
+      const snippet=json.length>80?json.substring(0,40)+'...'+json.substring(json.length-40):json;
+      log('BLE parse err #'+bleErrors+': '+snippet,'var(--red)');
+    }
+    if(blePackets>0&&blePackets%50===0){
+      const rate=Math.round(bleGoodPkts/blePackets*100);
+      log('BLE: '+bleGoodPkts+'/'+blePackets+' ok ('+rate+'%)','var(--amber)');
+    }
   }
 }
 let bleReconnectAttempts=0;
