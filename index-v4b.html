@@ -1065,6 +1065,8 @@ function tryParse(json){
   }
   json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
   json=json.replace(/:\s*NaN/g,':null').replace(/:\s*Infinity/g,':null').replace(/:\s*-Infinity/g,':null');
+  // v6 firmware: "sources":7/8 is invalid JSON — quote it
+  json=json.replace(/"sources":(\d+)\/(\d+)/g,'"sources":"$1/$2"');
   try{
     const d=JSON.parse(json);
     if(d.k!==undefined)return;
@@ -1216,15 +1218,22 @@ function processBoardData(d){
   const imuStale=d.imu&&d.imu.age_ms&&d.imu.age_ms>2000;
   const baroStale=d.baro&&d.baro.age_ms&&d.baro.age_ms>2000;
   const gpsStale=d.gps&&d.gps.age_ms&&d.gps.age_ms>5000;
-  // IMU (MPU9250)
+  // IMU (MPU6500)
   if(d.imu&&d.imu.ok&&!imuStale){
     accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
     gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
-    mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
-    compass=validCompass(d.imu.hdg);pitch=d.imu.pitch;roll=d.imu.roll;
+    // v6 firmware: compass is separate object; v5: compass was inside imu
+    const cmp=d.compass||d.imu;
+    mag={x:cmp.mx||0,y:cmp.my||0,z:cmp.mz||0};
+    compass=validCompass(cmp.hdg||d.imu.hdg||0);pitch=d.imu.pitch;roll=d.imu.roll;
     $('srcIMU').innerHTML='<span class="sdot live"></span>OK';
     $('srcIMUd').textContent='hdg:'+Math.round(compass)+'°';
     $('srcIMUBox').className='src on';
+  }
+  // v6: handle separate compass object even if IMU is stale
+  if(d.compass&&d.compass.ok){
+    mag={x:d.compass.mx||0,y:d.compass.my||0,z:d.compass.mz||0};
+    compass=validCompass(d.compass.hdg||0);
   }
   // Barometer (BMP280)
   if(d.baro&&d.baro.ok){
@@ -1608,16 +1617,16 @@ function processBoardData(d){
     $('srcWifi').innerHTML=(wifiAPs>0?'<span class="sdot live"></span>':'<span class="sdot off"></span>')+wifiAPs+'ap';
     $('srcWifid').textContent=wifiAPs+' APs';
     $('srcWifiBox').className='src '+(wifiAPs>0?'on':'off');
-    // Process individual WiFi APs when firmware sends BSSID list
-    if(d.wifi.list&&Array.isArray(d.wifi.list)&&d.wifi.list.length>0){
+    // Process individual WiFi APs (v5: d.wifi.list, v6: d.wifi.data)
+    const wifiList=d.wifi.list||d.wifi.data||[];
+    if(Array.isArray(wifiList)&&wifiList.length>0){
       // WiFi fingerprint: record BSSID + RSSI at current GPS position
       if(gpsTrue){
-        d.wifi.list.forEach(ap=>{
-          const bssid=ap.bssid||ap.mac||ap.BSSID;
-          const rssi=ap.rssi||ap.RSSI||-80;
-          const ssid=ap.ssid||ap.SSID||'';
+        wifiList.forEach(ap=>{
+          const bssid=ap.bssid||ap.b||ap.mac||ap.BSSID;
+          const rssi=ap.rssi||ap.r||ap.RSSI||-80;
+          const ssid=ap.ssid||ap.s||ap.SSID||'';
           if(!bssid)return;
-          // Save to WiFi fingerprint database
           if(!WIFI_DB)WIFI_DB={};
           if(!WIFI_DB[bssid])WIFI_DB[bssid]={positions:[],rssiHistory:[],ssid};
           WIFI_DB[bssid].positions.push({lat:gpsTrue.lat,lon:gpsTrue.lon,rssi,t:performance.now()});
@@ -1625,29 +1634,26 @@ function processBoardData(d){
           WIFI_DB[bssid].rssiHistory.push(rssi);
           if(WIFI_DB[bssid].rssiHistory.length>20)WIFI_DB[bssid].rssiHistory.shift();
         });
-        // WiFi triangulation: use known AP positions
         const wifiMatched=[];
-        d.wifi.list.forEach(ap=>{
-          const bssid=ap.bssid||ap.mac||ap.BSSID;
+        wifiList.forEach(ap=>{
+          const bssid=ap.bssid||ap.b||ap.mac||ap.BSSID;
           if(bssid&&WIFI_DB[bssid]&&WIFI_DB[bssid].positions.length>=3){
-            // Average position of this AP from past sightings
             const ps=WIFI_DB[bssid].positions;
             const avgLat=ps.reduce((s,p)=>s+p.lat,0)/ps.length;
             const avgLon=ps.reduce((s,p)=>s+p.lon,0)/ps.length;
-            const rssi=ap.rssi||ap.RSSI||-80;
+            const rssi=ap.rssi||ap.r||ap.RSSI||-80;
             wifiMatched.push({lat:avgLat,lon:avgLon,rssi,bssid,ssid:WIFI_DB[bssid].ssid});
           }
         });
-        // Draw WiFi APs on map
         if(typeof L!=='undefined'&&map&&MAP_LAYERS.towers&&wifiMatched.length>0){
           wifiMatched.forEach(ap=>{
             const col=ap.rssi>-60?'#76ff03':ap.rssi>-70?'#69f0ae':ap.rssi>-80?'#b2ff59':'#ccff90';
             const mkr=L.circleMarker([ap.lat,ap.lon],{radius:4,color:col,fillColor:col,fillOpacity:0.6,weight:1}).addTo(map);
             mkr.bindTooltip('WiFi: '+(ap.ssid||ap.bssid)+'<br>RSSI: '+ap.rssi+'dBm');
-            towerMapMarkers.push(mkr); // reuse tower marker array for cleanup
+            towerMapMarkers.push(mkr);
           });
         }
-        log('WiFi: '+d.wifi.list.length+' APs scanned, '+wifiMatched.length+' with known positions','var(--teal)');
+        log('WiFi: '+wifiList.length+' APs scanned, '+wifiMatched.length+' with known positions','var(--teal)');
       }
     }
   }
@@ -2497,7 +2503,7 @@ const ANIMAL={
     const sal=this.salmon.predictFull(this.pos);
     if(sal)methods.push({lat:sal.lat,lon:sal.lon,w:sal.conf*this.salmon.conf()});
     // Whale
-    const whl=this.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);
+    const whl=this.whale.predict(boardData&&boardData.wifi?boardData.wifi.list||boardData.wifi.data:null);
     if(whl)methods.push({lat:whl.lat,lon:whl.lon,w:whl.conf*this.whale.conf()});
     // Bat
     const bat=this.bat.predict(this.pos,laserMm,compass,ANIMAL.ant.steps-ANIMAL.ant.prevSteps,ANIMAL.ant.stepLen);
@@ -2515,7 +2521,7 @@ const ANIMAL={
     this.ant.detectStep(accel.x,accel.y,accel.z);
     this.pigeon.record(lat,lon,mag.x,mag.y,mag.z);
     this.salmon.record(lat,lon,cellTowers4G,cellTowers2G);
-    if(boardData&&boardData.wifi)this.whale.record(lat,lon,boardData.wifi.list);
+    if(boardData&&boardData.wifi)this.whale.record(lat,lon,boardData.wifi.list||boardData.wifi.data);
     this.bat.record(lat,lon,laserMm,compass);
   },
 
@@ -2549,7 +2555,7 @@ const ANIMAL={
 F.push(mkF('Ant (step+mag)',(pos,dt)=>ANIMAL.ant.predict(pos,dt)||pos));
 F.push(mkF('Pigeon (mag map)',function(pos,dt){const p=ANIMAL.pigeon.predict(pos,mag.x,mag.y,mag.z);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+p.lat*0.4,lon:vP.lon*0.6+p.lon*0.4};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
 F.push(mkF('Salmon (cell grad)',(pos,dt)=>{const p=ANIMAL.salmon.predictFull(pos);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
-F.push(mkF('Whale (wifi fp)',(pos,dt)=>{const p=ANIMAL.whale.predict(boardData&&boardData.wifi?boardData.wifi.list:null);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
+F.push(mkF('Whale (wifi fp)',(pos,dt)=>{const p=ANIMAL.whale.predict(boardData&&boardData.wifi?boardData.wifi.list||boardData.wifi.data:null);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
 F.push(mkF('Bat (laser cor)',(pos,dt)=>{const p=ANIMAL.bat.predict(pos,laserMm,compass,0,ANIMAL.ant.stepLen);if(p){const v=velFromGPS(5);if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+p.lat*0.5,lon:vP.lon*0.5+p.lon*0.5};}return{lat:p.lat,lon:p.lon};}return null; /* no mag map data */}));
 F.push(mkF('Animal Fusion',(pos,dt)=>{const p=ANIMAL.predictDenied(pos,dt);return p||null;}));
 
