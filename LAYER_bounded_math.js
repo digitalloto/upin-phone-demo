@@ -162,8 +162,9 @@ const ALGEBRA={
     const gravityMag=9.81;
     const horizontal_accel=Math.max(0, accelMag-gravityMag);
 
-    // ZUPT: if accel ≈ gravity for 2s, reset velocity
-    if(Math.abs(accelMag-gravityMag)<0.3){
+    // ZUPT: use Layer 7 multi-modal ZUPT if available, else basic threshold
+    const zupt_active=window.LAYER7&&LAYER7.enabled?LAYER7.zupt.isZUPT:(Math.abs(accelMag-gravityMag)<0.3);
+    if(zupt_active){
       this._zupt_count++;
       if(this._zupt_count>=(2/Math.max(dt,0.01))){
         this.velocity_ms=0;
@@ -171,7 +172,7 @@ const ALGEBRA={
     } else {
       this._zupt_count=0;
       this.velocity_ms+=horizontal_accel*dt;
-      this.velocity_ms*=0.98; // drag decay
+      this.velocity_ms*=0.98;
     }
 
     // B.2 — Dead reckoning position from velocity
@@ -225,14 +226,21 @@ const ALGEBRA={
     }
 
     // B.6 — Cell tower distance from RSSI (path loss model)
+    // Use serving 4G cell (1800 MHz Band 3) or 2G (900 MHz) if available
     if(boardTowerList&&boardTowerList.length>0){
-      const tower=boardTowerList[0]; // serving cell
+      const tower=boardTowerList[0];
       if(tower&&tower.rssi){
-        const rssi=tower.rssi;
-        const freq_mhz=tower.freq||1800; // default LTE band
-        const dist_km=Math.pow(10,(Math.abs(rssi)-32.45-20*Math.log10(freq_mhz))/20);
+        let rssi_dbm=tower.rssi;
+        if(rssi_dbm>0&&rssi_dbm<=31) rssi_dbm=-113+rssi_dbm*2; // CSQ→dBm
+        const freq_mhz=tower.freq||(tower.radio==='gsm'?900:1800);
+        const dist_km=Math.pow(10,(Math.abs(rssi_dbm)-32.45-20*Math.log10(freq_mhz))/20);
         this.cell_distance_km=Math.max(0.01, Math.min(50, dist_km));
       }
+    } else if(sensors.boardData&&sensors.boardData.cell4g&&sensors.boardData.cell4g.rssi){
+      let rssi=sensors.boardData.cell4g.rssi;
+      if(rssi>0&&rssi<=31) rssi=-113+rssi*2;
+      const dist_km=Math.pow(10,(Math.abs(rssi)-32.45-20*Math.log10(1800))/20);
+      this.cell_distance_km=Math.max(0.01, Math.min(50, dist_km));
     }
 
     // B.7 — Remaining distance to landmark (requires active route)
