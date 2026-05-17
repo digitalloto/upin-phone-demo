@@ -1011,31 +1011,30 @@ let bleGoodPkts=0;
 function onBLEData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
-  // v6 firmware injects keepalive {"k":1} as separate BLE notifications
-  // between chunks of the main JSON packet. This corrupts the data:
-  //   "rssi":{"k":1}-78  →  invalid JSON
-  // Strip ALL keepalives from the buffer before parsing.
-  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');
-  // Extract complete JSON objects using multiple strategies:
-  // 1. Try $ delimiter (old firmware) or \n
-  // 2. Brace-matching: find balanced {} (v6 firmware — large packets, no delimiter)
+  // v6 firmware injects keepalive {"k":1}$ as separate BLE notifications
+  // between chunks of the main JSON packet. The keepalive PLUS its $ delimiter
+  // must be stripped — otherwise the lone $ splits the real packet in half.
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}\$/g,''); // strip keepalive+delimiter
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');   // strip any remaining keepalive without $
+  // Extract complete JSON objects:
+  // Strategy 1: $ delimiter (firmware sends JSON$)
+  // Strategy 2: brace-matching fallback
   let found=true;
   while(found){
     found=false;
-    // Strategy 1: delimiter-based
+    // Strategy 1: $ delimiter
     let delimIdx=bleBuffer.indexOf('$');
-    const nlIdx=bleBuffer.indexOf('\n');
-    if(delimIdx<0||(nlIdx>=0&&nlIdx<delimIdx))delimIdx=nlIdx;
     if(delimIdx>=0){
       let json=bleBuffer.substring(0,delimIdx).trim();
       bleBuffer=bleBuffer.substring(delimIdx+1);
-      if(json)tryParse(json);
+      if(json&&json.indexOf('{')>=0)tryParse(json);
       found=true;
       continue;
     }
-    // Strategy 2: brace-matching — find the first complete {...} in buffer
+    // Strategy 2: brace-matching (if no $ found yet — packet still accumulating)
+    // Only attempt if buffer has a complete-looking JSON (starts with { and has a matching })
     const braceStart=bleBuffer.indexOf('{');
-    if(braceStart>=0){
+    if(braceStart>=0 && bleBuffer.length>200){
       let depth=0,i=braceStart,inStr=false,esc=false;
       for(;i<bleBuffer.length;i++){
         const ch=bleBuffer[i];

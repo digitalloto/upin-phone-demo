@@ -216,33 +216,27 @@ async function toggleBLE(){
 function onData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
-  // v6 firmware injects keepalive {"k":1} between chunks of the main JSON.
-  // This corrupts data: "rssi":{"k":1}-78 → invalid JSON.
-  // Strip ALL keepalives before parsing.
+  // v6 firmware injects keepalive {"k":1}$ between data chunks.
+  // Must strip the keepalive AND its $ delimiter — otherwise the $ splits the real packet.
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}\$/g,'');
   bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');
   $('bufLen').textContent=bleBuffer.length;
 
-  // Extract complete JSON using 3 strategies:
-  // 1. $ delimiter (old firmware)
-  // 2. \n delimiter
-  // 3. Brace-matching: count {} depth (v6 firmware — large packets, no delimiter)
   let found=true;
   while(found){
     found=false;
-    // Strategy 1 & 2: delimiter-based
+    // Strategy 1: $ delimiter (firmware sends JSON$)
     let delimIdx=bleBuffer.indexOf('$');
-    const nlIdx=bleBuffer.indexOf('\n');
-    if(delimIdx<0||(nlIdx>=0&&nlIdx<delimIdx))delimIdx=nlIdx;
     if(delimIdx>=0){
       let json=bleBuffer.substring(0,delimIdx).trim();
       bleBuffer=bleBuffer.substring(delimIdx+1);
-      if(json)tryParsePacket(json);
+      if(json&&json.indexOf('{')>=0)tryParsePacket(json);
       found=true;
       continue;
     }
-    // Strategy 3: brace-matching — find first complete {...}
+    // Strategy 2: brace-matching fallback (if $ not found, packet still accumulating)
     const braceStart=bleBuffer.indexOf('{');
-    if(braceStart>=0){
+    if(braceStart>=0&&bleBuffer.length>200){
       let depth=0,i=braceStart,inStr=false,esc=false;
       for(;i<bleBuffer.length;i++){
         const ch=bleBuffer[i];
