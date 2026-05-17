@@ -1736,7 +1736,7 @@ function initPhoneSensors(){
   else if('DeviceMotionEvent' in window)sM();
   if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')DeviceOrientationEvent.requestPermission().then(p=>{if(p==='granted')sO();}).catch(()=>{});
   else if('DeviceOrientationEvent' in window)sO();
-  setInterval(()=>{if(!accel.x&&!accel.y){accel={x:(Math.random()-.5)*1.5,y:(Math.random()-.5)*1.5,z:9.8+(Math.random()-.5)*.3};gyro={x:(Math.random()-.5)*5,y:(Math.random()-.5)*5,z:(Math.random()-.5)*5};compass+=(Math.random()-.5)*2;}},500);
+  // REMOVED: fake sensor generation (Math.random accel/gyro/compass) — all data must be real
 }
 
 // ═══════════════════════════════════════
@@ -1940,36 +1940,36 @@ function mkF(name,predictFn){
 
 // F0-F2: Velocity (SMA, EMA, WMA)
 F.push(mkF('Vel SMA',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
-F.push(mkF('Vel EMA',function(pos,dt){const v=velFromGPS(3);if(!v)return pos;const a=0.3;this._vL=(this._vL||0)*(1-a)+v.vLat*a;this._vO=(this._vO||0)*(1-a)+v.vLon*a;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
-F.push(mkF('Vel WMA',(pos,dt)=>{if(DATA.samples.length<4)return pos;const r=DATA.samples.slice(-8);let vL=0,vO=0,tw=0;for(let i=1;i<r.length;i++){const w=i;vL+=w*(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=w*(r[i].lon-r[i-1].lon)/(r[i].dt||1);tw+=w;}return{lat:pos.lat+(vL/tw)*dt,lon:pos.lon+(vO/tw)*dt};}));
+F.push(mkF('Vel EMA',function(pos,dt){const v=velFromGPS(3);if(!v)return null;const a=0.3;this._vL=(this._vL||0)*(1-a)+v.vLat*a;this._vO=(this._vO||0)*(1-a)+v.vLon*a;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
+F.push(mkF('Vel WMA',(pos,dt)=>{if(DATA.samples.length<4)return null;const r=DATA.samples.slice(-8);let vL=0,vO=0,tw=0;for(let i=1;i<r.length;i++){const w=i;vL+=w*(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=w*(r[i].lon-r[i-1].lon)/(r[i].dt||1);tw+=w;}return{lat:pos.lat+(vL/tw)*dt,lon:pos.lon+(vO/tw)*dt};}));
 // F3-F5: Sensor-based
 F.push(mkF('Accel+Comp',(pos,dt)=>{const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 F.push(mkF('Accel+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
-F.push(mkF('Gyro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const s=avgSpeed(5);const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Gyro+Vel',function(pos,dt){if(DATA.samples.length<3)return null;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const s=avgSpeed(5);const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F6-F7: Step-based
 F.push(mkF('Step+Comp',function(pos,dt){const ns=stepCount-(this._ls||0);this._ls=stepCount;const h=(compass+CAL.compassOff)*Math.PI/180;if(ns>0){const d=ns*0.72;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
 F.push(mkF('Step+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const ns=stepCount-(this._ls||0);this._ls=stepCount;if(ns>0){const d=ns*0.72;const h=this._h*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
 // F8: Kalman
-F.push(mkF('Kalman',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(3);if(!v)return pos;this._vL=(this._vL||0)*0.1+v.vLat*0.9;this._vO=(this._vO||0)*0.1+v.vLon*0.9;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
+F.push(mkF('Kalman',function(pos,dt){if(DATA.samples.length<3)return null;const v=velFromGPS(3);if(!v)return null;this._vL=(this._vL||0)*0.1+v.vLat*0.9;this._vO=(this._vO||0)*0.1+v.vLon*0.9;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
 // F9: Double Integration (raw — intentionally bad, for comparison)
 F.push(mkF('Dbl Integ',function(pos,dt){this._vx=(this._vx||0)+(accel.x-CAL.accelBias.x)*dt;this._vy=(this._vy||0)+(accel.y-CAL.accelBias.y)*dt;this._vx*=0.98;this._vy*=0.98;const h=(compass+CAL.compassOff)*Math.PI/180;const f=this._vx*Math.cos(h)-this._vy*Math.sin(h);const s=this._vx*Math.sin(h)+this._vy*Math.cos(h);return{lat:pos.lat+f*dt/111320,lon:pos.lon+s*dt/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F10: Circular Arc
-F.push(mkF('Circ Arc',function(pos,dt){if(DATA.samples.length<3)return pos;const tr=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;this._h=(this._h||0)+tr*dt;const s=avgSpeed(5);if(Math.abs(tr)>1){const r=s/Math.abs(tr*Math.PI/180);const arc=tr*dt*Math.PI/180;const dx=r*Math.sin(arc),dy=r*(1-Math.cos(arc));const h=this._h*Math.PI/180;return{lat:pos.lat+(dx*Math.cos(h)-dy*Math.sin(h))/111320,lon:pos.lon+(dx*Math.sin(h)+dy*Math.cos(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Circ Arc',function(pos,dt){if(DATA.samples.length<3)return null;const tr=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;this._h=(this._h||0)+tr*dt;const s=avgSpeed(5);if(Math.abs(tr)>1){const r=s/Math.abs(tr*Math.PI/180);const arc=tr*dt*Math.PI/180;const dx=r*Math.sin(arc),dy=r*(1-Math.cos(arc));const h=this._h*Math.PI/180;return{lat:pos.lat+(dx*Math.cos(h)-dy*Math.sin(h))/111320,lon:pos.lon+(dx*Math.sin(h)+dy*Math.cos(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F11-F15: Spd Decay, Hdg Rate, Gravity, Mag Pattern, Barometric
-F.push(mkF('Spd Decay',function(pos,dt){if(DATA.samples.length<2)return pos;this._s=(this._s||0)*0.95+DATA.samples[DATA.samples.length-1].speed*0.05;this._s*=0.999;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(this._s*Math.cos(h)*dt)/111320,lon:pos.lon+(this._s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
-F.push(mkF('Hdg Rate',function(pos,dt){if(DATA.samples.length<3)return pos;const l=DATA.samples[DATA.samples.length-1];let dh=l.heading-(this._lh||l.heading);if(dh>180)dh-=360;if(dh<-180)dh+=360;this._hr=(this._hr||0)*0.7+dh*0.3;this._lh=l.heading+this._hr;const s=avgSpeed(5);const h=this._lh*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
-F.push(mkF('Gravity',(pos,dt)=>{if(DATA.samples.length<3)return pos;const tF=gravity.y/9.8,tS=gravity.x/9.8;const s=avgSpeed(5)*(1+Math.sqrt(tF*tF+tS*tS)*0.5);const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Spd Decay',function(pos,dt){if(DATA.samples.length<2)return null;this._s=(this._s||0)*0.95+DATA.samples[DATA.samples.length-1].speed*0.05;this._s*=0.999;const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(this._s*Math.cos(h)*dt)/111320,lon:pos.lon+(this._s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Hdg Rate',function(pos,dt){if(DATA.samples.length<3)return null;const l=DATA.samples[DATA.samples.length-1];let dh=l.heading-(this._lh||l.heading);if(dh>180)dh-=360;if(dh<-180)dh+=360;this._hr=(this._hr||0)*0.7+dh*0.3;this._lh=l.heading+this._hr;const s=avgSpeed(5);const h=this._lh*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('Gravity',(pos,dt)=>{if(DATA.samples.length<3)return null;const tF=gravity.y/9.8,tS=gravity.x/9.8;const s=avgSpeed(5)*(1+Math.sqrt(tF*tF+tS*tS)*0.5);const h=(compass+CAL.compassOff)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // Mag Pattern: use real magnetometer x/y for heading, combined with accel speed
 F.push(mkF('Mag Pattern',function(pos,dt){
   const mM=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
-  if(mM<1)return pos; // no real mag data
+  if(mM<1)return null; // no real mag data
   const hRad=Math.atan2(mag.y,mag.x); // heading from mag x/y
   const s=avgSpeed(5)||0;
   return{lat:pos.lat+(s*Math.cos(hRad)*dt)/111320,lon:pos.lon+(s*Math.sin(hRad)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
 }));
 // Barometric: use real pressure altitude change to detect speed on slopes
 F.push(mkF('Barometric',function(pos,dt){
-  if(!pressure)return pos; // no real baro data
+  if(!pressure)return null; // no real baro data
   this._lastAlt=this._lastAlt||baroAlt;
   const dAlt=baroAlt-this._lastAlt;
   this._lastAlt=baroAlt;
@@ -1982,9 +1982,9 @@ F.push(mkF('Barometric',function(pos,dt){
 // F16: Sensor Fusion
 F.push(mkF('Sensor Fuse',function(pos,dt){const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const sS=aM*CAL.accelScale*CAL.speedMult;const sG=avgSpeed(5);const s=sS*0.3+sG*0.7;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt*0.3;const cH=(compass+CAL.compassOff);const fH=(cH*0.7+this._h*0.3)*Math.PI/180;return{lat:pos.lat+(s*Math.cos(fH)*dt)/111320,lon:pos.lon+(s*Math.sin(fH)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F17: Historical Match
-F.push(mkF('Hist Match',(pos,dt)=>{if(DATA.samples.length<20)return pos;const cur=DATA.samples[DATA.samples.length-1];let bD=Infinity,bI=-1;const sr=DATA.samples.slice(0,-5);for(let i=Math.max(0,sr.length-50);i<sr.length-1;i++){const s=sr[i];const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;if(d<bD){bD=d;bI=i;}}if(bI>=0&&bI<sr.length-1){const m=sr[bI],n=sr[bI+1];return{lat:pos.lat+(n.lat-m.lat),lon:pos.lon+(n.lon-m.lon)};}return F[0].predict(pos,dt);}));
+F.push(mkF('Hist Match',(pos,dt)=>{if(DATA.samples.length<20)return null;const cur=DATA.samples[DATA.samples.length-1];let bD=Infinity,bI=-1;const sr=DATA.samples.slice(0,-5);for(let i=Math.max(0,sr.length-50);i<sr.length-1;i++){const s=sr[i];const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;if(d<bD){bD=d;bI=i;}}if(bI>=0&&bI<sr.length-1){const m=sr[bI],n=sr[bI+1];return{lat:pos.lat+(n.lat-m.lat),lon:pos.lon+(n.lon-m.lon)};}return F[0].predict(pos,dt);}));
 // F18: Consensus Median
-F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<Math.min(22,F.length);i++){const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return pos;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
+F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<Math.min(22,F.length);i++){const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return null;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
 // F19: Adaptive Best
 F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;i++){if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
 // F20: Cell Tower
@@ -1992,20 +1992,20 @@ F.push(mkF('Cell Tower',function(pos,dt){this.blindSec+=dt;const t=UTIN.predict(
 // F21: Strapdown INS
 F.push(mkF('Strapdown INS',(pos,dt)=>{INS.update(accel,gyro,dt);const p=INS.getLatLon();return p||pos;}));
 // F22: Hardware Magnetometer Heading + velocity (board has real magnetometer)
-F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const s=avgSpeed(5);const h=Math.atan2(mag.y,mag.x);return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
+F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return null;const s=avgSpeed(5);const h=Math.atan2(mag.y,mag.x);return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F23: Barometric Altitude + Velocity (board has real BMP280)
-F.push(mkF('Baro+Vel',function(pos,dt){if(DATA.samples.length<3)return pos;const v=velFromGPS(5);if(!v)return pos;return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};}));
+F.push(mkF('Baro+Vel',function(pos,dt){if(DATA.samples.length<3)return null;const v=velFromGPS(5);if(!v)return null;return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};}));
 
 // F24: Real Cell Tower Triangulation — uses actual tower data from A7670C/SIM900
 // Unlike simulated UTIN, this parses real MCC/MNC/LAC/CellID from the board
 F.push(mkF('Real Cell Tri',function(pos,dt){
-  if(!pos)return pos;
+  if(!pos)return null;
   // When board sends real tower data, use it for triangulation
   // For now: use UTIN simulated + blend with velocity
   // When boardData has towers4g/towers2g arrays, parse and trilaterate
   const towerPos=UTIN.predict();
   const vel=velFromGPS(5);
-  if(!towerPos&&!vel)return pos;
+  if(!towerPos&&!vel)return null;
   if(!towerPos)return{lat:pos.lat+vel.vLat*dt,lon:pos.lon+vel.vLon*dt};
   if(!vel)return{lat:towerPos.lat,lon:towerPos.lon};
   // Real tower count from board gives us confidence
@@ -2019,7 +2019,7 @@ F.push(mkF('Real Cell Tri',function(pos,dt){
 // F25: Laser Velocity — VL53L1X range changes over time = speed + direction
 // If laser points at ground at angle, range change = horizontal movement
 F.push(mkF('Laser Velocity',function(pos,dt){
-  if(!pos||DATA.samples.length<3)return pos;
+  if(!pos||DATA.samples.length<3)return null;
   // Track laser range changes to estimate speed
   const recent=DATA.samples.slice(-5);
   let rangeChanges=[];
@@ -2050,7 +2050,7 @@ F.push(mkF('Laser Velocity',function(pos,dt){
 // F26: Magnetic Map Matching — MPU9250 3-axis mag field compared to recorded magnetic signature
 // Build a map of magnetic field vectors along the route, use for position matching
 F.push(mkF('Mag Map Match',function(pos,dt){
-  if(!pos||DATA.samples.length<30)return pos;
+  if(!pos||DATA.samples.length<30)return null;
   // Build magnetic fingerprint from current reading
   const curMag=Math.sqrt(mag.x*mag.x+mag.y*mag.y+mag.z*mag.z);
   const curInc=Math.atan2(mag.z,Math.sqrt(mag.x*mag.x+mag.y*mag.y))*180/Math.PI; // inclination
@@ -2169,7 +2169,7 @@ const FISH={
 
   // Each agent predicts position using its DNA weights
   agentPredict(agent,dt){
-    const d=agent.dna;const pos=agent.pos;if(!pos)return pos;
+    const d=agent.dna;const pos=agent.pos;if(!pos)return null;
     // Speed: blend velocity-derived and accel-derived
     const gpsSpd=avgSpeed(5);
     const accelMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
@@ -2353,9 +2353,9 @@ const ANIMAL={
     },
     // Predict: steps × stride along mag heading (NO accel integration)
     predict(pos,dt){
-      if(!pos)return pos;
+      if(!pos)return null;
       const ns=this.steps-this.prevSteps;this.prevSteps=this.steps;
-      if(ns<=0)return pos; // no steps = no movement
+      if(ns<=0)return null; // no steps = no movement
       const d=ns*this.stepLen;
       // Use magnetometer heading directly (absolute, like sun compass)
       const h=Math.atan2(mag.y,mag.x); // radians from mag vector
@@ -2581,7 +2581,7 @@ function getVelLonHist(){const s=DATA.samples.slice(-40);const v=[];for(let i=1;
 
 // F33: SMA Trend — fast SMA(5) speed + fast EMA(0.25) heading
 F.push(mkF('SMA Trend',(pos,dt)=>{
-  if(!pos||DATA.samples.length<5)return pos;
+  if(!pos||DATA.samples.length<5)return null;
   const spd=sma(getSpeedHist(),5);
   const hdg=ema(getHeadingHist(),0.25)*Math.PI/180;
   return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
@@ -2589,7 +2589,7 @@ F.push(mkF('SMA Trend',(pos,dt)=>{
 
 // F34: SMA Smooth — slow SMA(30) speed + slow EMA(0.05) heading
 F.push(mkF('SMA Smooth',(pos,dt)=>{
-  if(!pos||DATA.samples.length<10)return pos;
+  if(!pos||DATA.samples.length<10)return null;
   const spd=sma(getSpeedHist(),30);
   const hdg=ema(getHeadingHist(),0.05)*Math.PI/180;
   return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
@@ -2597,9 +2597,9 @@ F.push(mkF('SMA Smooth',(pos,dt)=>{
 
 // F35: MACD — velocity momentum (fast EMA - slow EMA = signal)
 F.push(mkF('MACD',(pos,dt)=>{
-  if(!pos||DATA.samples.length<10)return pos;
+  if(!pos||DATA.samples.length<10)return null;
   const vLat=getVelLatHist(),vLon=getVelLonHist();
-  if(vLat.length<3)return pos;
+  if(vLat.length<3)return null;
   const fastLat=ema(vLat,0.2),slowLat=ema(vLat,0.05);
   const fastLon=ema(vLon,0.2),slowLon=ema(vLon,0.05);
   const macdLat=fastLat-slowLat,macdLon=fastLon-slowLon;
@@ -2609,9 +2609,9 @@ F.push(mkF('MACD',(pos,dt)=>{
 // F36: Bollinger — treat SPEED as price chart, detect overbought/oversold speed
 // Upper band = speed too high (likely GPS noise), lower band = speed too low
 F.push(mkF('Bollinger',function(pos,dt){
-  if(!pos||DATA.samples.length<20)return pos;
+  if(!pos||DATA.samples.length<20)return null;
   const spds=getSpeedHist().slice(-20);
-  if(spds.length<10)return pos;
+  if(spds.length<10)return null;
   const mean=spds.reduce((s,v)=>s+v,0)/spds.length;
   const std=Math.sqrt(spds.reduce((s,v)=>s+(v-mean)**2,0)/spds.length);
   const curSpd=spds[spds.length-1];
@@ -2631,7 +2631,7 @@ F.push(mkF('Bollinger',function(pos,dt){
 // F37: VWMA — volume-weighted moving average (volume = accel energy)
 // High accel energy = confident the movement is real → weight that sample more
 F.push(mkF('VWMA',function(pos,dt){
-  if(!pos||DATA.samples.length<10)return pos;
+  if(!pos||DATA.samples.length<10)return null;
   const pts=DATA.samples.slice(-20);
   // "Volume" = accel energy. High energy readings are more trustworthy for speed.
   let wSpd=0,wHdg=0,wTotal=0;
@@ -2640,7 +2640,7 @@ F.push(mkF('VWMA',function(pos,dt){
     const vol=Math.max(0.01,energy); // volume = accel energy
     wSpd+=p.speed*vol;wHdg+=p.heading*vol;wTotal+=vol;
   });
-  if(wTotal<0.01)return pos;
+  if(wTotal<0.01)return null;
   const spd=wSpd/wTotal;
   const hdg=(wHdg/wTotal)*Math.PI/180;
   return{lat:pos.lat+(spd*Math.cos(hdg)*dt)/111320,lon:pos.lon+(spd*Math.sin(hdg)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
@@ -2648,9 +2648,9 @@ F.push(mkF('VWMA',function(pos,dt){
 
 // F38: RSI Heading — heading consistency (straight vs turning)
 F.push(mkF('RSI Heading',(pos,dt)=>{
-  if(!pos||DATA.samples.length<10)return pos;
+  if(!pos||DATA.samples.length<10)return null;
   const hdgs=getHeadingHist().slice(-14);
-  if(hdgs.length<5)return pos;
+  if(hdgs.length<5)return null;
   // RSI: count up moves vs down moves in heading
   let gains=0,losses=0;
   for(let i=1;i<hdgs.length;i++){
@@ -2675,7 +2675,7 @@ F.push(mkF('RSI Heading',(pos,dt)=>{
 F.push(mkF('SMA+MACD',(pos,dt)=>{
   const p1=F.find(f=>f.name==='SMA Trend').predict(pos,dt);
   const p2=F.find(f=>f.name==='MACD').predict(pos,dt);
-  if(!p1||!p2)return pos;
+  if(!p1||!p2)return null;
   return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
 }));
 
@@ -2683,7 +2683,7 @@ F.push(mkF('SMA+MACD',(pos,dt)=>{
 F.push(mkF('Boll+RSI',(pos,dt)=>{
   const p1=F.find(f=>f.name==='Bollinger').predict(pos,dt);
   const p2=F.find(f=>f.name==='RSI Heading').predict(pos,dt);
-  if(!p1||!p2)return pos;
+  if(!p1||!p2)return null;
   return{lat:p1.lat*0.5+p2.lat*0.5,lon:p1.lon*0.5+p2.lon*0.5};
 }));
 
@@ -2699,7 +2699,7 @@ F.push(mkF('VWMA+Ant',(pos,dt)=>{
 F.push(mkF('MACD+Cell',(pos,dt)=>{
   const p1=F.find(f=>f.name==='MACD').predict(pos,dt);
   const p2=UTIN.predict();
-  if(!p1&&!p2)return pos;if(!p2)return p1||pos;if(!p1)return{lat:p2.lat,lon:p2.lon};
+  if(!p1&&!p2)return null;if(!p2)return p1||pos;if(!p1)return{lat:p2.lat,lon:p2.lon};
   return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
 }));
 
@@ -2707,7 +2707,7 @@ F.push(mkF('MACD+Cell',(pos,dt)=>{
 F.push(mkF('INS+Boll',(pos,dt)=>{
   INS.update(accel,gyro,dt);const insP=INS.getLatLon();
   const bollP=F.find(f=>f.name==='Bollinger').predict(pos,dt);
-  if(!insP&&!bollP)return pos;if(!bollP)return insP||pos;if(!insP)return bollP;
+  if(!insP&&!bollP)return null;if(!bollP)return insP||pos;if(!insP)return bollP;
   return{lat:insP.lat*0.5+bollP.lat*0.5,lon:insP.lon*0.5+bollP.lon*0.5};
 }));
 
@@ -2741,7 +2741,7 @@ const COMBOS={
 
   // Each combo predicts by blending its constituent formulas
   predict(combo,pos,dt){
-    if(!pos)return pos;
+    if(!pos)return null;
     let lat=0,lon=0;
     combo.indices.forEach((fi,wi)=>{
       if(fi>=F.length)return;
@@ -3412,7 +3412,7 @@ const TERRAIN={
 // F45: Terrain Fingerprint formula
 F.push(mkF('Terrain FP',(pos,dt)=>{
   const m=TERRAIN.match();
-  if(!m)return pos;
+  if(!m)return null;
   const v=velFromGPS(5);
   if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.6+m.lat*0.4,lon:vP.lon*0.6+m.lon*0.4};}
   return{lat:m.lat,lon:m.lon};
@@ -3421,7 +3421,7 @@ F.push(mkF('Terrain FP',(pos,dt)=>{
 // F46: Route DTW formula
 F.push(mkF('Route DTW',(pos,dt)=>{
   const m=ROUTES.match();
-  if(!m)return pos;
+  if(!m)return null;
   const v=velFromGPS(5);
   if(v){const vP={lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};return{lat:vP.lat*0.5+m.lat*0.5,lon:vP.lon*0.5+m.lon*0.5};}
   return{lat:m.lat,lon:m.lon};
@@ -3802,7 +3802,7 @@ const ROUTE_NAV={
 
 // F54: SVM Quality Gate — filters unreliable readings, predicts with reliable ones only
 F.push(mkF('SVM Gate',function(pos,dt){
-  if(!ML_TOGGLE.svm)return pos;
+  if(!ML_TOGGLE.svm)return null;
   const cls=SVM_GATE.classify(pos);
   if(!cls.reliable){
     // Unreliable reading — use last known good velocity instead
@@ -3816,14 +3816,14 @@ F.push(mkF('SVM Gate',function(pos,dt){
 
 // F55: Random Forest Fusion — ensemble of 200 trees votes on position correction
 F.push(mkF('RF Fusion',function(pos,dt){
-  if(!ML_TOGGLE.rf)return pos;
+  if(!ML_TOGGLE.rf)return null;
   const p=RF_FUSION.predict(pos,dt);
   return p||pos;
 }));
 
 // F56: Doppler Shift — velocity from cell tower RSSI rate of change
 F.push(mkF('Doppler Shift',function(pos,dt){
-  if(!ML_TOGGLE.doppler)return pos;
+  if(!ML_TOGGLE.doppler)return null;
   const p=DOPPLER.predict(pos,dt);
   if(!p){
     const v=velFromGPS(5);
@@ -3840,7 +3840,7 @@ F.push(mkF('Doppler Shift',function(pos,dt){
 
 // F57: Route Navigation — follows pre-set route during GPS denial
 F.push(mkF('Route Nav',function(pos,dt){
-  if(!ROUTE_NAV.active)return pos;
+  if(!ROUTE_NAV.active)return null;
   const spd=DATA.samples.length?DATA.samples[DATA.samples.length-1].speed:0;
   const p=ROUTE_NAV.predict(pos,dt,spd);
   if(!p){
@@ -3855,7 +3855,7 @@ F.push(mkF('Route Nav',function(pos,dt){
 // "moving north", confidence is HIGH. If they disagree, trust the one
 // with more evidence and dampen the other.
 F.push(mkF('Tower+Predict',function(pos,dt){
-  if(!pos||DATA.samples.length<3)return pos;
+  if(!pos||DATA.samples.length<3)return null;
   // Get PREDICTOR's estimate
   const predP=PREDICTOR.predict(pos,dt);
   // Get Doppler's velocity estimate from tower RSSI changes
@@ -3895,7 +3895,7 @@ F.push(mkF('Tower+Predict',function(pos,dt){
 // movement direction even without GPS. If tower A gets stronger and tower B
 // gets weaker, you're moving from B toward A.
 F.push(mkF('Cell Direction',function(pos,dt){
-  if(!pos||!UTIN.lastTowers||UTIN.lastTowers.length<2)return pos;
+  if(!pos||!UTIN.lastTowers||UTIN.lastTowers.length<2)return null;
   if(!this._prevSignals)this._prevSignals=new Map();
   const spd=avgSpeed(5)||0;
   let vLat=0,vLon=0,wTotal=0;
@@ -3916,7 +3916,7 @@ F.push(mkF('Cell Direction',function(pos,dt){
     vLat+=w*dLat/dist;vLon+=w*dLon/dist;wTotal+=Math.abs(w);
   });
 
-  if(wTotal<0.5)return pos;
+  if(wTotal<0.5)return null;
   // Scale the direction vector by speed
   const scale=spd*dt/(111320*Math.max(0.01,wTotal));
   return{
@@ -4053,7 +4053,7 @@ const PREDICTOR={
 
 // F48: Accel State MA — 20-sample cruise/accel/decel aware
 F.push(mkF('Accel State MA',function(pos,dt){
-  if(DATA.samples.length<3)return pos;
+  if(DATA.samples.length<3)return null;
   const s=avgSpeed(5);
   let adj=s;
   if(PREDICTOR.cruiseState==='decel')adj=s*0.7;
@@ -4068,7 +4068,7 @@ F.push(mkF('Accel State MA',function(pos,dt){
 
 // F49: Maneuver Aware — curves prediction during detected turns
 F.push(mkF('Maneuver Aware',function(pos,dt){
-  if(DATA.samples.length<3)return pos;
+  if(DATA.samples.length<3)return null;
   const s=avgSpeed(5);
   const turnRate=(gyro.z-CAL.gyroBias.z)*CAL.gyroScale;
   this._h=(this._h||0)+turnRate*dt;
@@ -5148,10 +5148,7 @@ const LORA={
     };
   },
 
-  // Simulate beacons for testing (remove in production)
-  addTestBeacon(id,lat,lon,rssi,name){
-    this.processBeacons({beacons:[{id,lat,lon,rssi,name:name||id}]});
-  }
+  // REMOVED: addTestBeacon — no simulated data in production
 };
 
 // LoRa Tri formula
