@@ -147,6 +147,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked id="layer3Toggle" onchange="if(window.LAYER3)LAYER3.enabled=this.checked" style="margin-right:3px">L3: NLLS Trilat</label>
     <label style="display:block;color:#ff9800;cursor:pointer"><input type="checkbox" checked id="layer6Toggle" onchange="if(window.LAYER6)LAYER6.enabled=this.checked" style="margin-right:3px">L6: Bound+Algebra</label>
     <label style="display:block;color:#A855F7;cursor:pointer"><input type="checkbox" id="layer4Toggle" onchange="V.toggleSwarm(this.checked)" style="margin-right:3px">L4: Swarm Optimizer</label>
+    <label style="display:block;color:#2dd4bf;cursor:pointer"><input type="checkbox" checked id="layer7Toggle" onchange="if(window.LAYER7)LAYER7.enabled=this.checked" style="margin-right:3px">L7: Motion Detect</label>
   </div>
 </div>
 
@@ -549,6 +550,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <script src="LAYER_landmark_triangulation.js"></script>
 <script src="LAYER_bounded_math.js"></script>
 <script src="LAYER_swarm_optimizer.js"></script>
+<script src="LAYER_motion_detect.js"></script>
 <script>
 var V=(()=>{
 // ═══════════════════════════════════════
@@ -1867,8 +1869,11 @@ const UTIN={
   // Legacy stub — no-op (used to simulate based on GPS, now disabled)
   update(lat,lon){/* REAL DATA ONLY: use recordBoardScan instead */},
   predict(){
-    // 2+ towers = position fix. 3+ = NLLS-refined. 1 = null (not enough).
-    return this.lastTowers&&this.lastTowers.length>=2?this.trilaterate(this.lastTowers):null;
+    if(!this.lastTowers||this.lastTowers.length===0) return null;
+    if(this.lastTowers.length>=2) return this.trilaterate(this.lastTowers);
+    // 1 tower: return tower position with large accuracy radius
+    const t=this.lastTowers[0];
+    return {lat:t.lat,lon:t.lon,acc:this.sigToDist(t.signal),towers:1};
   }
 };
 
@@ -3213,7 +3218,7 @@ const MANEUVER={
   buffer:[],     // rolling window of sensor snapshots
   lastHeading:0,
   lastSpeed:0,
-  turnThreshold:8,   // degrees/sec gyro Z to detect turn start
+  turnThreshold:25,   // degrees/sec gyro Z to detect turn start (was 8 — noise)
   stopThreshold:0.3, // accel energy to detect stop
 
   // Current maneuver being detected
@@ -4420,6 +4425,10 @@ function tick(){
     if(window.LAYER4&&LAYER4.enabled){
       const truth=window.LAYER1&&LAYER1.enabled?LAYER1.getTruth(gpsSys):gpsSys;
       LAYER4.tick(F,truth,dt);
+    }
+    // LAYER 7: Motion detection + speed estimation
+    if(window.LAYER7&&LAYER7.enabled){
+      LAYER7.tick({accel,gyro,gps:gpsSys,dt,boardData,boardTowerList});
     }
     // ── ML LAYER TRAINING (GPS available → learn patterns) ──
     try{
@@ -5978,7 +5987,7 @@ function exportCSV(){
   c+='# Profile: '+(PROFILES?PROFILES.active:'default')+'\n';
   c+='# Version: '+UPIN_VERSION+'\n';
   c+='#\n';
-  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_Anchors,LM_Tri_Resid_m'+(window.LAYER6?','+LAYER6.csvHeaderCols:'')+'\n';
+  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_Anchors,LM_Tri_Resid_m'+(window.LAYER6?','+LAYER6.csvHeaderCols:'')+(window.LAYER7?','+LAYER7.csvHeaderCols:'')+'\n';
   DATA.samples.forEach((s,i)=>{
     // Speed estimator: GPS delta over 2s window
     let spdEst=s.speed;
@@ -5986,7 +5995,8 @@ function exportCSV(){
     const l2f=window.LAYER2?LAYER2.csvFlags(s.t):'';
     const l3=window.LAYER3?LAYER3.csvColumns():{landmark_tri_lat:'',landmark_tri_lon:'',landmark_tri_n_anchors:'',landmark_tri_residual_m:''};
     const l6=window.LAYER6?','+LAYER6.csvRowData(bestFormulaIdx()):'';
-    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${l3.landmark_tri_lat},${l3.landmark_tri_lon},${l3.landmark_tri_n_anchors},${l3.landmark_tri_residual_m}${l6}\n`;
+    const l7=window.LAYER7?','+LAYER7.csvRowData():'';
+    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${l3.landmark_tri_lat},${l3.landmark_tri_lon},${l3.landmark_tri_n_anchors},${l3.landmark_tri_residual_m}${l6}${l7}\n`;
   });
   // Formula rankings with status (Layer 5: RUNNING first, then PASSTHROUGH, WAITING, DISABLED)
   c+='\n# FORMULA RANKINGS\n';
@@ -6015,6 +6025,7 @@ function exportCSV(){
   if(window.LAYER6) c+=LAYER6.csvTrailer(gpsSys);
   // Layer 4 swarm optimizer converged weights
   if(window.LAYER4&&LAYER4.enabled) c+=LAYER4.csvTrailer();
+  if(window.LAYER7&&LAYER7.enabled) c+=LAYER7.csvTrailer(boardTowerList);
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
   a.download=runId+'.csv';a.click();
   log('CSV exported: '+runId+'.csv ('+DATA.count()+' samples, '+clusters+' clusters)','var(--green)');
