@@ -580,6 +580,7 @@ let turnMarkers=[];
 let gpsTrue=null,gpsSys=null,drPos=null;
 let gpsDeniedMode=false; // FIX 4: user toggle to suppress all GPS
 let accel={x:0,y:0,z:9.8},gyro={x:0,y:0,z:0},mag={x:0,y:0,z:0};
+let lastBoardDataTime=0; // timestamp of last successfully parsed board packet
 // Raw sensor values — sensor events write here, preprocessor reads from here
 // This prevents bias correction from stacking on already-corrected values
 let rawAccel={x:0,y:0,z:9.8},rawGyro={x:0,y:0,z:0};
@@ -995,8 +996,8 @@ function connectBLE(){
     $('boardStatus').innerHTML='<span class="sdot live"></span> BLE CONNECTED — 7 SENSORS';
     $('bleBtn').className='btn-hw connected';$('bleBtn').textContent='BLE CONNECTED — TAP TO DISCONNECT';
     $('bStart').disabled=false;$('bStart').style.opacity='1';
-    // Always start phone GPS as fallback — board GPS may not have a fix
-    initPhoneGPS();
+    // Always run phone sensors + GPS as fallback — board BLE drops every 10s during WiFi scan
+    initPhoneSensors();initPhoneGPS();
     updateBoardUI();
     log('BLE connected! Receiving sensor data at 5Hz','var(--green)');
   }).catch(err=>{
@@ -1200,6 +1201,7 @@ function usePhone(){
 // Process board sensor data (from HTTP polling)
 function processBoardData(d){
   if(!d)return;
+  lastBoardDataTime=performance.now();
   // DEBUG: show what keys the board sends (first 3 good packets)
   if(bleGoodPkts<=3){
     const keys=Object.keys(d).join(',');
@@ -1719,8 +1721,9 @@ function initPhoneSensors(){
     // Write to RAW variables — preprocessor will correct these into accel/gyro
     rawAccel={x:a.x||0,y:a.y||0,z:a.z||9.8};
     rawGyro={x:r.alpha||0,y:r.beta||0,z:r.gamma||0};
-    // Also set accel directly for immediate use (before first preprocess tick)
-    accel=rawAccel;gyro=rawGyro;
+    // Phone sensors fill in when board data is stale (>2s old or not connected)
+    const boardStale=!boardConnected||(performance.now()-lastBoardDataTime)>2000;
+    if(boardStale){accel=rawAccel;gyro=rawGyro;}
     gravity={x:(g.x||0)-(a.x||0),y:(g.y||0)-(a.y||0),z:(g.z||9.8)-(a.z||0)};
     lastSensorTime=performance.now();
   });
@@ -4399,7 +4402,10 @@ function tick(){
       // any accelerometer reading ≠ [0,0,9.8] is pure bias
       if(uiFrame%5===0)CAL.addStillSample(accel,gyro);
     }
-    DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
+    // Only record if we have fresh sensor data (board data <5s old, or phone sensors active)
+    const boardFresh=lastBoardDataTime>0&&(now-lastBoardDataTime)<5000;
+    const phoneFresh=!boardConnected||gpsSource==='phone';
+    if(boardFresh||phoneFresh) DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
     if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
     if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
     if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);

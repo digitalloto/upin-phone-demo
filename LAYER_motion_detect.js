@@ -91,15 +91,19 @@ const LAYER7={
     speed_kmh:0,
     turnover_pct:0,
     confidence:'LOW',
-    calibTable:[[0,0],[10,5],[20,10],[35,20],[50,40],[70,60],[85,80],[100,100]],
+    // WiFi APs naturally fluctuate 30-50% between scans even when stationary
+    // Only count turnover above 50% as movement
+    calibTable:[[0,0],[30,0],[50,0],[60,5],[70,15],[80,30],[90,60],[100,100]],
     _calLearned:[],
 
     update(bssidSet, now, gpsSpeed){
       if(!bssidSet || bssidSet.size===0) return;
       this.scanHistory.push({bssids:new Set(bssidSet), t:now});
-      if(this.scanHistory.length>6) this.scanHistory.shift();
-      if(this.scanHistory.length<2){ this.confidence='LOW'; return; }
-      const prev=this.scanHistory[this.scanHistory.length-2];
+      if(this.scanHistory.length>12) this.scanHistory.shift();
+      // Need at least 4 scans (~40s) before reporting — single-scan noise is too high
+      if(this.scanHistory.length<4){ this.confidence='LOW'; this.speed_kmh=0; return; }
+      // Compare against scan from ~30s ago (not just previous) to smooth noise
+      const prev=this.scanHistory[Math.max(0,this.scanHistory.length-4)];
       const curr=this.scanHistory[this.scanHistory.length-1];
       let newCount=0;
       curr.bssids.forEach(b=>{ if(!prev.bssids.has(b)) newCount++; });
