@@ -40,7 +40,7 @@ const LAYER3={
     }
 
     const lr=0.0000001; // learning rate in degrees
-    const iterations=200;
+    const iterations=100;
 
     for(let iter=0;iter<iterations;iter++){
       let gradLat=0, gradLon=0;
@@ -73,15 +73,14 @@ const LAYER3={
   update(bestPos, landmarks){
     if(!this.enabled||!bestPos||!landmarks||!landmarks.length) return null;
 
-    // Find the 5 nearest landmarks with computed distances
+    // Use ALL landmarks within 10km — more anchors = better position fix
     const anchors=landmarks
       .map(lm=>({
         lat:lm.lat, lon:lm.lon, name:lm.n||lm.name,
         dist:this._hav(bestPos,{lat:lm.lat,lon:lm.lon})
       }))
-      .filter(a=>a.dist<5000) // within 5km
-      .sort((a,b)=>a.dist-b.dist)
-      .slice(0,7); // top 7 nearest
+      .filter(a=>a.dist<10000)
+      .sort((a,b)=>a.dist-b.dist);
 
     if(anchors.length<3) return null;
 

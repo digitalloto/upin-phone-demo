@@ -5398,41 +5398,51 @@ function getDriftRate(){if(driftSamples.length<2)return 0;const f=driftSamples[0
 // ═══════════════════════════════════════
 let landmarkMarkers=[],landmarkLines=[],landmarkTriMarker=null;
 const LANDMARK_TRI={
-  nearby:[], // landmarks within 5km with distances
-  triPos:null, // triangulated position from landmarks
+  nearby:[], // ALL landmarks within range with distances
+  triPos:null,
 
-  // Find nearby landmarks and compute distances from GPS
   update(gps){
     if(!gps||!gps.lat||typeof LANDMARKS==='undefined')return;
+    // Use ALL landmarks within 10km — more anchors = better fix
     this.nearby=LANDMARKS.map(lm=>({
       ...lm,dist:hav(gps,{lat:lm.lat,lon:lm.lon})
-    })).filter(lm=>lm.dist<5000) // within 5km
-      .sort((a,b)=>a.dist-b.dist)
-      .slice(0,10); // top 10 nearest
+    })).filter(lm=>lm.dist<10000)
+      .sort((a,b)=>a.dist-b.dist);
 
-    // Triangulate: weighted centroid from 3+ nearest landmarks
+    // NLLS trilateration from ALL nearby landmarks (not just 5)
     if(this.nearby.length>=3){
+      // Start with weighted centroid as initial guess
       let sL=0,sO=0,sW=0;
-      this.nearby.slice(0,5).forEach(lm=>{
-        const w=1/(lm.dist+10); // closer = more weight
+      this.nearby.forEach(lm=>{
+        const w=1/(lm.dist*lm.dist+100); // inverse-square weighting
         sL+=lm.lat*w;sO+=lm.lon*w;sW+=w;
       });
-      this.triPos={lat:sL/sW,lon:sO/sW,landmarks:this.nearby.length};
+      let lat=sL/sW,lon=sO/sW;
+      // NLLS refinement: gradient descent using ALL landmarks
+      for(let iter=0;iter<50;iter++){
+        let gLat=0,gLon=0;
+        this.nearby.forEach(lm=>{
+          const estDist=hav({lat,lon},{lat:lm.lat,lon:lm.lon});
+          const err=estDist-lm.dist;
+          const dLat=(lat-lm.lat)/(estDist+0.001);
+          const dLon=(lon-lm.lon)/(estDist+0.001);
+          gLat+=err*dLat;gLon+=err*dLon;
+        });
+        lat-=0.00002*gLat;lon-=0.00002*gLon;
+      }
+      this.triPos={lat,lon,landmarks:this.nearby.length};
     }
   },
 
-  // During GPS denial: use last known distances + movement estimate
   predict(pos,speed,heading,dt){
     if(!this.nearby.length||!pos)return null;
-    // Update distances based on movement
     const h=heading*Math.PI/180;
     const dLat=(speed*Math.cos(h)*dt)/111320;
     const dLon=(speed*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180));
-    // Weighted centroid from updated distances
     let sL=0,sO=0,sW=0;
-    this.nearby.slice(0,5).forEach(lm=>{
+    this.nearby.forEach(lm=>{
       const newDist=hav({lat:pos.lat+dLat,lon:pos.lon+dLon},{lat:lm.lat,lon:lm.lon});
-      const w=1/(newDist+10);
+      const w=1/(newDist*newDist+100);
       sL+=lm.lat*w;sO+=lm.lon*w;sW+=w;
     });
     return sW>0?{lat:sL/sW,lon:sO/sW}:null;
