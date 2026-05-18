@@ -557,6 +557,16 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <script src="LAYER_transport_journey.js"></script>
 <script>
 var V=(()=>{
+// Safe fetch: silently returns failed response when offline — app never crashes
+const _origFetch=window.fetch;
+window.fetch=function(url,...args){
+  // Local board WiFi polling always goes through
+  if(typeof url==='string'&&url.includes('192.168.'))return _origFetch(url,...args);
+  // External URLs: skip when offline
+  if(!navigator.onLine&&typeof url==='string'&&(url.includes('googleapis')||url.includes('corsproxy')||url.includes('opencellid')||url.includes('osrm')||url.includes('nominatim')||url.includes('anthropic')))
+    return Promise.reject(new Error('offline'));
+  return _origFetch(url,...args);
+};
 // ═══════════════════════════════════════
 // TABS
 // ═══════════════════════════════════════
@@ -1379,7 +1389,7 @@ function processBoardData(d){
     if(d.cell4g&&d.cell4g.cid)allT.push({cellId:d.cell4g.cid,locationAreaCode:d.cell4g.tac||0,mobileCountryCode:d.cell4g.mcc||404,mobileNetworkCode:d.cell4g.mnc||84,radioType:'lte',signalStrength:d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80)});
     const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
     if(c2d&&Array.isArray(c2d))c2d.forEach(c=>{if(c.cid)allT.push({cellId:c.cid,locationAreaCode:c.lac||0,mobileCountryCode:c.mcc||404,mobileNetworkCode:c.mnc||84,radioType:'gsm',signalStrength:c.rssi||-90});});
-    if(allT.length>0){
+    if(allT.length>0&&navigator.onLine){
       log('Google batch: sending '+allT.length+' towers...','var(--cyan)');
       fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{
         method:'POST',headers:{'Content-Type':'application/json'},
