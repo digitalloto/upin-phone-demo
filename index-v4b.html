@@ -1015,51 +1015,33 @@ let bleGoodPkts=0;
 function onBLEData(event){
   const raw=new TextDecoder().decode(event.target.value);
   bleBuffer+=raw;
-  // v6 firmware injects keepalive {"k":1}$ as separate BLE notifications
-  // between chunks of the main JSON packet. The keepalive PLUS its $ delimiter
-  // must be stripped — otherwise the lone $ splits the real packet in half.
-  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}\$/g,''); // strip keepalive+delimiter
-  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');   // strip any remaining keepalive without $
-  // Extract complete JSON objects:
-  // Strategy 1: $ delimiter (firmware sends JSON$)
-  // Strategy 2: brace-matching fallback
+  // Strip keepalive packets {"k":...}$ injected during cell scans
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}\$/g,'');
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');
+  // v6.1 firmware: 1500-byte packets sent at 10Hz, but BLE throughput is ~500 bytes/100ms.
+  // Packets OVERLAP — chunks from packet N+1 start arriving before packet N finishes.
+  // When $ arrives, everything before it is a MIX of overlapped packets.
+  // Fix: find the LAST {"t": before each $ — that's where the completed packet started.
   let found=true;
   while(found){
     found=false;
-    // Strategy 1: $ delimiter
-    let delimIdx=bleBuffer.indexOf('$');
+    const delimIdx=bleBuffer.indexOf('$');
     if(delimIdx>=0){
-      let json=bleBuffer.substring(0,delimIdx).trim();
+      const chunk=bleBuffer.substring(0,delimIdx);
       bleBuffer=bleBuffer.substring(delimIdx+1);
-      if(json&&json.indexOf('{')>=0)tryParse(json);
+      // Find last packet start marker in this chunk
+      const lastStart=chunk.lastIndexOf('{"t":');
+      if(lastStart>=0){
+        tryParse(chunk.substring(lastStart));
+      }
       found=true;
-      continue;
-    }
-    // Strategy 2: brace-matching (if no $ found yet — packet still accumulating)
-    // Only attempt if buffer has a complete-looking JSON (starts with { and has a matching })
-    const braceStart=bleBuffer.indexOf('{');
-    if(braceStart>=0 && bleBuffer.length>200){
-      let depth=0,i=braceStart,inStr=false,esc=false;
-      for(;i<bleBuffer.length;i++){
-        const ch=bleBuffer[i];
-        if(esc){esc=false;continue;}
-        if(ch==='\\'){esc=true;continue;}
-        if(ch==='"'){inStr=!inStr;continue;}
-        if(inStr)continue;
-        if(ch==='{')depth++;
-        else if(ch==='}'){depth--;if(depth===0){i++;break;}}
-      }
-      if(depth===0&&i<=bleBuffer.length){
-        const json=bleBuffer.substring(braceStart,i);
-        bleBuffer=bleBuffer.substring(i);
-        tryParse(json);
-        found=true;
-      }
     }
   }
-  if(bleBuffer.length>16000){
-    bleBuffer='';bleErrors++;
-    log('BLE buffer overflow — resync','var(--red)');
+  // Prevent unbounded buffer growth
+  if(bleBuffer.length>8000){
+    const lastStart=bleBuffer.lastIndexOf('{"t":');
+    if(lastStart>0) bleBuffer=bleBuffer.substring(lastStart);
+    else bleBuffer='';
   }
 }
 function tryParse(json){
@@ -1227,18 +1209,27 @@ function processBoardData(d){
   if(d.imu&&d.imu.ok&&!imuStale){
     accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
     gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
-    // v6 firmware: compass is separate object; v5: compass was inside imu
-    const cmp=d.compass||d.imu;
-    mag={x:cmp.mx||0,y:cmp.my||0,z:cmp.mz||0};
-    compass=validCompass(cmp.hdg||d.imu.hdg||0);pitch=d.imu.pitch;roll=d.imu.roll;
+    // v6.1: compass can be a number (heading), object {ok,mx,my,mz,hdg}, or inside imu
+    if(typeof d.compass==='number'){
+      compass=validCompass(d.compass);
+    } else if(d.compass&&typeof d.compass==='object'&&d.compass.ok){
+      mag={x:d.compass.mx||0,y:d.compass.my||0,z:d.compass.mz||0};
+      compass=validCompass(d.compass.hdg||0);
+    } else if(d.imu.hdg!==undefined){
+      compass=validCompass(d.imu.hdg);
+    }
+    if(d.imu.mx!==undefined) mag={x:d.imu.mx||0,y:d.imu.my||0,z:d.imu.mz||0};
+    pitch=d.imu.pitch||0;roll=d.imu.roll||0;
     $('srcIMU').innerHTML='<span class="sdot live"></span>OK';
     $('srcIMUd').textContent='hdg:'+Math.round(compass)+'°';
     $('srcIMUBox').className='src on';
   }
-  // v6: handle separate compass object even if IMU is stale
-  if(d.compass&&d.compass.ok){
+  // v6.0: separate compass object (backward compat)
+  if(d.compass&&typeof d.compass==='object'&&d.compass.ok){
     mag={x:d.compass.mx||0,y:d.compass.my||0,z:d.compass.mz||0};
     compass=validCompass(d.compass.hdg||0);
+  } else if(typeof d.compass==='number'){
+    compass=validCompass(d.compass);
   }
   // Barometer (BMP280)
   if(d.baro&&d.baro.ok){
