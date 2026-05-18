@@ -1073,19 +1073,22 @@ function tryParse(json){
   }
 }
 let bleReconnectAttempts=0;
+let bleDropCount=0; // track how many times BLE drops (WiFi scan causes this)
 function onBLEDisconnect(){
   const wasBLE=(boardSource==='ble');
-  if(wasBLE){boardConnected=false;useBoard=false;boardSource='none';}
-  // Auto-save report on disconnect
-  try{autoSaveV5Report('BLE disconnected');}catch(e){}
+  bleDropCount++;
+  // DON'T reset boardConnected on brief drops — WiFi scan causes 1-2s disconnects every 10s
+  // Keep recording running, just mark connection as temporarily lost
+  if(wasBLE){boardConnected=false;boardSource='none';}
+  // DON'T auto-save report on brief disconnects — it's not a real disconnect
+  // DON'T switch to phone sensors — board will reconnect in 2s
   updateBoardUI();
-  if(wasBLE){initPhoneSensors();initPhoneGPS();}
-  // Auto-reconnect: try 3 times with 2s delay
-  if(wasBLE&&bleDevice&&bleReconnectAttempts<3){
+  // Auto-reconnect: try 10 times (WiFi scan drops happen every 10s, need persistent retry)
+  if(wasBLE&&bleDevice&&bleReconnectAttempts<10){
     bleReconnectAttempts++;
-    $('bleBtn').className='btn-hw wait';$('bleBtn').textContent='RECONNECTING... ('+bleReconnectAttempts+'/3)';
-    $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> Reconnecting in 2s... (phone sensors active)';
-    log('BLE lost — auto-reconnect attempt '+bleReconnectAttempts+'/3 in 2s','var(--amber)');
+    $('bleBtn').className='btn-hw wait';$('bleBtn').textContent='RECONNECTING ('+bleReconnectAttempts+'/10)...';
+    $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> BLE dropped (WiFi scan) — reconnecting...';
+    if(bleDropCount<=2)log('BLE dropped (firmware WiFi scan) — auto-reconnecting','var(--amber)');
     setTimeout(()=>{
       if(bleDevice&&!bleDevice.gatt.connected){
         bleDevice.gatt.connect().then(server=>{
@@ -1098,25 +1101,27 @@ function onBLEDisconnect(){
         }).then(()=>{
           bleChar.addEventListener('characteristicvaluechanged',onBLEData);
           boardConnected=true;useBoard=true;boardSource='ble';bleReconnectAttempts=0;
-          $('boardStatus').innerHTML='<span class="sdot live"></span> RECONNECTED — hardware active';
+          $('boardStatus').innerHTML='<span class="sdot live"></span> BLE CONNECTED';
           $('bleBtn').className='btn-hw ok';$('bleBtn').textContent='HARDWARE CONNECTED';
           updateBoardUI();
-          log('BLE reconnected!','var(--green)');
+          if(bleDropCount<=3)log('BLE reconnected','var(--green)');
         }).catch(e=>{
-          log('Reconnect failed: '+e.message,'var(--red)');
-          if(bleReconnectAttempts<3)onBLEDisconnect(); // retry
+          if(bleReconnectAttempts<10)onBLEDisconnect();
           else{
             $('bleBtn').className='btn-hw err';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
-            $('boardStatus').innerHTML='<span class="sdot err"></span> Auto-reconnect failed — tap to retry';
+            $('boardStatus').innerHTML='<span class="sdot err"></span> BLE lost — tap to retry';
             bleReconnectAttempts=0;
+            log('BLE reconnect failed after 10 attempts','var(--red)');
+            initPhoneSensors();initPhoneGPS();
           }
         });
       }
-    },2000);
+    },1500); // 1.5s — faster reconnect (WiFi scan is ~2s)
   }else{
     $('bleBtn').className='btn-hw err';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
-    log('BLE disconnected'+(wasBLE?' — using phone sensors':''),'var(--red)');
+    log('BLE disconnected','var(--red)');
     bleReconnectAttempts=0;
+    initPhoneSensors();initPhoneGPS();
   }
 }
 function disconnectBLE(){
