@@ -726,7 +726,16 @@ function lookupCIDOnline(mcc,mnc,lac,cid,rssi){
     try{$('ctApiLog').innerHTML+='<div style="color:var(--red)">✗ '+src+': CID '+cid+' — '+reason+'</div>';}catch(e){}
   }
 
-  // PRIMARY: Google Geolocation API (most complete tower DB)
+  // PRIMARY: Google Geolocation API — SKIP if offline (on board WiFi network)
+  // When offline, rely on local tower DB + localStorage cache from previous sessions
+  if(!navigator.onLine){
+    cidPending.delete(key);
+    // Try auto-capture: if we have GPS, save this tower's position
+    if(typeof gpsTrue!=='undefined'&&gpsTrue&&gpsTrue.lat){
+      onFound(gpsTrue.lat,gpsTrue.lon,200,'GPS-AutoCapture');
+    }
+    return null;
+  }
   fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({cellTowers:[{cellId:cid,locationAreaCode:lac,mobileCountryCode:mcc,mobileNetworkCode:mnc,signalStrength:rssi||0}]})
@@ -2701,7 +2710,7 @@ F.push(mkF('VWMA+Ant',(pos,dt)=>{
 F.push(mkF('MACD+Cell',(pos,dt)=>{
   const p1=F.find(f=>f.name==='MACD').predict(pos,dt);
   const p2=UTIN.predict();
-  if(!p1&&!p2)return null;if(!p2)return p1||pos;if(!p1)return{lat:p2.lat,lon:p2.lon};
+  if(!p1&&!p2)return null;if(!p2)return p1;if(!p1)return{lat:p2.lat,lon:p2.lon};
   return{lat:p1.lat*0.6+p2.lat*0.4,lon:p1.lon*0.6+p2.lon*0.4};
 }));
 
@@ -3897,7 +3906,7 @@ F.push(mkF('Tower+Predict',function(pos,dt){
 // movement direction even without GPS. If tower A gets stronger and tower B
 // gets weaker, you're moving from B toward A.
 F.push(mkF('Cell Direction',function(pos,dt){
-  if(!pos||!UTIN.lastTowers||UTIN.lastTowers.length<2)return null;
+  if(!pos||!UTIN.lastTowers||UTIN.lastTowers.length<1)return null;
   if(!this._prevSignals)this._prevSignals=new Map();
   const spd=avgSpeed(5)||0;
   let vLat=0,vLon=0,wTotal=0;
@@ -4505,7 +4514,7 @@ function tick(){
     // Map matching: snap to road every 5th tick
     if(MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
-    if(uiFrame%30===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
+    if(uiFrame%5===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
     // REROUTE CHECK: if >100m off route, recalculate like Google Maps
     if(v5RouteSteps.length>0&&v5DestLat&&gpsSys){
       let minDist=Infinity;
@@ -4851,7 +4860,8 @@ function tick(){
         _lastPan={lat:p.lat,lon:p.lon};
       }
     }
-    $('sysStatus').innerHTML='<span class="sdot live"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+bleGoodPkts+'/'+blePackets+(bleErrors?' ('+bleErrors+'err)':''):'WiFi '+wifiPackets+'pkt'):'ACTIVE');
+    const fresh=lastBoardDataTime>0&&(performance.now()-lastBoardDataTime)<5000;
+    $('sysStatus').innerHTML='<span class="sdot '+(fresh?'live':'off')+'"></span> '+(boardConnected?(boardSource==='ble'?'BLE '+bleGoodPkts+'/'+blePackets+(bleErrors?' ('+bleErrors+'err)':''):'WiFi '+wifiPackets+'pkt'):'ACTIVE')+(fresh?' A:'+accel.x.toFixed(1)+','+accel.y.toFixed(1):'');
   }
 }
 
