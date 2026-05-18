@@ -1152,9 +1152,9 @@ function fetchWiFi(){
       $('boardStatus').innerHTML='<span class="sdot live"></span> WiFi CONNECTED — 5Hz polling';
       $('wifiBtn').textContent='WiFi CONNECTED — TAP TO DISCONNECT';$('wifiBtn').style.color='var(--green)';$('wifiBtn').style.borderColor='var(--green)';
       $('bStart').disabled=false;$('bStart').style.opacity='1';
-      initPhoneGPS(); // phone GPS as fallback if board GPS has no fix
+      initPhoneSensors();initPhoneGPS(); // phone sensors always active as fallback
       updateBoardUI();
-      log('WiFi board connected! Reading sensors at 5Hz','var(--green)');
+      log('WiFi board connected! Reading sensors at 5Hz — stable connection','var(--green)');
     }
     boardData=d;processBoardData(d);
   }).catch(e=>{
@@ -1171,7 +1171,7 @@ function fetchWiFi(){
       $('boardStatus').innerHTML='<span class="sdot err"></span> Cannot reach 192.168.4.1 — join UPIN-SENSOR-BOARD WiFi';
       log('WiFi board unreachable — are you on the right network?','var(--red)');
     }
-    if(wifiFails>20){
+    if(wifiFails>100){
       clearInterval(wifiPollIv);wifiPollIv=null;
       $('boardStatus').innerHTML='<span class="sdot err"></span> WiFi gave up — tap to retry';
       $('wifiBtn').textContent='CONNECT VIA WiFi (192.168.4.1)';$('wifiBtn').style.color='var(--teal)';$('wifiBtn').style.borderColor='var(--teal)';
