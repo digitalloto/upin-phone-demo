@@ -6628,5 +6628,8 @@ window.addEventListener('load',()=>{
 return{switchTab,connectBLE,connectWiFi,usePhone,calibrate,startRec,jam,spoof,resurface,endTest,exportCSV,toggleLearn,clearRoutes,exportTowers,clearCaptured,resetFishDNA,createProfile,switchProfile,toggleML,setRoute,useCurrentAsFrom,clearRoute,toggleGpsDenied,importTowers,addManualTower,clearTowerCache,aiPing,aiAsk,aiDiagnose,toggleMapLayer,searchDestination,selectSearchResult,downloadReport,toggleSwarm,_getProfile};
 })();
 </script>
+<script>
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/upin-phone-demo/sw.js').then(()=>console.log('SW registered — offline ready')).catch(e=>console.log('SW:',e));}
+</script>
 </body>
 </html>
