@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>UPIN OFFLINE — Field Data Collector</title>
+<style>
+:root{--bg:#080c14;--p:#0f1520;--b:#1a2438;--c:#4da6ff;--g:#3dcc6e;--a:#e8a832;--r:#f06060;--t:#dce6f5;--m:#7a9bc0;--d:#4a6080}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'SF Mono',monospace;background:var(--bg);color:var(--t);font-size:11px;padding:6px;max-width:480px;margin:0 auto}
+h1{font-size:13px;color:var(--c);letter-spacing:2px;text-align:center;margin-bottom:2px}
+.sub{font-size:7px;color:var(--d);text-align:center;margin-bottom:8px;letter-spacing:1px}
+.btn{padding:12px;border:2px solid var(--c);background:rgba(77,166,255,.04);color:var(--c);font-family:inherit;font-size:11px;font-weight:900;letter-spacing:2px;cursor:pointer;border-radius:3px;width:100%;margin-bottom:6px}
+.btn:active{opacity:.7}
+.btn.ok{color:var(--g);border-color:var(--g)}
+.btn.err{color:var(--r);border-color:var(--r)}
+.btn.wait{color:var(--a);border-color:var(--a)}
+.row{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;font-size:8px}
+.row span{padding:2px 5px;background:var(--p);border:1px solid var(--b);border-radius:2px}
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px}
+.s{background:var(--p);border:2px solid var(--r);border-radius:3px;padding:5px 6px;transition:border-color .3s}
+.s.on{border-color:var(--g)}
+.s .n{font-size:8px;font-weight:900;color:var(--r);letter-spacing:1px;margin-bottom:2px;transition:color .3s}
+.s.on .n{color:var(--g)}
+.s .v{font-size:8px;color:var(--m);line-height:1.4}
+.s .v b{color:var(--t);font-size:9px}
+.s .v .l{color:var(--d);font-size:7px;text-transform:uppercase}
+.card{background:var(--p);border:1px solid var(--b);border-radius:3px;padding:6px;margin-bottom:6px}
+.ct{font-size:8px;font-weight:700;color:var(--c);letter-spacing:1px;margin-bottom:4px}
+.tbl{width:100%;font-size:7px;border-collapse:collapse}
+.tbl th{text-align:left;color:var(--d);font-size:6px;padding:2px;border-bottom:1px solid var(--b)}
+.tbl td{padding:2px;border-bottom:1px solid var(--b);color:var(--m)}
+.tbl td.h{font-weight:700;color:var(--t)}
+.log{background:#000;border:1px solid var(--b);border-radius:2px;padding:4px;font-size:7px;max-height:80px;overflow-y:auto;color:var(--d);margin-bottom:6px;word-break:break-all}
+.rec{background:rgba(61,204,110,.08);border:2px solid var(--g);border-radius:3px;padding:8px;margin-bottom:6px;text-align:center}
+.rec b{font-size:16px;color:var(--g)}
+.rec .info{font-size:8px;color:var(--m);margin-top:2px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.blink{animation:pulse 1s infinite}
+</style>
+</head>
+<body>
+<h1>UPIN OFFLINE</h1>
+<div class="sub">NO INTERNET NEEDED — SAVES TO PHONE | v6.1 FIRMWARE</div>
+
+<button class="btn" id="bleBtn" onclick="ble()">CONNECT BLE</button>
+
+<div class="row">
+  <span>Pkts: <b id="pk">0</b></span>
+  <span>Good: <b id="gd" style="color:var(--g)">0</b></span>
+  <span>Err: <b id="er" style="color:var(--r)">0</b></span>
+  <span>Hz: <b id="hz">0</b></span>
+  <span>Drops: <b id="dr">0</b></span>
+</div>
+
+<!-- RECORDING -->
+<div class="rec" id="recBar" style="display:none">
+  <div class="blink" style="font-size:7px;color:var(--g);letter-spacing:2px">● RECORDING</div>
+  <b id="recSamples">0</b> <span style="font-size:9px">samples</span>
+  <div class="info"><span id="recTime">0:00</span> | <span id="recDist">0</span>m | Speed: <span id="recSpd">0</span> km/h</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px">
+  <button class="btn" style="font-size:8px;padding:8px;color:var(--g);border-color:var(--g)" onclick="toggleRec()">START / STOP REC</button>
+  <button class="btn" style="font-size:8px;padding:8px" onclick="exportCSV()">EXPORT CSV</button>
+</div>
+
+<!-- TRANSPORT MODE -->
+<div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:6px">
+  <span style="font-size:7px;color:var(--d);padding:3px">MODE:</span>
+  <button onclick="setMode('static')" class="btn" id="m_static" style="font-size:7px;padding:3px 6px;width:auto">📍Static</button>
+  <button onclick="setMode('walk')" class="btn" id="m_walk" style="font-size:7px;padding:3px 6px;width:auto">🚶Walk</button>
+  <button onclick="setMode('car')" class="btn" id="m_car" style="font-size:7px;padding:3px 6px;width:auto;color:var(--g);border-color:var(--g)">🚗Car</button>
+  <button onclick="setMode('train')" class="btn" id="m_train" style="font-size:7px;padding:3px 6px;width:auto">🚆Train</button>
+</div>
+
+<!-- SENSORS -->
+<div class="sg">
+  <div class="s" id="sIMU"><div class="n">IMU</div><div class="v"><span class="l">Acc:</span> <b id="ax">--</b> <b id="ay">--</b> <b id="az">--</b><br><span class="l">Gyr:</span> <b id="gx">--</b> <b id="gy">--</b> <b id="gz">--</b></div></div>
+  <div class="s" id="sCMP"><div class="n">COMPASS</div><div class="v"><span class="l">Hdg:</span> <b id="hdg">--</b>°<br><span class="l">Mag:</span> <b id="mx">--</b> <b id="my">--</b> <b id="mz">--</b></div></div>
+  <div class="s" id="sBARO"><div class="n">BARO</div><div class="v"><b id="hpa">--</b> hPa <b id="tmp">--</b>°C<br><span class="l">Alt:</span> <b id="alt">--</b>m</div></div>
+  <div class="s" id="sLSR"><div class="n">LASER</div><div class="v"><b id="lmm" style="font-size:12px">--</b> mm</div></div>
+  <div class="s" id="sGPS"><div class="n">GPS</div><div class="v"><b id="lat">--</b>, <b id="lon">--</b><br><span class="l">Spd:</span><b id="spd">--</b> <span class="l">Sat:</span><b id="sat">--</b> <span class="l">HDOP:</span><b id="hdop">--</b></div></div>
+  <div class="s" id="s4G"><div class="n">4G LTE</div><div class="v"><span class="l">CID:</span> <b id="cid" style="color:var(--c)">--</b><br><span class="l">MCC:</span><b id="mcc">--</b> <span class="l">MNC:</span><b id="mnc">--</b> <b id="rssi">--</b>dBm</div></div>
+  <div class="s" id="s2G"><div class="n">2G TOWERS <b id="n2g">0</b></div><div class="v" id="v2g">--</div></div>
+  <div class="s" id="sWF"><div class="n">WiFi APs <b id="nwf">0</b></div><div class="v" id="vwf">--</div></div>
+</div>
+
+<!-- SPEED ESTIMATES -->
+<div class="card">
+  <div class="ct">SPEED ESTIMATES</div>
+  <div class="row">
+    <span><span class="l">GPS:</span> <b id="sGPS2">0</b> km/h</span>
+    <span><span class="l">CID:</span> <b id="sCID">0</b> km/h</span>
+    <span><span class="l">WiFi:</span> <b id="sWFI">0</b> km/h</span>
+    <span><span class="l">Fused:</span> <b id="sFUS">0</b> km/h</span>
+  </div>
+</div>
+
+<div class="log" id="log"></div>
+
+<div style="font-size:6px;color:var(--d);text-align:center;padding:4px">
+  UPIN Offline v1.0 — AIMCRS Intelligence — Works without internet
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const logEl=$('log');
+function log(m,c){const d=document.createElement('div');d.style.color=c||'var(--d)';d.textContent='['+new Date().toLocaleTimeString()+'] '+m;logEl.appendChild(d);logEl.scrollTop=1e6;if(logEl.children.length>50)logEl.removeChild(logEl.firstChild);}
+
+// BLE
+const SVC='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const CHR='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+let dev=null,chr=null,buf='',pk=0,gd=0,er=0,drops=0,rc=0,lastHz=performance.now(),hzCnt=0;
+let mode='car';
+
+// Recording
+let recording=false,recStart=0,samples=[],lastGPS=null,totalDist=0;
+// CID speed
+let cidHist=[],lastCID=0,cidRadius=2000;
+// WiFi speed
+let lastBSSIDs=new Set(),wifiTurnover=0;
+// Last good data
+let lastData=null;
+
+async function ble(){
+  if(dev&&dev.gatt&&dev.gatt.connected){
+    try{dev.gatt.disconnect();}catch(e){}
+    $('bleBtn').className='btn';$('bleBtn').textContent='CONNECT BLE';
+    return;
+  }
+  try{
+    $('bleBtn').className='btn wait';$('bleBtn').textContent='SCANNING...';
+    dev=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'UPIN'}],optionalServices:[SVC]});
+    dev.addEventListener('gattserverdisconnected',onDrop);
+    await doConnect();
+  }catch(e){
+    $('bleBtn').className='btn err';$('bleBtn').textContent='FAILED — TAP RETRY';
+    log('BLE: '+e.message,'var(--r)');
+  }
+}
+
+async function doConnect(){
+  try{
+    $('bleBtn').className='btn wait';$('bleBtn').textContent='CONNECTING...';
+    const srv=await dev.gatt.connect();
+    const svc=await srv.getPrimaryService(SVC);
+    chr=await svc.getCharacteristic(CHR);
+    await chr.startNotifications();
+    chr.addEventListener('characteristicvaluechanged',onData);
+    $('bleBtn').className='btn ok';$('bleBtn').textContent='CONNECTED: '+dev.name;
+    buf='';rc=0;
+    log('Connected — receiving data','var(--g)');
+  }catch(e){
+    log('Connect failed: '+e.message,'var(--r)');
+    $('bleBtn').className='btn err';$('bleBtn').textContent='FAILED';
+  }
+}
+
+function onDrop(){
+  drops++;$('dr').textContent=drops;
+  // Auto-reconnect forever (WiFi scan causes drops every 10s)
+  if(dev&&rc<999){
+    rc++;
+    $('bleBtn').className='btn wait';$('bleBtn').textContent='RECONNECTING...';
+    setTimeout(async()=>{
+      try{await doConnect();}catch(e){onDrop();}
+    },1500);
+  }
+}
+
+function onData(e){
+  const raw=new TextDecoder().decode(e.target.value);
+  buf+=raw;
+  // Strip keepalives with their $ delimiter
+  buf=buf.replace(/\{"k":[^}]*\}\$/g,'');
+  buf=buf.replace(/\{"k":[^}]*\}/g,'');
+  // Find complete packets by $ delimiter
+  let idx;
+  while((idx=buf.indexOf('$'))>=0){
+    const chunk=buf.substring(0,idx);
+    buf=buf.substring(idx+1);
+    // Find last packet start (handles overlapping packets)
+    const start=chunk.lastIndexOf('{"t":');
+    if(start<0)continue;
+    let json=chunk.substring(start);
+    pk++;hzCnt++;
+    // Fix firmware JSON issues
+    json=json.replace(/:,/g,':null,').replace(/,\s*}/g,'}').replace(/:}/g,':null}');
+    json=json.replace(/:\s*NaN/g,':null');
+    json=json.replace(/"sources":(\d+)\/(\d+)/g,'"sources":"$1/$2"');
+    try{
+      const d=JSON.parse(json);
+      if(d.k!==undefined)continue;
+      gd++;lastData=d;
+      process(d);
+    }catch(ex){er++;}
+  }
+  if(buf.length>8000){const ls=buf.lastIndexOf('{"t":');buf=ls>0?buf.substring(ls):'';}
+  // Stats
+  const now=performance.now();
+  if(now-lastHz>1000){$('hz').textContent=(hzCnt/((now-lastHz)/1000)).toFixed(1);hzCnt=0;lastHz=now;}
+  $('pk').textContent=pk;$('gd').textContent=gd;$('er').textContent=er;
+}
+
+function on(id){$(id).classList.add('on');}
+function off(id){$(id).classList.remove('on');}
+
+function process(d){
+  // IMU
+  if(d.imu&&d.imu.ok){
+    on('sIMU');
+    $('ax').textContent=(d.imu.ax||0).toFixed(1);$('ay').textContent=(d.imu.ay||0).toFixed(1);$('az').textContent=(d.imu.az||0).toFixed(1);
+    $('gx').textContent=(d.imu.gx||0).toFixed(1);$('gy').textContent=(d.imu.gy||0).toFixed(1);$('gz').textContent=(d.imu.gz||0).toFixed(1);
+  }else off('sIMU');
+  // Compass
+  const cmp=d.compass;
+  if(cmp!==undefined){
+    on('sCMP');
+    if(typeof cmp==='number'){$('hdg').textContent=cmp.toFixed(1);$('mx').textContent='--';$('my').textContent='--';$('mz').textContent='--';}
+    else if(cmp&&cmp.ok){$('hdg').textContent=(cmp.hdg||0).toFixed(1);$('mx').textContent=(cmp.mx||0).toFixed(0);$('my').textContent=(cmp.my||0).toFixed(0);$('mz').textContent=(cmp.mz||0).toFixed(0);}
+  }else off('sCMP');
+  // Baro
+  if(d.baro&&d.baro.ok){on('sBARO');$('hpa').textContent=(d.baro.hpa||0).toFixed(1);$('tmp').textContent=(d.baro.temp||0).toFixed(1);$('alt').textContent=(d.baro.alt||0).toFixed(1);}else off('sBARO');
+  // Laser
+  if(d.laser&&d.laser.ok){on('sLSR');$('lmm').textContent=d.laser.mm||0;}else off('sLSR');
+  // GPS
+  if(d.gps&&d.gps.ok){
+    on('sGPS');
+    $('lat').textContent=(d.gps.lat||0).toFixed(7);$('lon').textContent=(d.gps.lon||0).toFixed(7);
+    $('spd').textContent=(d.gps.spd||d.gps.speed||0).toFixed(1);$('sat').textContent=d.gps.sats||0;$('hdop').textContent=(d.gps.hdop||0).toFixed(1);
+    $('sGPS2').textContent=Math.round((d.gps.spd||d.gps.speed||0)*3.6);
+  }else off('sGPS');
+  // 4G
+  if(d.cell4g&&(d.cell4g.ok||d.cell4g.cid)){
+    on('s4G');
+    $('cid').textContent=d.cell4g.cid||'--';$('mcc').textContent=d.cell4g.mcc||'--';$('mnc').textContent=d.cell4g.mnc||'--';
+    const csq=d.cell4g.rssi||0;$('rssi').textContent=csq>0&&csq<=31?-113+csq*2:csq;
+    // CID speed
+    const now=performance.now();
+    if(d.cell4g.cid&&d.cell4g.cid!==lastCID){cidHist.push({cid:d.cell4g.cid,t:now});lastCID=d.cell4g.cid;}
+    const cut=now-60000;cidHist=cidHist.filter(h=>h.t>cut);
+    let changes=0;for(let i=1;i<cidHist.length;i++)if(cidHist[i].cid!==cidHist[i-1].cid)changes++;
+    const cidSpd=(changes*cidRadius)/60*3.6;
+    $('sCID').textContent=Math.round(cidSpd);
+    // Auto-tune radius from GPS
+    if(d.gps&&d.gps.ok&&(d.gps.spd||0)>2&&changes>0){
+      const actual=(d.gps.spd||0)/((changes/60)*3.6)*1000;
+      if(actual>500&&actual<10000)cidRadius=cidRadius*0.95+actual*0.05;
+    }
+  }else off('s4G');
+  // 2G
+  if(d.cell2g){
+    const list=d.cell2g.data||[];
+    const n=Array.isArray(list)?list.length:(d.cell2g.towers||0);
+    if(n>0){on('s2G');$('n2g').textContent=n;
+      let s='';list.slice(0,4).forEach((t,i)=>{s+='<b>'+(t.cid||'?')+'</b> '+(t.rssi||'?')+'dBm';if(i<Math.min(n,4)-1)s+=' · ';});
+      if(n>4)s+=' +<b>'+(n-4)+'</b>';
+      $('v2g').innerHTML=s;
+    }else{off('s2G');$('n2g').textContent='0';}
+  }
+  // WiFi
+  if(d.wifi){
+    const list=d.wifi.data||d.wifi.list||[];
+    const n=list.length||d.wifi.aps||0;
+    if(n>0){on('sWF');$('nwf').textContent=n;
+      const bssids=new Set();
+      let s='';list.slice(0,3).forEach((a,i)=>{
+        const b=a.bssid||a.b||'';bssids.add(b);
+        s+='<b>'+(a.ssid||a.s||b.substring(0,8)||'?')+'</b> '+(a.rssi||a.r||'?');
+        if(i<Math.min(n,3)-1)s+=' · ';
+      });
+      if(n>3)s+=' +<b>'+(n-3)+'</b>';
+      $('vwf').innerHTML=s;
+      // WiFi speed (turnover)
+      if(lastBSSIDs.size>0&&bssids.size>0){
+        let newC=0;bssids.forEach(b=>{if(!lastBSSIDs.has(b))newC++;});
+        wifiTurnover=newC/bssids.size*100;
+        let wSpd=0;
+        if(wifiTurnover<10)wSpd=0;else if(wifiTurnover<30)wSpd=5+(wifiTurnover-10);
+        else if(wifiTurnover<60)wSpd=25+(wifiTurnover-30)*1.5;else wSpd=70+(wifiTurnover-60);
+        $('sWFI').textContent=Math.round(wSpd);
+      }
+      lastBSSIDs=bssids;
+    }else{off('sWF');$('nwf').textContent='0';}
+  }
+  // Fused speed
+  const gSpd=d.gps&&d.gps.ok?(d.gps.spd||0)*3.6:0;
+  const cSpd=parseFloat($('sCID').textContent)||0;
+  const wSpd=parseFloat($('sWFI').textContent)||0;
+  const sources=[];
+  if(gSpd>0.5)sources.push(gSpd);
+  if(cSpd>0)sources.push(cSpd);
+  if(wSpd>0)sources.push(wSpd);
+  const fused=sources.length>0?sources.reduce((s,v)=>s+v,0)/sources.length:0;
+  $('sFUS').textContent=Math.round(fused);
+
+  // Record sample
+  if(recording){
+    const now=performance.now();
+    let speed=0,heading=0;
+    if(d.gps&&d.gps.ok&&lastGPS){
+      const dLa=(d.gps.lat-lastGPS.lat)*111320;
+      const dLo=(d.gps.lon-lastGPS.lon)*111320*Math.cos(d.gps.lat*Math.PI/180);
+      const dt=(now-lastGPS.t)/1000;
+      if(dt>0)speed=Math.sqrt(dLa*dLa+dLo*dLo)/dt;
+      heading=Math.atan2(dLo,dLa)*180/Math.PI;if(heading<0)heading+=360;
+      totalDist+=Math.sqrt(dLa*dLa+dLo*dLo);
+    }
+    if(d.gps&&d.gps.ok)lastGPS={lat:d.gps.lat,lon:d.gps.lon,t:now};
+    samples.push({t:now,d:d,speed,heading,fused,dist:totalDist});
+    $('recSamples').textContent=samples.length;
+    $('recTime').textContent=Math.floor((now-recStart)/60000)+':'+String(Math.floor((now-recStart)/1000)%60).padStart(2,'0');
+    $('recDist').textContent=Math.round(totalDist);
+    $('recSpd').textContent=Math.round(fused);
+  }
+}
+
+function toggleRec(){
+  if(recording){recording=false;$('recBar').style.display='none';log('Stopped — '+samples.length+' samples','var(--a)');return;}
+  recording=true;recStart=performance.now();samples=[];totalDist=0;lastGPS=null;
+  $('recBar').style.display='block';
+  log('Recording started','var(--g)');
+}
+
+function setMode(m){
+  mode=m;
+  ['static','walk','car','train'].forEach(k=>{
+    const b=$('m_'+k);if(b){b.style.color=k===m?'var(--g)':'var(--c)';b.style.borderColor=k===m?'var(--g)':'var(--c)';}
+  });
+  const radii={static:1500,walk:1500,car:2000,train:4000};
+  cidRadius=radii[m]||2000;
+  log('Mode: '+m+' (cell radius '+cidRadius+'m)','var(--c)');
+}
+
+function exportCSV(){
+  if(!samples.length){log('No data','var(--a)');return;}
+  let c='# UPIN Offline Field Test\n';
+  c+='# Mode: '+mode+'\n';
+  c+='# Date: '+new Date().toISOString()+'\n';
+  c+='# Duration: '+Math.round((performance.now()-recStart)/1000)+'s\n';
+  c+='# Samples: '+samples.length+'\n';
+  c+='# Distance: '+Math.round(totalDist)+'m\n';
+  c+='# BLE-Drops: '+drops+'\n';
+  c+='# Good-Pkts: '+gd+'/'+pk+'\n#\n';
+  c+='Time,Lat,Lon,GPS_Speed_ms,GPS_Hdg,Fused_kmh,AccX,AccY,AccZ,GyrX,GyrY,GyrZ,Compass,Pressure,Temp,Alt_Baro,CID_4G,RSSI_4G,Towers_2G,WiFi_APs,CID_Speed_kmh,WiFi_Speed_kmh,Distance_m\n';
+  samples.forEach(s=>{
+    const d=s.d;const imu=d.imu||{};const baro=d.baro||{};const gps=d.gps||{};const c4=d.cell4g||{};
+    const cmp=typeof d.compass==='number'?d.compass:(d.compass&&d.compass.hdg?d.compass.hdg:0);
+    const t2g=d.cell2g?((d.cell2g.data||[]).length||(d.cell2g.towers||0)):0;
+    const wf=d.wifi?((d.wifi.data||d.wifi.list||[]).length||(d.wifi.aps||0)):0;
+    c+=[s.t.toFixed(0),gps.lat||0,gps.lon||0,s.speed.toFixed(3),s.heading.toFixed(1),s.fused.toFixed(1),
+      imu.ax||0,imu.ay||0,imu.az||0,imu.gx||0,imu.gy||0,imu.gz||0,
+      typeof cmp==='number'?cmp.toFixed(1):'0',baro.hpa||0,baro.temp||0,baro.alt||0,
+      c4.cid||0,c4.rssi||0,t2g,wf,
+      $('sCID').textContent||0,$('sWFI').textContent||0,s.dist.toFixed(0)].join(',')+'\n';
+  });
+  // Tower log
+  if(lastData&&lastData.cell2g&&lastData.cell2g.data){
+    c+='\n# 2G TOWERS (last scan)\n';
+    lastData.cell2g.data.forEach(t=>{c+='# CID:'+t.cid+' LAC:'+t.lac+' MCC:'+t.mcc+' MNC:'+t.mnc+' RSSI:'+t.rssi+'\n';});
+  }
+  const a=document.createElement('a');
+  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
+  a.download='UPIN_'+mode+'_'+new Date().toISOString().slice(0,19).replace(/[T:-]/g,'')+'.csv';
+  a.click();
+  log('Exported '+samples.length+' samples','var(--g)');
+}
+
+log('Ready — works offline, no internet needed','var(--c)');
+log('Save this page to phone: Share → Add to Home Screen','var(--d)');
+</script>
+</body>
+</html>
