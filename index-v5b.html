@@ -1907,9 +1907,25 @@ function velFromGPS(n=5){
   if(DATA.samples.length<n+1)return null;
   const r=DATA.samples.slice(-n);let vL=0,vO=0;
   for(let i=1;i<r.length;i++){vL+=(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=(r[i].lon-r[i-1].lon)/(r[i].dt||1);}
-  return{vLat:vL/(r.length-1),vLon:vO/(r.length-1)};
+  const vel={vLat:vL/(r.length-1),vLon:vO/(r.length-1)};
+  // During GPS denial: if GPS velocity is zero but Layer 7 says we're moving,
+  // use fused speed + compass heading to generate velocity
+  const gpsSpd=Math.sqrt(vel.vLat*vel.vLat+vel.vLon*vel.vLon)*111320;
+  if(gpsSpd<0.5&&window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>3){
+    const spd=LAYER7.fused.speed_kmh/3.6; // m/s
+    const hdg=(compass+(typeof CAL!=='undefined'?CAL.compassOff:0))*Math.PI/180;
+    return{vLat:(spd*Math.cos(hdg))/111320,vLon:(spd*Math.sin(hdg))/(111320*Math.cos((r[r.length-1].lat||13)*Math.PI/180))};
+  }
+  return vel;
 }
-function avgSpeed(n=5){const r=DATA.samples.slice(-n);return r.reduce((s,d)=>s+d.speed,0)/r.length;}
+function avgSpeed(n=5){
+  const r=DATA.samples.slice(-n);
+  const gpsSpd=r.reduce((s,d)=>s+d.speed,0)/r.length;
+  // During GPS denial: use Layer 7 fused speed if GPS speed is 0
+  if(gpsSpd<0.5&&window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>3)
+    return LAYER7.fused.speed_kmh/3.6;
+  return gpsSpd;
+}
 function mkF(name,predictFn){
   return{
     name,pos:null,err:999,errAvg:999,errHistory:[],drillTrail:[],drillDrift:0,blindSec:0,mapLine:null,
@@ -4411,54 +4427,54 @@ function tick(){
     if(processed.gpsFrozen){gpsSys.speed=processed.speed;}
   }
 
-  if(phase==='recording'&&gpsSys){
+  // During recording: use GPS when available, or best estimate when denied
+  const posAvail=gpsSys||(drPos&&(phase==='jammed'||phase==='spoofed'))?true:false;
+  const activePos=gpsSys||drPos;
+  if(phase==='recording'&&activePos){
     // STATIONARY DETECTION: freeze position when not moving
-    updateStationaryDetect(gpsSys.speed||0);
-    if(isStationary&&frozenPos){
+    const curSpd=gpsSys?gpsSys.speed||0:(window.LAYER7?LAYER7.fused.speed_kmh/3.6:0);
+    updateStationaryDetect(curSpd);
+    if(isStationary&&frozenPos&&gpsSys){
       gpsSys.lat=frozenPos.lat;gpsSys.lon=frozenPos.lon;gpsSys.speed=0;
-      // Continuous still-calibration: refine accel/gyro bias every tick while stationary
-      // This is FREE calibration time — the device isn't moving, so we know
-      // any accelerometer reading ≠ [0,0,9.8] is pure bias
       if(uiFrame%5===0)CAL.addStillSample(accel,gyro);
     }
-    // Only record if we have fresh sensor data (board data <5s old, or phone sensors active)
+    // Record using best available position (GPS or estimated)
     const boardFresh=lastBoardDataTime>0&&(now-lastBoardDataTime)<5000;
     const phoneFresh=!boardConnected||gpsSource==='phone';
-    if(boardFresh||phoneFresh) DATA.record(accel,gyro,compass,gpsSys.lat,gpsSys.lon,dt);
-    if(DATA.count()%10===0&&DATA.count()>20)CAL.learn();
-    if(uiFrame%5===0)UTIN.update(gpsSys.lat,gpsSys.lon);
-    if(!INS.initialized)INS.init(gpsSys.lat,gpsSys.lon);else INS.resetToGPS(gpsSys.lat,gpsSys.lon);
+    if(boardFresh||phoneFresh) DATA.record(accel,gyro,compass,activePos.lat,activePos.lon,dt);
+    if(DATA.count()%10===0&&DATA.count()>20&&gpsSys)CAL.learn();
+    if(uiFrame%5===0)UTIN.update(activePos.lat,activePos.lon);
+    if(!INS.initialized)INS.init(activePos.lat,activePos.lon);
+    else if(gpsSys)INS.resetToGPS(gpsSys.lat,gpsSys.lon);
     INS.update(accel,gyro,dt);
-    // PREDICTOR: record T+5 prediction, validate past ones, learn bias
     try{
       const aMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
-      PREDICTOR.update(gpsSys,gpsSys.speed||avgSpeed(5)||0,compass+CAL.compassOff,aMag,now);
+      PREDICTOR.update(activePos,curSpd||avgSpeed(5)||0,compass+CAL.compassOff,aMag,now);
     }catch(e){}
-    scoreFormulas(gpsSys,dt);
-    // CONE: update state (GPS_OK while we have GPS)
-    CONE.update(gpsSys,gpsSys.speed||avgSpeed(5)||0,compass+CAL.compassOff,(gyro.z-CAL.gyroBias.z)*CAL.gyroScale,dt);
-    // LANDMARK TRIANGULATION: update distances from GPS
-    LANDMARK_TRI.update(gpsSys);
-    if(typeof L!=="undefined"&&map&&uiFrame%3===0)LANDMARK_TRI.draw(map,gpsSys,MAP_LAYERS.landmarks);
-    // LAYER 6: Bounded learning + algebraic reconstruction
+    scoreFormulas(activePos,dt);
+    CONE.update(gpsSys,curSpd||avgSpeed(5)||0,compass+CAL.compassOff,(gyro.z-CAL.gyroBias.z)*CAL.gyroScale,dt);
+    LANDMARK_TRI.update(activePos);
+    if(typeof L!=="undefined"&&map&&uiFrame%3===0)LANDMARK_TRI.draw(map,activePos,MAP_LAYERS.landmarks);
     if(window.LAYER6&&LAYER6.enabled){
-      LAYER6.tick({accel,gyro,mag,compass,pressure,gps:gpsSys,speed:gpsSys.speed||avgSpeed(5)||0,heading:compass+CAL.compassOff,dt,stepCount,boardTowerList,CAL,isStationary},F);
+      LAYER6.tick({accel,gyro,mag,compass,pressure,gps:activePos,speed:curSpd||avgSpeed(5)||0,heading:compass+CAL.compassOff,dt,stepCount,boardTowerList,CAL,isStationary},F);
       if(typeof L!=='undefined'&&map&&uiFrame%5===0)LAYER6.drawMap(map,F);
     }
-    // LAYER 4: Swarm optimizer — self-tuning variants
     if(window.LAYER4&&LAYER4.enabled){
-      const truth=window.LAYER1&&LAYER1.enabled?LAYER1.getTruth(gpsSys):gpsSys;
+      const truth=window.LAYER1&&LAYER1.enabled?LAYER1.getTruth(activePos):activePos;
       LAYER4.tick(F,truth,dt);
     }
-    // LAYER 7: Motion detection + speed estimation
     if(window.LAYER7&&LAYER7.enabled){
-      LAYER7.tick({accel,gyro,gps:gpsSys,dt,boardData,boardTowerList});
+      LAYER7.tick({accel,gyro,gps:activePos,dt,boardData,boardTowerList});
     }
-    // LAYER 8: Transport mode + journey tracking
     if(window.LAYER8&&LAYER8.enabled){
       const fusedSpd=window.LAYER7?LAYER7.fused.speed_kmh:0;
-      LAYER8.tick(gpsSys,fusedSpd);
+      LAYER8.tick(activePos,fusedSpd);
       if(uiFrame%10===0)LAYER8.updateUI();
+    }
+    // During GPS denial: update drPos from best formula prediction
+    if(!gpsSys&&(phase==='jammed'||phase==='spoofed')){
+      const bi=bestFormulaIdx();
+      if(F[bi]&&F[bi].pos) drPos={lat:F[bi].pos.lat,lon:F[bi].pos.lon};
     }
     // ── ML LAYER TRAINING (GPS available → learn patterns) ──
     try{
@@ -4595,11 +4611,11 @@ function tick(){
       const gDist=hav(lastPos,gpsSys);
       ANIMAL.ant.calibrateFromGPS(gDist,50);
     }
-    const ll=[gpsSys.lat,gpsSys.lon];
+    const ll=[activePos.lat,activePos.lon];
+    const trailColor=gpsSys?'#00FF88':'#FFB800'; // green=GPS, orange=estimated
     gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
-    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else if(typeof L!=='undefined')gpsLine=L.polyline(gpsTrail,{color:'#00FF88',weight:3}).addTo(map);
-    // Full route (unlimited) + sensor snapshot per point
-    fullRoute.push({lat:gpsSys.lat,lon:gpsSys.lon,t:performance.now(),spd:gpsSys.speed||0,hdg:compass,gz:gyro.z,ae:Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81});
+    if(gpsLine)gpsLine.setLatLngs(gpsTrail);else if(typeof L!=='undefined')gpsLine=L.polyline(gpsTrail,{color:trailColor,weight:3}).addTo(map);
+    fullRoute.push({lat:activePos.lat,lon:activePos.lon,t:performance.now(),spd:curSpd||0,hdg:compass,gz:gyro.z,ae:Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81});
     if(typeof L!=='undefined'){
       if(fullRouteLine)fullRouteLine.setLatLngs(fullRoute.map(p=>[p.lat,p.lon]));
       else fullRouteLine=L.polyline(fullRoute.map(p=>[p.lat,p.lon]),{color:'rgba(77,166,255,0.3)',weight:2}).addTo(map);
