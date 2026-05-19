@@ -70,7 +70,12 @@ const LAYER7={
       for(let i=1;i<this.history.length;i++){
         if(this.history[i].cid!==this.history[i-1].cid) this.changeCount60s++;
       }
-      this.speed_kmh=(this.changeCount60s*this.cellRadius_m)/60*3.6;
+      // Speed = CID changes × cell radius / time, but capped to reasonable values
+      // 1 change in 60s at 1500m = 90 km/h is too high for urban
+      // Use: distance = changes × radius × 0.5 (cell overlap means you cross at ~half radius)
+      this.speed_kmh=this.changeCount60s>0?(this.changeCount60s*this.cellRadius_m*0.5)/60*3.6:0;
+      // Cap at 200 km/h max
+      this.speed_kmh=Math.min(this.speed_kmh,200);
       this.confidence=this.changeCount60s>=3?'HIGH':this.changeCount60s>=1?'MEDIUM':'LOW';
 
       // Auto-tune radius when GPS speed available
@@ -173,14 +178,15 @@ const LAYER7={
         sumGrad+=Math.abs((recent.rssi-old.rssi)/dt_min);
         gradCount++;
       });
-      this.sumAbsGrad=gradCount>0?sumGrad:0;
-      // Map to speed
-      if(this.sumAbsGrad<5) this.speed_kmh=0;
-      else if(this.sumAbsGrad<15) this.speed_kmh=15*(this.sumAbsGrad-5)/10;
-      else if(this.sumAbsGrad<30) this.speed_kmh=15+25*(this.sumAbsGrad-15)/15;
-      else if(this.sumAbsGrad<60) this.speed_kmh=40+40*(this.sumAbsGrad-30)/30;
-      else this.speed_kmh=80+20*Math.min((this.sumAbsGrad-60)/30,1);
-      this.confidence=gradCount>=3?'HIGH':gradCount>=1?'MEDIUM':'LOW';
+      this.sumAbsGrad=gradCount>0?sumGrad/gradCount:0; // average per tower, not sum
+      // Map to speed — indoor RSSI fluctuates ±10dB/min naturally
+      // Only count gradient above 15 dB/min per tower as movement
+      if(this.sumAbsGrad<15) this.speed_kmh=0;
+      else if(this.sumAbsGrad<30) this.speed_kmh=10*(this.sumAbsGrad-15)/15;
+      else if(this.sumAbsGrad<60) this.speed_kmh=10+30*(this.sumAbsGrad-30)/30;
+      else this.speed_kmh=40+Math.min((this.sumAbsGrad-60)*0.5,60);
+      this.speed_kmh=Math.min(this.speed_kmh,200);
+      this.confidence=gradCount>=3&&this.sumAbsGrad>20?'HIGH':gradCount>=2&&this.sumAbsGrad>15?'MEDIUM':'LOW';
     }
   },
 
