@@ -160,7 +160,8 @@ const ALGEBRA={
     const az=accel.z-(CAL?CAL.accelBias.z:0);
     const accelMag=Math.sqrt(ax*ax+ay*ay+az*az);
     const gravityMag=9.81;
-    const horizontal_accel=Math.max(0, accelMag-gravityMag);
+    // Horizontal acceleration: remove gravity vector, not just magnitude
+    const horizontal_accel=Math.max(0, Math.sqrt(ax*ax+ay*ay)-Math.abs(Math.sqrt(ax*ax+ay*ay+az*az)-gravityMag)*0.5);
 
     // ZUPT: use Layer 7 multi-modal ZUPT if available, else basic threshold
     const zupt_active=window.LAYER7&&LAYER7.enabled?LAYER7.zupt.isZUPT:(Math.abs(accelMag-gravityMag)<0.3);
@@ -174,6 +175,15 @@ const ALGEBRA={
       this.velocity_ms+=horizontal_accel*dt;
       this.velocity_ms*=0.98;
     }
+    // Cap velocity: max 200 km/h = 55.6 m/s (no more 3856 km/h)
+    this.velocity_ms=Math.min(this.velocity_ms, 55.6);
+    // During GPS denial: prefer Layer 7 fused speed if available and our estimate is clearly wrong
+    if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>3){
+      const l7spd=LAYER7.fused.speed_kmh/3.6;
+      // If our IMU velocity is >3x or <0.3x the fused speed, use fused instead
+      if(this.velocity_ms>l7spd*3||this.velocity_ms<l7spd*0.3)
+        this.velocity_ms=this.velocity_ms*0.3+l7spd*0.7;
+    }
 
     // B.2 — Dead reckoning position from velocity
     if(gps&&gps.lat&&!this._initialized){
@@ -183,14 +193,16 @@ const ALGEBRA={
     }
     if(this._initialized){
       const hdg_rad=(compass+(CAL?CAL.compassOff:0))*Math.PI/180;
-      const v=this.velocity_ms>0.1?this.velocity_ms:(speed||0);
-      this.dr_lat+=( v*Math.cos(hdg_rad)*dt)/111320;
-      this.dr_lon+=( v*Math.sin(hdg_rad)*dt)/(111320*Math.cos(this.dr_lat*Math.PI/180));
+      // Use best available speed: Layer 7 fused > IMU velocity > GPS speed
+      const l7spd=window.LAYER7&&LAYER7.fused?LAYER7.fused.speed_kmh/3.6:0;
+      const v=l7spd>0.5?l7spd:(this.velocity_ms>0.1?this.velocity_ms:(speed||0));
+      this.dr_lat+=(v*Math.cos(hdg_rad)*dt)/111320;
+      this.dr_lon+=(v*Math.sin(hdg_rad)*dt)/(111320*Math.cos(this.dr_lat*Math.PI/180));
       if(this._lastDrGPS){
         this.dr_drift_m=this._hav({lat:this.dr_lat,lon:this.dr_lon},this._lastDrGPS);
       }
-      // Reset DR to GPS when available and drift < 5m (stays honest)
-      if(gps&&gps.lat&&this.dr_drift_m<5){
+      // Only reset DR to GPS when GPS is REAL (not estimated drPos) and drift is small
+      if(gps&&gps.lat&&gps.acc&&gps.acc<50&&this.dr_drift_m<5){
         this.dr_lat=gps.lat; this.dr_lon=gps.lon;
         this._lastDrGPS={lat:gps.lat,lon:gps.lon};
         this.dr_drift_m=0;
@@ -250,7 +262,8 @@ const ALGEBRA={
     }
 
     // B.8 — Algebraic trilateration from 3+ anchor distances
-    this._trilaterate(boardTowerList, gps);
+    // Uses tower positions directly — does NOT need GPS
+    this._trilaterate(boardTowerList, gps||{lat:this.dr_lat,lon:this.dr_lon});
   },
 
   // B.8 — Linearized trilateration from 3+ anchors
@@ -259,15 +272,23 @@ const ALGEBRA={
     const anchors=[];
     if(towers){
       towers.forEach(t=>{
-        if(t.lat&&t.lon&&t.rssi){
-          const freq=t.freq||1800;
-          const dist_m=Math.pow(10,(Math.abs(t.rssi)-32.45-20*Math.log10(freq))/20)*1000;
-          anchors.push({lat:t.lat, lon:t.lon, dist:dist_m});
+        if(t.lat&&t.lon){
+          let rssi=t.rssi||t.signal||-80;
+          if(rssi>0&&rssi<=31) rssi=-113+rssi*2; // CSQ→dBm
+          // Okumura-Hata model (urban, better than free-space for cells)
+          // PL = 69.55 + 26.16*log(f) - 13.82*log(hb) + (44.9-6.55*log(hb))*log(d)
+          // Solve for d: log(d) = (|RSSI| - 69.55 - 26.16*log(f) + 13.82*log(30)) / (44.9 - 6.55*log(30))
+          const freq=t.freq||(t.radio==='gsm'?900:1800);
+          const PL=Math.abs(rssi);
+          const logD=(PL-69.55-26.16*Math.log10(freq)+13.82*Math.log10(30))/(44.9-6.55*Math.log10(30));
+          const dist_m=Math.pow(10,logD)*1000;
+          if(dist_m>10&&dist_m<50000) anchors.push({lat:t.lat, lon:t.lon, dist:dist_m});
         }
       });
     }
-    // Also use nearby landmarks if Layer 1 has them and we have GPS
-    if(typeof LANDMARKS!=='undefined'&&gps&&gps.lat){
+    // Landmarks: only use when we have REAL GPS (acc<50m), not estimated position
+    // Using estimated position for landmark distances is circular
+    if(typeof LANDMARKS!=='undefined'&&gps&&gps.acc&&gps.acc<50){
       const sorted=[...LANDMARKS].map(lm=>({
         lat:lm.lat, lon:lm.lon,
         dist:this._hav(gps,{lat:lm.lat,lon:lm.lon})
