@@ -1978,8 +1978,30 @@ function mkF(name,predictFn){
   };
 }
 
+// Multi-source speed + heading: every formula can use these during GPS denial
+function bestSpeed(){
+  // Priority: GPS > Layer 7 fused > CID > IMU > 0
+  const gps=avgSpeed(5);
+  if(gps>0.5) return gps;
+  if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>2) return LAYER7.fused.speed_kmh/3.6;
+  if(window.LAYER7&&LAYER7.cidSpeed&&LAYER7.cidSpeed.speed_kmh>2) return LAYER7.cidSpeed.speed_kmh/3.6;
+  if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3) return ALGEBRA.velocity_ms;
+  return 0;
+}
+function bestHeading(){
+  // Compass is GPS-independent — always available from magnetometer or phone orientation
+  return (compass+(typeof CAL!=='undefined'?CAL.compassOff:0));
+}
+function drPredict(pos,dt,speedOverride){
+  // Dead reckon from pos using best available speed + heading
+  const s=speedOverride||bestSpeed();
+  if(s<0.1) return null; // genuinely stationary
+  const h=bestHeading()*Math.PI/180;
+  return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}
+
 // F0-F2: Velocity (SMA, EMA, WMA)
-F.push(mkF('Vel SMA',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Vel SMA',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:drPredict(pos,dt);}));
 F.push(mkF('Vel EMA',function(pos,dt){const v=velFromGPS(3);if(!v)return null;const a=0.3;this._vL=(this._vL||0)*(1-a)+v.vLat*a;this._vO=(this._vO||0)*(1-a)+v.vLon*a;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
 F.push(mkF('Vel WMA',(pos,dt)=>{if(DATA.samples.length<4)return null;const r=DATA.samples.slice(-8);let vL=0,vO=0,tw=0;for(let i=1;i<r.length;i++){const w=i;vL+=w*(r[i].lat-r[i-1].lat)/(r[i].dt||1);vO+=w*(r[i].lon-r[i-1].lon)/(r[i].dt||1);tw+=w;}return{lat:pos.lat+(vL/tw)*dt,lon:pos.lon+(vO/tw)*dt};}));
 // F3-F5: Sensor-based
@@ -1987,8 +2009,8 @@ F.push(mkF('Accel+Comp',(pos,dt)=>{const aM=Math.sqrt((accel.x-CAL.accelBias.x)*
 F.push(mkF('Accel+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 F.push(mkF('Gyro+Vel',function(pos,dt){if(DATA.samples.length<3)return null;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const s=avgSpeed(5);const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F6-F7: Step-based
-F.push(mkF('Step+Comp',function(pos,dt){const ns=stepCount-(this._ls||0);this._ls=stepCount;const h=(compass+CAL.compassOff)*Math.PI/180;if(ns>0){const d=ns*0.72;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
-F.push(mkF('Step+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const ns=stepCount-(this._ls||0);this._ls=stepCount;if(ns>0){const d=ns*0.72;const h=this._h*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}const v=velFromGPS(3);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:pos;}));
+F.push(mkF('Step+Comp',function(pos,dt){const ns=stepCount-(this._ls||0);this._ls=stepCount;const h=(compass+CAL.compassOff)*Math.PI/180;if(ns>0){const d=ns*0.72;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}return drPredict(pos,dt);}));
+F.push(mkF('Step+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const ns=stepCount-(this._ls||0);this._ls=stepCount;if(ns>0){const d=ns*0.72;const h=this._h*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}return drPredict(pos,dt);}));
 // F8: Kalman
 F.push(mkF('Kalman',function(pos,dt){if(DATA.samples.length<3)return null;const v=velFromGPS(3);if(!v)return null;this._vL=(this._vL||0)*0.1+v.vLat*0.9;this._vO=(this._vO||0)*0.1+v.vLon*0.9;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
 // F9: Double Integration (raw — intentionally bad, for comparison)
@@ -2210,19 +2232,20 @@ const FISH={
   // Each agent predicts position using its DNA weights
   agentPredict(agent,dt){
     const d=agent.dna;const pos=agent.pos;if(!pos)return null;
-    // Speed: blend velocity-derived and accel-derived
-    const gpsSpd=avgSpeed(5);
+    // Speed: blend ALL available sources using DNA weights
+    const gpsSpd=bestSpeed(); // uses GPS > L7 fused > CID > IMU automatically
     const accelMag=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);
     const accelSpd=accelMag*CAL.accelScale*CAL.speedMult;
-    const spd=gpsSpd*d.spdBlend+accelSpd*(1-d.spdBlend);
-    // Heading: choose source based on DNA
-    let hdg=compass+CAL.compassOff;
-    if(d.hdgSrc===2){// gyro integrated
+    const cellSpd=window.LAYER7&&LAYER7.cidSpeed?LAYER7.cidSpeed.speed_kmh/3.6:0;
+    const spd=gpsSpd*d.spdBlend+accelSpd*(1-d.spdBlend)*0.5+cellSpd*(1-d.spdBlend)*0.5;
+    // Heading: choose source based on DNA — ALL are GPS-independent
+    let hdg=compass+CAL.compassOff; // magnetometer heading
+    if(d.hdgSrc===2){// gyro integrated heading
       agent._gHdg=(agent._gHdg||compass)+(gyro.z-CAL.gyroBias.z)*d.turnSens*dt;
       hdg=agent._gHdg;
     }
     const h=hdg*Math.PI/180;
-    // Velocity continuation component
+    // Velocity continuation component (works during GPS denial via L7)
     const v=velFromGPS(5);
     const vLat=v?v.vLat:0,vLon=v?v.vLon:0;
     // Sensor-based component
@@ -2232,9 +2255,10 @@ const FISH={
     const tw=d.velW+d.accelW+d.gyroW+d.magW+0.01;
     const nLat=pos.lat+(vLat*dt*d.velW+sLat*(d.accelW+d.gyroW+d.magW))/tw;
     const nLon=pos.lon+(vLon*dt*d.velW+sLon*(d.accelW+d.gyroW+d.magW))/tw;
-    // ZUPT: if accel near gravity, decay speed
-    const aMag=Math.sqrt(accel.x**2+accel.y**2+accel.z**2);
-    if(Math.abs(aMag-9.81)<d.zuptTh){
+    // ZUPT: use Layer 7 multi-modal ZUPT (accel+gyro+CID+WiFi), not just accel
+    const reallyStationary=window.LAYER7&&LAYER7.zupt?LAYER7.zupt.isZUPT:
+      (Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81)<d.zuptTh);
+    if(reallyStationary){
       return{lat:pos.lat+(nLat-pos.lat)*d.drDecay,lon:pos.lon+(nLon-pos.lon)*d.drDecay};
     }
     return{lat:nLat,lon:nLon};
@@ -4528,16 +4552,13 @@ function tick(){
     const cellP=UTIN.predict();if(cellP&&gpsSys)SCORE.scoreLayer('cell',hav(cellP,gpsSys));
     if(TERRAIN.prints.length>20){const tm=TERRAIN.match();if(tm&&gpsSys)SCORE.scoreLayer('terrain',hav(tm,gpsSys));}
     if(uiFrame%30===0)SCORE.save(); // save every 30 ticks
-    // Score auto-combos against GPS
-    COMBOS.score(gpsSys,dt);
-    FAGENTS.score(gpsSys,dt);
-    // Animal methods: record all environmental data at this GPS position
-    ANIMAL.recordAll(gpsSys.lat,gpsSys.lon,accel,dt);
-    // Update PUE reference (so when GPS is lost, we know last good position + speed)
-    PUE.updateFromGPS(gpsSys,gpsSys.speed||avgSpeed(5));
-    // v5: Route learning + terrain fingerprint + tower capture
-    ROUTES.record(gpsSys.lat,gpsSys.lon);
-    TERRAIN.record(gpsSys.lat,gpsSys.lon);
+    // Score combos + agents against best available position
+    COMBOS.score(activePos,dt);
+    FAGENTS.score(activePos,dt);
+    ANIMAL.recordAll(activePos.lat,activePos.lon,accel,dt);
+    PUE.updateFromGPS(activePos,curSpd||bestSpeed());
+    ROUTES.record(activePos.lat,activePos.lon);
+    TERRAIN.record(activePos.lat,activePos.lon);
     MANEUVER.record(gpsSys.lat,gpsSys.lon,dt);
     TOWER_CAPTURE.capture(gpsSys.lat,gpsSys.lon,boardData);
     // Map matching: snap to road every 5th tick
