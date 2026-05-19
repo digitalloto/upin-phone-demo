@@ -1733,7 +1733,9 @@ function initPhoneGPS(){
     $('srcGPS').innerHTML='<span class="sdot live"></span>Phone';
     $('srcGPSd').textContent='±'+Math.round(phoneFix.acc)+'m';
   },err=>{
-    log('Phone GPS: '+(err&&err.message?err.message:'unavailable')+' — will use board GPS','var(--amber)');
+    log('Phone GPS: '+(err&&err.message?err.message:'unavailable')+' — retrying in 10s','var(--amber)');
+    // Retry GPS every 10 seconds if it fails
+    setTimeout(()=>{_gpsWatchId=null;initPhoneGPS();},10000);
   },{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
 }
 function initPhoneSensors(){
@@ -1777,7 +1779,25 @@ const DATA={
       if(speed>50){speed=this.samples.length>1?this.samples[this.samples.length-1].speed:0;}}
     this.samples.push({t:performance.now(),ax:ac.x,ay:ac.y,az:ac.z,gx:gy.x,gy:gy.y,gz:gy.z,
       compass:cmp,lat,lon,speed,heading,dt,mx:mag.x,my:mag.y,mz:mag.z,
-      pressure,baroAlt,laserMm,cellTowers4G,cellTowers2G,wifiAPs,...(extra||{})});
+      pressure,baroAlt,laserMm,cellTowers4G,cellTowers2G,wifiAPs,
+      // Per-row layer outputs (snapshot at record time)
+      _dr_lat:window.ALGEBRA?ALGEBRA.dr_lat:0,
+      _dr_lon:window.ALGEBRA?ALGEBRA.dr_lon:0,
+      _tri_lat:window.ALGEBRA?ALGEBRA.tri_lat:0,
+      _tri_lon:window.ALGEBRA?ALGEBRA.tri_lon:0,
+      _tri_n:window.ALGEBRA?ALGEBRA.tri_anchors:0,
+      _lm_lat:window.LANDMARK_TRI&&LANDMARK_TRI.triPos?LANDMARK_TRI.triPos.lat:0,
+      _lm_lon:window.LANDMARK_TRI&&LANDMARK_TRI.triPos?LANDMARK_TRI.triPos.lon:0,
+      _lm_n:window.LANDMARK_TRI&&LANDMARK_TRI.nearby?LANDMARK_TRI.nearby.length:0,
+      _spd_imu:window.ALGEBRA?ALGEBRA.velocity_ms*3.6:0,
+      _spd_cid:window.LAYER7?LAYER7.cidSpeed.speed_kmh:0,
+      _spd_wifi:window.LAYER7?LAYER7.wifiSpeed.speed_kmh:0,
+      _spd_rssi:window.LAYER7?LAYER7.rssiSpeed.speed_kmh:0,
+      _spd_fused:window.LAYER7?LAYER7.fused.speed_kmh:0,
+      _zupt:window.LAYER7?LAYER7.zupt.isZUPT:false,
+      _turns:window.LAYER7?LAYER7.turns.turnCount60s:0,
+      _bound_score:window.BOUND?BOUND.getScore(0):0,
+      ...(extra||{})});
     if(this.samples.length>this.MAX)this.samples.shift();},
   count(){return this.samples.length;}
 };
@@ -4456,6 +4476,13 @@ function tick(){
 
   // During recording: use GPS when available, or best estimate when denied
   const posAvail=gpsSys||(drPos&&(phase==='jammed'||phase==='spoofed'))?true:false;
+  // Initialize drPos from ANY available position source if null
+  if(!drPos){
+    if(gpsSys) drPos={lat:gpsSys.lat,lon:gpsSys.lon};
+    else if(calGpsPos) drPos={lat:calGpsPos.lat,lon:calGpsPos.lon};
+    else if(UTIN.predict()) drPos={lat:UTIN.predict().lat,lon:UTIN.predict().lon};
+    else if(gpsTrue) drPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
+  }
   const activePos=gpsSys||drPos;
   if(phase==='recording'&&activePos){
     // STATIONARY DETECTION: freeze position when not moving
@@ -5752,7 +5779,9 @@ function jam(){
   $('badge').textContent='JAMMED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('jalrt').style.display='block';
   $('srcGPS').innerHTML='<span class="sdot err"></span>BLOCKED';$('srcGPSd').textContent='ALL GPS DENIED';
-  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;if(f.mapLine){try{map.removeLayer(f.mapLine);}catch(e){}}f.mapLine=null;if(f._mapDot){try{map.removeLayer(f._mapDot);}catch(e){}}f._mapDot=null;});
+  // Reset formulas: anchor to GPS, clear error history so denial errors are measured fresh
+  drPos=gpsTrue?{lat:gpsTrue.lat,lon:gpsTrue.lon}:drPos;
+  F.forEach(f=>{if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.drillTrail=[];f.drillDrift=0;f.blindSec=0;f.errHistory=[];f.errAvg=999;if(f.mapLine){try{map.removeLayer(f.mapLine);}catch(e){}}f.mapLine=null;if(f._mapDot){try{map.removeLayer(f._mapDot);}catch(e){}}f._mapDot=null;});
   if(alertIv)clearInterval(alertIv);
   alertIv=setInterval(()=>{if(phase!=='jammed'){clearInterval(alertIv);return;}$('jT').textContent=fmt((performance.now()-drillStart)/1000);},1000);
   const ps=PUE.stats();log('GPS JAMMED — ALL GPS BLOCKED (board+phone). Envelope: '+Math.round(ps.radius)+'m @ '+Math.round(ps.speed*3.6)+'km/h','var(--amber)');
@@ -5784,6 +5813,13 @@ function resurface(){
   if(F._waLine){map.removeLayer(F._waLine);F._waLine=null;}F._waTrail=[];
   if(gpsTrue){L.circleMarker([gpsTrue.lat,gpsTrue.lon],{radius:6,color:'#A855F7',fillColor:'#A855F7',fillOpacity:1}).bindPopup('Resurface #'+drills.length+'<br>Drift: '+drift.toFixed(1)+'m ['+grade+']').addTo(map);}
   phase='recording';$('badge').textContent='RECORDING';$('badge').className='badge b-rec';
+  // Recalibrate: reset all formula positions to current GPS
+  if(gpsTrue){
+    F.forEach(f=>{f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};f.errHistory=[];f.errAvg=999;});
+    drPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
+    if(window.ALGEBRA){ALGEBRA.dr_lat=gpsTrue.lat;ALGEBRA.dr_lon=gpsTrue.lon;ALGEBRA._lastDrGPS={lat:gpsTrue.lat,lon:gpsTrue.lon};ALGEBRA.dr_drift_m=0;}
+    log('GPS restored — all formulas recalibrated to '+gpsTrue.lat.toFixed(5)+','+gpsTrue.lon.toFixed(5),'var(--green)');
+  }
   $('b3').style.display='none';$('b2').style.display='block';$('jalrt').style.display='none';$('salrt').style.display='none';
   if(CAL.predictionErr<10){$('bJam').disabled=false;$('bJam').style.opacity='1';$('bSpoof').disabled=false;$('bSpoof').style.opacity='1';}
   log('RESURFACE #'+drills.length+': drift='+drift.toFixed(1)+'m ['+grade+'] best='+fRes[0].name+' | PUE: '+ps.enforced+'/'+ps.total+' constrained ('+ps.pct+'%)','var(--purple)');
@@ -6065,17 +6101,14 @@ function exportCSV(){
   c+='# Profile: '+(PROFILES?PROFILES.active:'default')+'\n';
   c+='# Version: '+UPIN_VERSION+'\n';
   c+='#\n';
-  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_Anchors,LM_Tri_Resid_m'+(window.LAYER6?','+LAYER6.csvHeaderCols:'')+(window.LAYER7?','+LAYER7.csvHeaderCols:'')+(window.LAYER8?','+LAYER8.csvHeaderCols:'')+'\n';
+  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_N,Bound_Score,Speed_IMU_kmh,DR_Lat,DR_Lon,ZUPT,Speed_CID_kmh,Speed_WiFi_kmh,Speed_RSSI_kmh,Speed_Fused_kmh,Turns_60s,Cell_Tri_Lat,Cell_Tri_Lon,Cell_Tri_N\n';
   DATA.samples.forEach((s,i)=>{
     // Speed estimator: GPS delta over 2s window
     let spdEst=s.speed;
     if(i>=2){const prev=DATA.samples[i-2];const dt=(s.t-prev.t)/1000;if(dt>0&&dt<5){const d=hav({lat:s.lat,lon:s.lon},{lat:prev.lat,lon:prev.lon});spdEst=d/dt;}}
     const l2f=window.LAYER2?LAYER2.csvFlags(s.t):'';
-    const l3=window.LAYER3?LAYER3.csvColumns():{landmark_tri_lat:'',landmark_tri_lon:'',landmark_tri_n_anchors:'',landmark_tri_residual_m:''};
-    const l6=window.LAYER6?','+LAYER6.csvRowData(bestFormulaIdx()):'';
-    const l7=window.LAYER7?','+LAYER7.csvRowData():'';
-    const l8=window.LAYER8?','+LAYER8.csvRowData():'';
-    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${l3.landmark_tri_lat},${l3.landmark_tri_lon},${l3.landmark_tri_n_anchors},${l3.landmark_tri_residual_m}${l6}${l7}${l8}\n`;
+    // Per-row layer data from stored sample (not current snapshot)
+    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${(s._lm_lat||0).toFixed?s._lm_lat.toFixed(7):''},${(s._lm_lon||0).toFixed?s._lm_lon.toFixed(7):''},${s._lm_n||0},${s._bound_score||0},${(s._spd_imu||0).toFixed(1)},${(s._dr_lat||0).toFixed?s._dr_lat.toFixed(7):''},${(s._dr_lon||0).toFixed?s._dr_lon.toFixed(7):''},${s._zupt?1:0},${(s._spd_cid||0).toFixed(1)},${(s._spd_wifi||0).toFixed(1)},${(s._spd_rssi||0).toFixed(1)},${(s._spd_fused||0).toFixed(1)},${s._turns||0},${(s._tri_lat||0).toFixed?s._tri_lat.toFixed(7):''},${(s._tri_lon||0).toFixed?s._tri_lon.toFixed(7):''},${s._tri_n||0}\n`;
   });
   // Formula rankings with status (Layer 5: RUNNING first, then PASSTHROUGH, WAITING, DISABLED)
   c+='\n# FORMULA RANKINGS\n';

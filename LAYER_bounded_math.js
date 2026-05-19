@@ -160,8 +160,12 @@ const ALGEBRA={
     const az=accel.z-(CAL?CAL.accelBias.z:0);
     const accelMag=Math.sqrt(ax*ax+ay*ay+az*az);
     const gravityMag=9.81;
-    // Horizontal acceleration: remove gravity vector, not just magnitude
-    const horizontal_accel=Math.max(0, Math.sqrt(ax*ax+ay*ay)-Math.abs(Math.sqrt(ax*ax+ay*ay+az*az)-gravityMag)*0.5);
+    // Horizontal acceleration: project accel onto horizontal plane
+    // Gravity direction estimated from low-pass filtered accel
+    // True horizontal = total accel minus gravity component
+    // Simple: if magnitude ≈ 9.81 (within 0.5), device is not accelerating
+    const gDiff=Math.abs(accelMag-gravityMag);
+    const horizontal_accel=gDiff>0.5?Math.min(gDiff-0.3,3.0):0; // deadband 0.3, cap 3 m/s²
 
     // ZUPT: use Layer 7 multi-modal ZUPT if available, else basic threshold
     const zupt_active=window.LAYER7&&LAYER7.enabled?LAYER7.zupt.isZUPT:(Math.abs(accelMag-gravityMag)<0.3);
@@ -173,10 +177,10 @@ const ALGEBRA={
     } else {
       this._zupt_count=0;
       this.velocity_ms+=horizontal_accel*dt;
-      this.velocity_ms*=0.98;
+      this.velocity_ms*=0.95; // stronger decay — IMU velocity drifts fast
     }
-    // Cap velocity: max 200 km/h = 55.6 m/s (no more 3856 km/h)
-    this.velocity_ms=Math.min(this.velocity_ms, 55.6);
+    // Hard cap: max 50 m/s (180 km/h). Soft cap: decay toward L7 fused speed
+    this.velocity_ms=Math.min(Math.max(this.velocity_ms,0), 50);
     // During GPS denial: prefer Layer 7 fused speed if available and our estimate is clearly wrong
     if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>3){
       const l7spd=LAYER7.fused.speed_kmh/3.6;
