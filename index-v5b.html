@@ -163,6 +163,8 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
     <button class="btn btn-red" id="gpsDeniedBtn" onclick="V.toggleGpsDenied()" style="font-size:7px;padding:5px 8px;flex:0 0 auto">GPS DENIED MODE: OFF</button>
     <span style="font-size:7px;color:var(--td)">Suppress GPS to test UPIN-only positioning</span>
   </div>
+  <!-- LAYER 9: Demo Mode -->
+  <div id="layer9UI" style="background:var(--panel);border:1px solid var(--amber);border-radius:2px;padding:6px 8px;margin-bottom:6px"></div>
   <!-- LAYER 8: Transport Mode + Journey -->
   <div id="layer8UI" style="background:var(--panel);border:1px solid var(--cyan);border-radius:2px;padding:6px 8px;margin-bottom:6px"></div>
   <!-- LAYER 1: Reference Mode selector -->
@@ -555,6 +557,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <script src="LAYER_swarm_optimizer.js"></script>
 <script src="LAYER_motion_detect.js"></script>
 <script src="LAYER_transport_journey.js"></script>
+<script src="LAYER_demo_mode.js"></script>
 <script>
 var V=(()=>{
 // Safe fetch: silently returns failed response when offline — app never crashes
@@ -6082,6 +6085,7 @@ function exportCSV(){
   if(window.LAYER4&&LAYER4.enabled) c+=LAYER4.csvTrailer();
   if(window.LAYER7&&LAYER7.enabled) c+=LAYER7.csvTrailer(boardTowerList);
   if(window.LAYER8&&LAYER8.enabled) c+=LAYER8.csvTrailer();
+  if(window.LAYER9&&LAYER9.log.length>0) c+=LAYER9.csvTrailer();
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
   a.download=runId+'.csv';a.click();
   log('CSV exported: '+runId+'.csv ('+DATA.count()+' samples, '+clusters+' clusters)','var(--green)');
@@ -6614,6 +6618,7 @@ window.addEventListener('load',()=>{
     initMap();buildFormulaTable();
     ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();PROFILES.init();
     ML_TOGGLE.init();SVM_GATE.init();RF_FUSION.init();initCIDCache();
+    if(window.LAYER9)LAYER9._updateUI();
     // Load active profile's saved calibrations
     PROFILES.loadProfile(PROFILES.active);
     $('profileName').textContent=PROFILES.active;try{$('dashProfile').textContent=PROFILES.active;}catch(e){}
