@@ -601,7 +601,7 @@ let lastSensorTime=0; // detect stale sensor readings
 let compass=0,pitch=0,roll=0,gravity={x:0,y:0,z:9.8};
 let lastValidCompass=0; // FIX 6: compass fallback
 let pressure=0,temp=0,baroAlt=0,laserMm=0;
-let cellTowers4G=0,cellTowers2G=0,wifiAPs=0;
+let cellTowers4G=0,cellTowers2G=0,wifiAPs=0,towerDistances={};
 let phase='idle',startTime=null,drillStart=null,totalDist=0,lastPos=null;
 let calGpsPos=null; // GPS position at calibration time — defines the "city"
 const LANDMARK_REF={active:false,lat:0,lon:0,name:"",id:""};
@@ -2081,9 +2081,9 @@ F.push(mkF('Sensor Fuse',function(pos,dt){const aM=Math.sqrt((accel.x-CAL.accelB
 // F17: Historical Match
 F.push(mkF('Hist Match',(pos,dt)=>{if(DATA.samples.length<20)return null;const cur=DATA.samples[DATA.samples.length-1];let bD=Infinity,bI=-1;const sr=DATA.samples.slice(0,-5);for(let i=Math.max(0,sr.length-50);i<sr.length-1;i++){const s=sr[i];const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;if(d<bD){bD=d;bI=i;}}if(bI>=0&&bI<sr.length-1){const m=sr[bI],n=sr[bI+1];return{lat:pos.lat+(n.lat-m.lat),lon:pos.lon+(n.lon-m.lon)};}return F[0].predict(pos,dt);}));
 // F18: Consensus Median
-F.push(mkF('Consensus',function(pos,dt){const preds=[];for(let i=0;i<Math.min(22,F.length);i++){if(F[i].name==='Consensus'||F[i].name==='Adaptive')continue;const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return null;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
+F.push(mkF('Consensus',function(pos,dt){const preds=[];for(let i=0;i<F.length;i++){const n=F[i].name;if(n==='Consensus'||n==='Adaptive'||n==='Auto Combo'||n.includes('disabled'))continue;if(F[i].errAvg>=999)continue;const p=F[i].predict({...pos},dt);if(p&&!isNaN(p.lat)&&!isNaN(p.lon))preds.push(p);}if(preds.length<3)return null;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
 // F19: Adaptive Best
-F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;i++){if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
+F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;const me=this;for(let i=0;i<F.length;i++){if(F[i]===me||F[i].name==='Consensus'||F[i].name.includes('disabled'))continue;if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
 // F20: Cell Tower
 F.push(mkF('Cell Tower',function(pos,dt){if(gpsSys)this.blindSec=0;else this.blindSec+=dt;const t=UTIN.predict();if(!t)return null;const vP=F[0].predict({...pos},dt);if(!vP)return{lat:t.lat,lon:t.lon};const tW=Math.min(0.8,Math.max(0,this.blindSec/60));return{lat:vP.lat*(1-tW)+t.lat*tW,lon:vP.lon*(1-tW)+t.lon*tW};}));
 // F21: Strapdown INS
@@ -2653,9 +2653,10 @@ const ANIMAL={
 
   // Predict during GPS denial
   predictDenied(pos,dt){
-    // Ant: always runs (step + mag heading)
+    const savedPrev=this.ant.prevSteps;
     const antP=this.ant.predict(pos,dt);
     if(antP)this.ant._lastPred=antP;
+    this.ant.prevSteps=savedPrev;
     this.pos=pos;
     return this.fuse();
   },
@@ -2754,11 +2755,11 @@ F.push(mkF('Bollinger',function(pos,dt){
 F.push(mkF('VWMA',function(pos,dt){
   if(!pos||DATA.samples.length<10)return null;
   const pts=DATA.samples.slice(-20);
-  // "Volume" = accel energy. High energy readings are more trustworthy for speed.
   let wSpd=0,wHdg=0,wTotal=0;
   pts.forEach(p=>{
-    const energy=Math.abs(Math.sqrt(p.ax**2+p.ay**2+p.az**2)-9.81);
-    const vol=Math.max(0.01,energy); // volume = accel energy
+    const ax=p.ax||0,ay=p.ay||0,az=p.az||9.81;
+    const energy=Math.abs(Math.sqrt(ax**2+ay**2+az**2)-9.81);
+    const vol=Math.max(0.01,energy);
     wSpd+=p.speed*vol;wHdg+=p.heading*vol;wTotal+=vol;
   });
   if(wTotal<0.01)return null;
@@ -3810,8 +3811,8 @@ const DOPPLER={
     const curr=this.history[n-1],prev=this.history[n-3];
     const dtSec=(curr.ts-prev.ts)/1000;
     if(dtSec<0.5)return;
-    const uLat=this.userLat||14;
-    const uLon=this.userLon||121;
+    const uLat=this.userLat||13.08;
+    const uLon=this.userLon||80.27;
     let vLatSum=0,vLonSum=0,weight=0;
     for(const ct of curr.towers){
       const pt=prev.towers.find(t=>Math.abs(t.lat-ct.lat)<0.001&&Math.abs(t.lon-ct.lon)<0.001);
@@ -4635,8 +4636,8 @@ function tick(){
     PUE.updateFromGPS(activePos,curSpd||bestSpeed());
     ROUTES.record(activePos.lat,activePos.lon);
     TERRAIN.record(activePos.lat,activePos.lon);
-    MANEUVER.record(gpsSys.lat,gpsSys.lon,dt);
-    TOWER_CAPTURE.capture(gpsSys.lat,gpsSys.lon,boardData);
+    MANEUVER.record(activePos.lat,activePos.lon,dt);
+    TOWER_CAPTURE.capture(activePos.lat,activePos.lon,boardData);
     // Map matching: snap to road every 5th tick
     if(MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
@@ -5354,7 +5355,8 @@ F.push(mkF('Three-Point Fix',function(pos,dt){
       const sinB=Math.sin(b.brg),cosB=Math.cos(b.brg);
       const det=sinA*cosB-sinB*cosA;
       if(Math.abs(det)<0.001)continue; // parallel lines
-      const t=(cosB*(b.lat-a.lat)+sinB*(b.lon-a.lon)*111320/111320)/det;
+      const cosLat=Math.cos(pos.lat*Math.PI/180)||0.97;
+      const t=(cosB*(b.lat-a.lat)+sinB*(b.lon-a.lon)*cosLat)/det;
       sLat+=(a.lat+cosA*t);sLon+=(a.lon+sinA*t);n++;
     }
   }
@@ -5376,14 +5378,12 @@ F.push(mkF('Pseudolite',function(pos,dt){
 // Sun Compass — bearing from sun position + time → heading
 F.push(mkF('Sun Compass',function(pos,dt){
   if(!pos||DATA.samples.length<3)return null;
-  // Solar azimuth from time of day (approximate)
   const now=new Date();const hour=now.getHours()+now.getMinutes()/60;
-  // Sun azimuth: rises ~90° (E), noon ~180° (S in N hemisphere), sets ~270° (W)
-  const solarAz=(hour-6)*15; // rough: 15°/hour from sunrise at 06:00
-  // If we have compass, compare to solar azimuth for heading correction
-  const compassErr=compass-(solarAz%360);
+  const solarAz=((hour-6)*15%360+360)%360; // normalize to 0-360
+  const compassErr=((compass-solarAz+540)%360)-180; // signed -180 to +180
   const correctedHdg=(compass-compassErr*0.1+360)%360;
-  const s=avgSpeed(5)||0;
+  const s=bestSpeed()||0;
+  if(s<0.1)return null;
   const h=correctedHdg*Math.PI/180;
   return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
 }));
@@ -5426,16 +5426,17 @@ F.push(mkF('Sferics',function(pos,dt){
 
 // Circle of Position — single bearing + distance = circle
 F.push(mkF('Circle of Position',function(pos,dt){
-  // From any single tower/landmark with known position + RSSI distance
-  if(!UTIN.lastTowers||!UTIN.lastTowers.length)return null;
-  const best=UTIN.lastTowers[0]; // strongest tower
+  if(!pos||!UTIN.lastTowers||!UTIN.lastTowers.length)return null;
+  const best=UTIN.lastTowers[0];
   const estDist=100*Math.pow(10,(best.signal+50)/-35);
-  // Position is somewhere on circle of radius estDist around tower
-  // Use heading to pick the point on the circle
-  const h=(compass+CAL.compassOff)*Math.PI/180;
+  // Bearing from tower to user's current estimated position
+  const dLon=(pos.lon-best.lon)*Math.cos(best.lat*Math.PI/180);
+  const dLat=pos.lat-best.lat;
+  const bearing=Math.atan2(dLon,dLat);
+  // Place user on circle at estimated distance along that bearing
   return{
-    lat:best.lat-(estDist*Math.cos(h))/111320,
-    lon:best.lon-(estDist*Math.sin(h))/(111320*Math.cos(best.lat*Math.PI/180))
+    lat:best.lat+(estDist*Math.cos(bearing))/111320,
+    lon:best.lon+(estDist*Math.sin(bearing))/(111320*Math.cos(best.lat*Math.PI/180))
   };
 }));
 
