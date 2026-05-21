@@ -2081,7 +2081,7 @@ F.push(mkF('Sensor Fuse',function(pos,dt){const aM=Math.sqrt((accel.x-CAL.accelB
 // F17: Historical Match
 F.push(mkF('Hist Match',(pos,dt)=>{if(DATA.samples.length<20)return null;const cur=DATA.samples[DATA.samples.length-1];let bD=Infinity,bI=-1;const sr=DATA.samples.slice(0,-5);for(let i=Math.max(0,sr.length-50);i<sr.length-1;i++){const s=sr[i];const d=Math.abs(s.ax-cur.ax)+Math.abs(s.ay-cur.ay)+Math.abs(s.gz-cur.gz)+Math.abs(s.compass-cur.compass)*0.01;if(d<bD){bD=d;bI=i;}}if(bI>=0&&bI<sr.length-1){const m=sr[bI],n=sr[bI+1];return{lat:pos.lat+(n.lat-m.lat),lon:pos.lon+(n.lon-m.lon)};}return F[0].predict(pos,dt);}));
 // F18: Consensus Median
-F.push(mkF('Consensus',(pos,dt)=>{const preds=[];for(let i=0;i<Math.min(22,F.length);i++){const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return null;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
+F.push(mkF('Consensus',function(pos,dt){const preds=[];for(let i=0;i<Math.min(22,F.length);i++){if(F[i].name==='Consensus'||F[i].name==='Adaptive')continue;const p=F[i].predict({...pos},dt);if(p)preds.push(p);}if(preds.length<3)return null;preds.sort((a,b)=>a.lat-b.lat);const mLat=preds[Math.floor(preds.length/2)].lat;preds.sort((a,b)=>a.lon-b.lon);return{lat:mLat,lon:preds[Math.floor(preds.length/2)].lon};}));
 // F19: Adaptive Best
 F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;i++){if(F[i].errAvg<mE){mE=F[i].errAvg;this._bi=i;}}return F[this._bi||0].predict({...pos},dt);}));
 // F20: Cell Tower
@@ -2828,14 +2828,19 @@ const COMBOS={
   POOL_SIZE:20,
   generation:0,
 
+  _isCombinable(i){
+    const n=F[i].name;
+    return !n.includes('disabled')&&n!=='Consensus'&&n!=='Adaptive'&&n!=='Auto Combo';
+  },
   init(){
     this.pool=[];
-    const n=F.length;
+    const eligible=[];
+    F.forEach((f,i)=>{if(this._isCombinable(i))eligible.push(i);});
     for(let c=0;c<this.POOL_SIZE;c++){
-      const numF=Math.random()<0.3?3:2; // 30% chance of 3-way combo
+      const numF=Math.random()<0.3?3:2;
       const indices=[];
       while(indices.length<numF){
-        const idx=Math.floor(Math.random()*Math.min(n,33)); // only combine base formulas (not other combos)
+        const idx=eligible[Math.floor(Math.random()*eligible.length)];
         if(!indices.includes(idx))indices.push(idx);
       }
       // Random weights that sum to 1
@@ -2890,10 +2895,11 @@ const COMBOS={
       // Normalize weights
       const total=child.weights.reduce((s,w)=>s+w,0);
       child.weights=child.weights.map(w=>w/total);
-      // 20% chance to swap one formula for a random one
       if(Math.random()<0.2){
         const swapIdx=Math.floor(Math.random()*child.indices.length);
-        child.indices[swapIdx]=Math.floor(Math.random()*Math.min(F.length,33));
+        const eligible=[];
+        F.forEach((f,i)=>{if(this._isCombinable(i))eligible.push(i);});
+        child.indices[swapIdx]=eligible[Math.floor(Math.random()*eligible.length)];
       }
       this.pool[n-1-i]=child;
     }
