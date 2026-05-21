@@ -2090,8 +2090,22 @@ F.push(mkF('Cell Tower',function(pos,dt){if(gpsSys)this.blindSec=0;else this.bli
 F.push(mkF('Strapdown INS',(pos,dt)=>{const p=INS.getLatLon();return p||pos;}));
 // F22: Hardware Magnetometer Heading + velocity (board has real magnetometer)
 F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return null;const s=avgSpeed(5);const h=Math.atan2(mag.y,mag.x);return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
-// F23: Barometric Altitude + Velocity (board has real BMP280)
-F.push(mkF('Baro+Vel',function(pos,dt){if(DATA.samples.length<3)return null;const v=velFromGPS(5);if(!v)return null;return{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt};}));
+// F23: Barometric Altitude + Velocity — altitude change modulates horizontal speed
+F.push(mkF('Baro+Vel',function(pos,dt){
+  if(!pos)return null;
+  const s=bestSpeed();
+  if(s<0.1)return null;
+  const h=bestHeading()*Math.PI/180;
+  // Barometric modulation: steeper climb/descent = slower horizontal progress
+  let vFactor=1;
+  if(pressure>0){
+    this._lastAlt=this._lastAlt||baroAlt;
+    const dAlt=baroAlt-this._lastAlt;
+    this._lastAlt=baroAlt;
+    vFactor=Math.max(0.5,Math.min(1.5,1-Math.abs(dAlt)*0.05));
+  }
+  return{lat:pos.lat+(s*vFactor*Math.cos(h)*dt)/111320,lon:pos.lon+(s*vFactor*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
 
 // F24: Real Cell Tower Triangulation — uses actual tower data from A7670C/SIM900
 // Unlike simulated UTIN, this parses real MCC/MNC/LAC/CellID from the board
@@ -2754,22 +2768,27 @@ F.push(mkF('VWMA',function(pos,dt){
 }));
 
 // F38: RSI Heading — heading consistency (straight vs turning)
-F.push(mkF('RSI Heading',(pos,dt)=>{
+F.push(mkF('RSI Heading',function(pos,dt){
   if(!pos||DATA.samples.length<10)return null;
   const hdgs=getHeadingHist().slice(-14);
   if(hdgs.length<5)return null;
-  // RSI: count up moves vs down moves in heading
   let gains=0,losses=0;
   for(let i=1;i<hdgs.length;i++){
     let d=hdgs[i]-hdgs[i-1];if(d>180)d-=360;if(d<-180)d+=360;
     if(d>0)gains+=d;else losses-=d;
   }
-  const rsi=gains/(gains+losses+0.01)*100; // 0-100
-  // RSI > 70: strongly turning right → trust gyro heading more
-  // RSI < 30: strongly turning left → trust gyro heading more
-  // RSI ~50: going straight → trust velocity continuation
+  const rsi=gains/(gains+losses+0.01)*100;
   const spd=sma(getSpeedHist(),10);
-  const hdg=rsi>30&&rsi<70?ema(getHeadingHist(),0.05):ema(getHeadingHist(),0.3);
+  // RSI near 50 = going straight → trust slow EMA of GPS heading
+  // RSI far from 50 = turning → blend in live gyro heading
+  let hdg;
+  if(rsi>30&&rsi<70){
+    hdg=ema(getHeadingHist(),0.05);
+  }else{
+    this._gh=(this._gh||compass)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;
+    const gpsHdg=ema(getHeadingHist(),0.3);
+    hdg=gpsHdg*0.4+this._gh*0.6;
+  }
   const h=hdg*Math.PI/180;
   return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
 }));
