@@ -2087,7 +2087,7 @@ F.push(mkF('Adaptive',function(pos,dt){let mE=Infinity;for(let i=0;i<F.length-1;
 // F20: Cell Tower
 F.push(mkF('Cell Tower',function(pos,dt){this.blindSec+=dt;const t=UTIN.predict();if(!t)return null;const vP=F[0].predict({...pos},dt);if(!vP)return{lat:t.lat,lon:t.lon};const tW=Math.min(0.8,Math.max(0,this.blindSec/60));return{lat:vP.lat*(1-tW)+t.lat*tW,lon:vP.lon*(1-tW)+t.lon*tW};}));
 // F21: Strapdown INS
-F.push(mkF('Strapdown INS',(pos,dt)=>{INS.update(accel,gyro,dt);const p=INS.getLatLon();return p||pos;}));
+F.push(mkF('Strapdown INS',(pos,dt)=>{const p=INS.getLatLon();return p||pos;}));
 // F22: Hardware Magnetometer Heading + velocity (board has real magnetometer)
 F.push(mkF('HW Mag+Vel',function(pos,dt){if(DATA.samples.length<3)return null;const s=avgSpeed(5);const h=Math.atan2(mag.y,mag.x);return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F23: Barometric Altitude + Velocity (board has real BMP280)
@@ -2188,6 +2188,13 @@ function bestFormulaIdx(){
   if(f.name.includes('disabled'))return;
   if(f.errAvg<bE){bE=f.errAvg;b=i;}
 });return b;}
+// Expose state for external layers (LAYER9 demo mode etc.)
+window._upin={
+  getPos(){return gpsSys||drPos||gpsTrue||null;},
+  getPhase(){return phase;},
+  getBest(){const bi=bestFormulaIdx();return{name:F[bi].name,errAvg:F[bi].errAvg};},
+  getFormulas(){return F;}
+};
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
   // Layer 1: use surveyed landmark as truth when active
@@ -2805,7 +2812,7 @@ F.push(mkF('MACD+Cell',(pos,dt)=>{
 
 // F43: INS+Bollinger — physics + mean reversion
 F.push(mkF('INS+Boll',(pos,dt)=>{
-  INS.update(accel,gyro,dt);const insP=INS.getLatLon();
+  const insP=INS.getLatLon();
   const bollP=F.find(f=>f.name==='Bollinger').predict(pos,dt);
   if(!insP&&!bollP)return null;if(!bollP)return insP||pos;if(!insP)return bollP;
   return{lat:insP.lat*0.5+bollP.lat*0.5,lon:insP.lon*0.5+bollP.lon*0.5};
@@ -4760,7 +4767,7 @@ function tick(){
     if(drPos){
       // ALL formulas predict independently — no forced blending
       PUE.updateSensors();
-      // CONE: update during denial (null GPS = cone grows)
+      INS.update(accel,gyro,dt);
       CONE.update(null,avgSpeed(5)||0,compass+CAL.compassOff,(gyro.z-CAL.gyroBias.z)*CAL.gyroScale,dt);
       // Detect maneuvers during denial — use library to correct heading
       const maneuver=MANEUVER.detectLive();

@@ -6,28 +6,17 @@
 'use strict';
 
 const LAYER9={
-  version:'L9.1.0',
+  version:'L9.2.0',
   enabled:false,
   running:false,
-  // Demo sequence: [phase, duration_seconds]
-  // GPS ON (calibrate) → JAM (test) → RESTORE (recalibrate) → JAM (longer) → ...
   sequence:[
-    ['GPS',120],   // 2 min GPS — calibrate, learn towers, capture positions
-    ['JAM',30],    // 30s denial — short test
-    ['GPS',30],    // 30s GPS — recalibrate from reality
-    ['JAM',60],    // 1 min denial — medium test
-    ['GPS',30],    // 30s GPS — recalibrate
-    ['JAM',120],   // 2 min denial — hard test
-    ['GPS',30],    // 30s GPS — recalibrate
-    ['JAM',180],   // 3 min denial — extreme test
-    ['GPS',30],    // 30s GPS — final recalibrate
-    ['JAM',300],   // 5 min denial — maximum test
-    ['GPS',60],    // 1 min GPS — final measurement
+    ['GPS',120],['JAM',30],['GPS',30],['JAM',60],['GPS',30],
+    ['JAM',120],['GPS',30],['JAM',180],['GPS',30],['JAM',300],['GPS',60],
   ],
   currentStep:0,
   stepStart:0,
   totalStart:0,
-  log:[],       // [{step, phase, duration, startLat, startLon, endLat, endLon, drift_m, bestFormula, bestErr}]
+  log:[],
   _interval:null,
 
   start(){
@@ -38,14 +27,14 @@ const LAYER9={
     this.log=[];
     this._startStep();
     this._interval=setInterval(()=>this._tick(),1000);
-    if(window.V)window.V.calibrate&&window.V.calibrate();
+    if(window.V&&window.V.calibrate)window.V.calibrate();
   },
 
   stop(){
     this.running=false;
     if(this._interval){clearInterval(this._interval);this._interval=null;}
-    // Restore GPS if jammed
-    if(typeof phase!=='undefined'&&(phase==='jammed'||phase==='spoofed')){
+    const ph=this._getPhase();
+    if(ph==='jammed'||ph==='spoofed'){
       if(window.V&&V.resurface)V.resurface();
     }
   },
@@ -57,18 +46,17 @@ const LAYER9={
     }
     const [mode, dur]=this.sequence[this.currentStep];
     this.stepStart=performance.now();
-    // Record start position
     const pos=this._getPos();
     this.log.push({
       step:this.currentStep, phase:mode, duration:dur,
       startLat:pos?pos.lat:0, startLon:pos?pos.lon:0,
       endLat:0, endLon:0, drift_m:0, bestFormula:'', bestErr:0
     });
-    // Execute phase change
     if(mode==='JAM'){
       if(window.V&&V.jam)V.jam();
     } else if(mode==='GPS'){
-      if(typeof phase!=='undefined'&&(phase==='jammed'||phase==='spoofed')){
+      const ph=this._getPhase();
+      if(ph==='jammed'||ph==='spoofed'){
         if(window.V&&V.resurface)V.resurface();
       }
     }
@@ -80,22 +68,18 @@ const LAYER9={
     const [mode, dur]=this.sequence[this.currentStep];
     const elapsed=(performance.now()-this.stepStart)/1000;
     this._updateUI();
-    // Step complete?
     if(elapsed>=dur){
-      // Record end position and drift
       const entry=this.log[this.log.length-1];
       const pos=this._getPos();
       if(pos){entry.endLat=pos.lat;entry.endLon=pos.lon;}
       if(entry.startLat&&entry.endLat){
         entry.drift_m=this._hav({lat:entry.startLat,lon:entry.startLon},{lat:entry.endLat,lon:entry.endLon});
       }
-      // Record best formula
-      if(typeof F!=='undefined'&&typeof bestFormulaIdx==='function'){
-        const bi=bestFormulaIdx();
-        entry.bestFormula=F[bi].name;
-        entry.bestErr=F[bi].errAvg;
+      const best=this._getBest();
+      if(best){
+        entry.bestFormula=best.name;
+        entry.bestErr=best.errAvg;
       }
-      // Next step
       this.currentStep++;
       this._startStep();
     }
@@ -104,17 +88,25 @@ const LAYER9={
   _finish(){
     this.running=false;
     if(this._interval){clearInterval(this._interval);this._interval=null;}
-    // Restore GPS
-    if(typeof phase!=='undefined'&&(phase==='jammed'||phase==='spoofed')){
+    const ph=this._getPhase();
+    if(ph==='jammed'||ph==='spoofed'){
       if(window.V&&V.resurface)V.resurface();
     }
     this._updateUI();
   },
 
   _getPos(){
-    if(typeof gpsSys!=='undefined'&&gpsSys)return gpsSys;
-    if(typeof drPos!=='undefined'&&drPos)return drPos;
-    if(typeof gpsTrue!=='undefined'&&gpsTrue)return gpsTrue;
+    if(window._upin)return window._upin.getPos();
+    return null;
+  },
+
+  _getPhase(){
+    if(window._upin)return window._upin.getPhase();
+    return 'idle';
+  },
+
+  _getBest(){
+    if(window._upin)return window._upin.getBest();
     return null;
   },
 
@@ -153,11 +145,9 @@ const LAYER9={
     h+=(mode==='JAM'?'GPS DENIED':'GPS ACTIVE')+' — '+remaining+'s left</span>';
     h+='<span style="font-size:7px;color:var(--td)">Step '+(this.currentStep+1)+'/'+totalSteps+' | '+Math.floor(totalElapsed/60)+':'+String(totalElapsed%60).padStart(2,'0')+'</span>';
     h+='</div>';
-    // Progress bar
     h+='<div style="height:4px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden">';
     h+='<div style="height:100%;width:'+Math.round(elapsed/dur*100)+'%;background:'+(mode==='JAM'?'var(--red)':'var(--green)')+';border-radius:2px"></div>';
     h+='</div>';
-    // Results so far
     if(this.log.length>1){
       const jamLogs=this.log.filter(l=>l.phase==='JAM'&&l.drift_m>0);
       if(jamLogs.length>0){
@@ -169,7 +159,6 @@ const LAYER9={
     el.innerHTML=h;
   },
 
-  // CSV trailer
   csvTrailer(){
     if(this.log.length===0)return '';
     let s='\n# LAYER 9: DEMO MODE RESULTS\n';
