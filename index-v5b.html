@@ -2044,8 +2044,8 @@ F.push(mkF('Accel+Comp',(pos,dt)=>{const aM=Math.sqrt((accel.x-CAL.accelBias.x)*
 F.push(mkF('Accel+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const aM=Math.sqrt((accel.x-CAL.accelBias.x)**2+(accel.y-CAL.accelBias.y)**2);const s=aM*CAL.accelScale*CAL.speedMult;const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 F.push(mkF('Gyro+Vel',function(pos,dt){if(DATA.samples.length<3)return null;this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const s=avgSpeed(5);const h=this._h*Math.PI/180;return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};}));
 // F6-F7: Step-based
-F.push(mkF('Step+Comp',function(pos,dt){const ns=stepCount-(this._ls||0);this._ls=stepCount;const h=(compass+CAL.compassOff)*Math.PI/180;if(ns>0){const d=ns*0.72;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}return drPredict(pos,dt);}));
-F.push(mkF('Step+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const ns=stepCount-(this._ls||0);this._ls=stepCount;if(ns>0){const d=ns*0.72;const h=this._h*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}return drPredict(pos,dt);}));
+F.push(mkF('Step+Comp',function(pos,dt){const ns=stepCount-(this._ls||0);this._ls=stepCount;const h=(compass+CAL.compassOff)*Math.PI/180;if(ns>0){const sl=ANIMAL.ant.calibrated?ANIMAL.ant.stepLen:0.72;const d=ns*sl;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}return drPredict(pos,dt);}));
+F.push(mkF('Step+Gyro',function(pos,dt){this._h=(this._h||0)+(gyro.z-CAL.gyroBias.z)*CAL.gyroScale*dt;const ns=stepCount-(this._ls||0);this._ls=stepCount;if(ns>0){const sl=ANIMAL.ant.calibrated?ANIMAL.ant.stepLen:0.72;const d=ns*sl;const h=this._h*Math.PI/180;return{lat:pos.lat+(d*Math.cos(h))/111320,lon:pos.lon+(d*Math.sin(h))/(111320*Math.cos(pos.lat*Math.PI/180))};}return drPredict(pos,dt);}));
 // F8: Kalman
 F.push(mkF('Kalman',function(pos,dt){if(DATA.samples.length<3)return null;const v=velFromGPS(3);if(!v)return null;this._vL=(this._vL||0)*0.1+v.vLat*0.9;this._vO=(this._vO||0)*0.1+v.vLon*0.9;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
 // F9: Double Integration (raw — intentionally bad, for comparison)
@@ -2623,6 +2623,7 @@ const ANIMAL={
   // Record all data during GPS-available tick
   recordAll(lat,lon,accel,dt){
     this.ant.detectStep(accel.x,accel.y,accel.z);
+    stepCount=this.ant.steps;
     this.pigeon.record(lat,lon,mag.x,mag.y,mag.z);
     this.salmon.record(lat,lon,cellTowers4G,cellTowers2G);
     if(boardData&&boardData.wifi)this.whale.record(lat,lon,boardData.wifi.list||boardData.wifi.data);
@@ -3758,10 +3759,13 @@ const DOPPLER={
   lastVelocity:null,  // {vLat, vLon, speed, heading}
   estSpeed:0,
   estHeading:0,
+  userLat:0,userLon:0,
 
   // Record a tower scan
   record(towers,ts){
     if(!towers||!towers.length)return;
+    const pos=drPos||gpsSys||gpsTrue;
+    if(pos&&pos.lat>1){this.userLat=pos.lat;this.userLon=pos.lon;}
     this.history.push({ts:ts||performance.now(),towers:towers.map(t=>({lat:t.lat,lon:t.lon,rssi:t.signal,cid:t.cid||0}))});
     if(this.history.length>this.maxHistory)this.history.shift();
     if(this.history.length>=3)this.estimateVelocity();
@@ -3773,25 +3777,20 @@ const DOPPLER={
     const curr=this.history[n-1],prev=this.history[n-3];
     const dtSec=(curr.ts-prev.ts)/1000;
     if(dtSec<0.5)return;
-    // Match towers between scans by lat/lon proximity
+    const uLat=this.userLat||14;
+    const uLon=this.userLon||121;
     let vLatSum=0,vLonSum=0,weight=0;
     for(const ct of curr.towers){
-      // Find same tower in previous scan
       const pt=prev.towers.find(t=>Math.abs(t.lat-ct.lat)<0.001&&Math.abs(t.lon-ct.lon)<0.001);
       if(!pt)continue;
-      const dRSSI=(ct.rssi-pt.rssi)/dtSec; // dBm/sec
-      if(Math.abs(dRSSI)<0.1)continue; // noise floor
-      // Path loss model: RSSI = -50 - 35*log10(d/100)
-      // d(RSSI)/dt ≈ -35/(d*ln10) * d(dist)/dt
-      // → d(dist)/dt ≈ dRSSI * d * ln(10) / -35
-      const estDist=100*Math.pow(10,(ct.rssi+50)/-35); // current distance
-      const radialSpeed=dRSSI*estDist*Math.LN10/-35; // m/s toward tower
-      // Radial speed → project onto lat/lon axes using tower bearing
-      const bearing=Math.atan2(ct.lon-13.08,ct.lat-13.08); // approx bearing to tower
-      // Negative radialSpeed = approaching; positive = receding
+      const dRSSI=(ct.rssi-pt.rssi)/dtSec;
+      if(Math.abs(dRSSI)<0.1)continue;
+      const estDist=100*Math.pow(10,(ct.rssi+50)/-35);
+      const radialSpeed=dRSSI*estDist*Math.LN10/-35;
+      const bearing=Math.atan2(ct.lon-uLon,ct.lat-uLat);
       const vLat=-radialSpeed*Math.cos(bearing)/111320;
-      const vLon=-radialSpeed*Math.sin(bearing)/(111320*Math.cos(13.08*Math.PI/180));
-      const w=Math.abs(dRSSI); // weight by RSSI change magnitude
+      const vLon=-radialSpeed*Math.sin(bearing)/(111320*Math.cos(uLat*Math.PI/180));
+      const w=Math.abs(dRSSI);
       vLatSum+=vLat*w;vLonSum+=vLon*w;weight+=w;
     }
     if(weight>0){
@@ -4783,6 +4782,7 @@ function tick(){
       } // Track heading, speed, stops for smart shrinking
       FISH.tick(dt);
       ANIMAL.ant.detectStep(accel.x,accel.y,accel.z);
+      stepCount=ANIMAL.ant.steps;
       ANIMAL.predictDenied(drPos,dt);
       F.forEach((f,i)=>{
         if(f.pos){
