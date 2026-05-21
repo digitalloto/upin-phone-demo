@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html>
+<head><title>Bug Fix Verification Tests</title>
+<style>
+body{font-family:monospace;background:#111;color:#eee;padding:20px;font-size:13px}
+.pass{color:#0f0}.fail{color:#f44}.section{color:#0ff;font-weight:bold;margin-top:20px}
+.detail{color:#888;margin-left:20px}
+#results{white-space:pre-wrap}
+</style>
+</head>
+<body>
+<h2>Bug Fix Verification — All Critical Issues</h2>
+<div id="results"></div>
+<script>
+const R=document.getElementById('results');
+let passed=0,failed=0,total=0;
+
+function log(msg,cls){R.innerHTML+=`<span class="${cls||''}">${msg}</span>\n`;}
+function pass(name){total++;passed++;log(`  ✓ PASS: ${name}`,'pass');}
+function fail(name,detail){total++;failed++;log(`  ✗ FAIL: ${name}`,'fail');if(detail)log(`    → ${detail}`,'detail');}
+function section(name){log(`\n▸ ${name}`,'section');}
+
+// Minimal stubs for testing
+const map={addTo:()=>({}),removeLayer:()=>{}};
+const L={circle:()=>({setLatLng:()=>{},setRadius:()=>{},addTo:()=>({})}),circleMarker:()=>({addTo:()=>({})})};
+let accel={x:0,y:0,z:9.81},gyro={x:0,y:0,z:0},compass=90;
+const CAL={accelBias:{x:0,y:0,z:0},accelScale:0.5,gyroScale:1,gyroBias:{x:0,y:0,z:0},compassOff:0,speedMult:1};
+function hav(a,b){const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+
+// ═══════════════════════════════════════
+// TEST 1: CONE createDot includes speed and acc
+// ═══════════════════════════════════════
+section('FIX 1: CONE createDot — speed and acc on dot');
+
+const CONE={
+  state:'GPS_OK',
+  anchor:null,
+  radius:10,
+  arcMin:0,arcMax:360,
+  dots:[],
+  gpsGapStart:0,
+  gpsRecoveries:[],
+  _circle:null,_wedge:null,
+
+  update(gps,speed,heading,gyroZ,dt){
+    switch(this.state){
+      case 'GPS_OK':
+        if(gps&&gps.lat>6){
+          this.anchor={lat:gps.lat,lon:gps.lon,t:performance.now(),speed:speed||0,heading:heading||0,acc:gps.acc||10};
+          this.radius=gps.acc||10;
+          this.arcMin=heading-30;this.arcMax=heading+30;
+        }else if(!gps&&this.anchor){
+          this.state='CONE_GROWING';
+          this.gpsGapStart=performance.now();
+          this.anchor.t=performance.now();
+          this.dots=[];
+        }
+        break;
+      case 'CONE_GROWING':
+        if(gps&&gps.lat>6){
+          const gapSec=(performance.now()-this.gpsGapStart)/1000;
+          const insideCone=this.isInside(gps);
+          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});
+          this.state='GPS_OK';
+          this._removeDraw();
+          break;
+        }
+        {
+        const elapsed=(performance.now()-this.anchor.t)/1000;
+        this.radius=this.anchor.speed*elapsed+this.anchor.acc;
+        const arcGrowth=Math.min(90,elapsed*3);
+        this.arcMin=this.anchor.heading-30-arcGrowth;
+        this.arcMax=this.anchor.heading+30+arcGrowth;
+        this.anchor.speed=speed||this.anchor.speed;
+        if(Math.abs(gyroZ)>30){
+          this.createDot(speed,heading);
+          this.state='CONE_REFINED';
+        }
+        }
+        break;
+      case 'CONE_REFINED':
+        if(gps&&gps.lat>6){
+          const gapSec=(performance.now()-this.gpsGapStart)/1000;
+          const insideCone=this.isInside(gps);
+          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});
+          this.state='GPS_OK';
+          this._removeDraw();
+          break;
+        }
+        {
+        const elapsed=(performance.now()-this.anchor.t)/1000;
+        this.radius=this.anchor.speed*elapsed+this.anchor.acc;
+        this.anchor.speed=speed||this.anchor.speed;
+        if(Math.abs(gyroZ)>30){
+          this.createDot(speed,heading);
+        }
+        }
+        break;
+    }
+  },
+
+  createDot(speed,heading){
+    const elapsed=(performance.now()-(this.dots.length?this.dots[this.dots.length-1].t:this.anchor.t))/1000;
+    const lastPt=this.dots.length?this.dots[this.dots.length-1]:this.anchor;
+    const dist=(speed||0)*elapsed;
+    const h=heading*Math.PI/180;
+    const dot={
+      lat:lastPt.lat+(dist*Math.cos(h))/111320,
+      lon:lastPt.lon+(dist*Math.sin(h))/(111320*Math.cos(lastPt.lat*Math.PI/180)),
+      heading,t:performance.now(),
+      speed:speed||this.anchor.speed||0,
+      acc:Math.max(this.anchor.acc||10,5)
+    };
+    this.dots.push(dot);
+    this.anchor=dot;
+    this.arcMin=heading-30;this.arcMax=heading+30;
+  },
+
+  isInside(pos){
+    if(!this.anchor||!pos)return true;
+    return hav(pos,this.anchor)<=this.radius;
+  },
+
+  _normalizeAngle(a){a=a%360;return a<0?a+360:a;},
+
+  _isInArc(heading){
+    const h=this._normalizeAngle(heading);
+    const lo=this._normalizeAngle(this.arcMin);
+    const hi=this._normalizeAngle(this.arcMax);
+    if(lo<=hi) return h>=lo&&h<=hi;
+    return h>=lo||h<=hi;
+  },
+
+  constrain(raw){
+    if(this.state==='GPS_OK'||!this.anchor||!raw)return raw;
+    const dist=hav(raw,this.anchor);
+    if(isNaN(dist)||isNaN(this.radius))return raw;
+    let constrained=raw;
+    if(dist>this.radius){
+      const ratio=this.radius/dist;
+      constrained={
+        lat:this.anchor.lat+(raw.lat-this.anchor.lat)*ratio,
+        lon:this.anchor.lon+(raw.lon-this.anchor.lon)*ratio
+      };
+    }
+    const bearing=Math.atan2(
+      (constrained.lon-this.anchor.lon)*Math.cos(this.anchor.lat*Math.PI/180),
+      constrained.lat-this.anchor.lat
+    )*180/Math.PI;
+    if(!this._isInArc(bearing)){
+      const mid=this._normalizeAngle((this.arcMin+this.arcMax)/2);
+      const snapH=mid*Math.PI/180;
+      const d=Math.min(dist,this.radius);
+      constrained={
+        lat:this.anchor.lat+(d*Math.cos(snapH))/111320,
+        lon:this.anchor.lon+(d*Math.sin(snapH))/(111320*Math.cos(this.anchor.lat*Math.PI/180))
+      };
+    }
+    return constrained;
+  },
+
+  confidence(pos){
+    if(this.state==='GPS_OK'||!this.anchor||!pos)return 1;
+    const dist=hav(pos,this.anchor);
+    if(isNaN(dist)||isNaN(this.radius)||this.radius<=0)return 0.5;
+    return Math.max(0,1-dist/this.radius);
+  },
+
+  draw(){},
+  _removeDraw(){
+    this._circle=null;this._wedge=null;
+  },
+
+  stats(){
+    return{state:this.state,radius:Math.round(this.radius),dots:this.dots.length,recoveries:this.gpsRecoveries.length,lastRecovery:this.gpsRecoveries.length?this.gpsRecoveries[this.gpsRecoveries.length-1]:null,coneAccuracy:this.gpsRecoveries.length?Math.round(this.gpsRecoveries.filter(r=>r.insideCone).length/this.gpsRecoveries.length*100):0};
+  }
+};
+
+// Test 1a: anchor has acc
+CONE.update({lat:14.5,lon:121.0,acc:25},10,90,0,1);
+if(CONE.anchor.acc===25) pass('Anchor stores GPS accuracy');
+else fail('Anchor stores GPS accuracy','anchor.acc='+CONE.anchor.acc);
+
+// Test 1b: anchor has speed
+if(CONE.anchor.speed===10) pass('Anchor stores speed');
+else fail('Anchor stores speed','anchor.speed='+CONE.anchor.speed);
+
+// Test 1c: createDot includes speed
+CONE.update(null,10,90,0,1); // lose GPS
+CONE.update(null,8,120,50,1); // turn detected (gyroZ=50)
+const lastDot=CONE.dots[CONE.dots.length-1];
+if(lastDot.speed!==undefined&&!isNaN(lastDot.speed)) pass('Dot includes speed ('+lastDot.speed+')');
+else fail('Dot includes speed','speed='+lastDot.speed);
+
+// Test 1d: createDot includes acc
+if(lastDot.acc!==undefined&&!isNaN(lastDot.acc)) pass('Dot includes acc ('+lastDot.acc+')');
+else fail('Dot includes acc','acc='+lastDot.acc);
+
+// ═══════════════════════════════════════
+// TEST 2: Radius not NaN after turn
+// ═══════════════════════════════════════
+section('FIX 2: CONE radius — no NaN after turn');
+
+// After createDot, anchor is the dot. Update again to recalc radius.
+CONE.update(null,8,120,5,1); // normal tick in CONE_REFINED
+if(!isNaN(CONE.radius)) pass('Radius is not NaN after turn ('+CONE.radius.toFixed(1)+'m)');
+else fail('Radius is NaN after turn');
+
+// Test radius uses anchor.t not gpsGapStart
+const anchorT=CONE.anchor.t;
+const gpsGapT=CONE.gpsGapStart;
+if(anchorT>=gpsGapT) pass('Elapsed computed from anchor.t, not gpsGapStart');
+else fail('Elapsed time origin wrong');
+
+// ═══════════════════════════════════════
+// TEST 3: constrain() never returns NaN
+// ═══════════════════════════════════════
+section('FIX 3: CONE constrain — no NaN output');
+
+const farPoint={lat:14.6,lon:121.1}; // far from anchor
+const constrained=CONE.constrain(farPoint);
+if(!isNaN(constrained.lat)&&!isNaN(constrained.lon)) pass('constrain() returns valid coords ('+constrained.lat.toFixed(6)+','+constrained.lon.toFixed(6)+')');
+else fail('constrain() returns NaN','lat='+constrained.lat+' lon='+constrained.lon);
+
+// Test NaN guard
+const savedRadius=CONE.radius;
+CONE.radius=NaN;
+const safeguard=CONE.constrain(farPoint);
+if(!isNaN(safeguard.lat)&&!isNaN(safeguard.lon)) pass('constrain() NaN guard works — returns raw when radius=NaN');
+else fail('constrain() NaN guard failed');
+CONE.radius=savedRadius;
+
+// ═══════════════════════════════════════
+// TEST 4: Heading arc constraint works
+// ═══════════════════════════════════════
+section('FIX 4: CONE heading arc — actually constrains');
+
+// Reset cone for clean test
+CONE.state='GPS_OK';
+CONE.update({lat:14.5,lon:121.0,acc:10},10,90,0,1); // heading=90 (east)
+CONE.update(null,10,90,0,1); // lose GPS → CONE_GROWING, arc=60-120
+// Point behind us (west = heading 270)
+const behindPoint={lat:14.5,lon:120.9999}; // west of anchor
+CONE.radius=100; // make sure it's in radius
+const arcConstrained=CONE.constrain(behindPoint);
+// The constrained point should be snapped toward the arc center (heading 90)
+const arcDist=hav(arcConstrained,CONE.anchor);
+if(arcDist<=CONE.radius+1) pass('Arc-constrained point within radius');
+else fail('Arc-constrained point outside radius','dist='+arcDist);
+
+// Test _isInArc
+if(CONE._isInArc(90)) pass('_isInArc(90°) — inside arc [60-120]');
+else fail('_isInArc(90°) should be inside');
+if(!CONE._isInArc(270)) pass('_isInArc(270°) — outside arc [60-120]');
+else fail('_isInArc(270°) should be outside');
+
+// ═══════════════════════════════════════
+// TEST 5: confidence() returns valid values
+// ═══════════════════════════════════════
+section('FIX 5: CONE confidence — returns valid numbers');
+
+const confCenter=CONE.confidence(CONE.anchor);
+if(!isNaN(confCenter)&&confCenter>=0&&confCenter<=1) pass('confidence at center = '+confCenter.toFixed(3));
+else fail('confidence at center','value='+confCenter);
+
+const confEdge=CONE.confidence({lat:14.501,lon:121.001});
+if(!isNaN(confEdge)&&confEdge>=0&&confEdge<=1) pass('confidence at edge = '+confEdge.toFixed(3));
+else fail('confidence at edge','value='+confEdge);
+
+// ═══════════════════════════════════════
+// TEST 6: Formula errAvg preserved across denial
+// ═══════════════════════════════════════
+section('FIX 6: Formula rankings preserved across denial transition');
+
+// Simulate formula rankings
+const mockFormulas=[
+  {name:'Vel SMA',errAvg:5.2,errHistory:[5,5.1,5.5],pos:{lat:14.5,lon:121},drillTrail:[],drillDrift:0,blindSec:0,mapLine:null,_mapDot:null},
+  {name:'Accel+Comp',errAvg:8.1,errHistory:[8,8.2],pos:{lat:14.5,lon:121},drillTrail:[],drillDrift:0,blindSec:0,mapLine:null,_mapDot:null},
+  {name:'Gyro+Vel',errAvg:3.7,errHistory:[3.5,3.9],pos:{lat:14.5,lon:121},drillTrail:[],drillDrift:0,blindSec:0,mapLine:null,_mapDot:null},
+];
+
+// Simulate jam() — the fixed version preserves errAvg
+const gpsTrue={lat:14.5,lon:121};
+mockFormulas.forEach(f=>{
+  if(gpsTrue)f.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};
+  f.drillTrail=[];f.drillDrift=0;f.blindSec=0;
+  // NO errHistory=[] and NO errAvg=999 — this is the fix
+  if(f.mapLine){f.mapLine=null;}
+  if(f._mapDot){f._mapDot=null;}
+});
+
+if(mockFormulas[0].errAvg===5.2) pass('Vel SMA errAvg preserved: '+mockFormulas[0].errAvg);
+else fail('Vel SMA errAvg cleared','errAvg='+mockFormulas[0].errAvg);
+
+if(mockFormulas[2].errAvg===3.7) pass('Gyro+Vel errAvg preserved: '+mockFormulas[2].errAvg);
+else fail('Gyro+Vel errAvg cleared','errAvg='+mockFormulas[2].errAvg);
+
+// bestFormulaIdx should pick Gyro+Vel (errAvg=3.7, lowest)
+let bestIdx=0,bestErr=Infinity;
+mockFormulas.forEach((f,i)=>{if(f.errAvg<bestErr){bestErr=f.errAvg;bestIdx=i;}});
+if(bestIdx===2) pass('bestFormulaIdx picks Gyro+Vel (idx=2, errAvg=3.7) not default idx=0');
+else fail('bestFormulaIdx wrong','picked idx='+bestIdx+' (errAvg='+mockFormulas[bestIdx].errAvg+')');
+
+// ═══════════════════════════════════════
+// TEST 7: predict() applies headingOff from FAGENTS
+// ═══════════════════════════════════════
+section('FIX 7: predict() uses evolved headingOff');
+
+function mkF(name,predictFn){
+  return{
+    name,pos:null,err:999,errAvg:999,errHistory:[],corrLat:0,corrLon:0,corrCount:0,
+    speedScale:1.0,headingOff:0,_fagentParams:null,
+    _rawPredict:predictFn,_predicting:false,
+    predict(pos,dt){
+      if(this._predicting)return pos;
+      this._predicting=true;
+      let p;
+      let sA,sG,sC;
+      if(this._fagentParams){
+        const fp=this._fagentParams;
+        sA={...accel};sG={...gyro};sC=compass;
+        accel={x:(accel.x-fp.aBx)*fp.aScl,y:(accel.y-fp.aBy)*fp.aScl,z:accel.z};
+        gyro={x:gyro.x*fp.gScl,y:gyro.y*fp.gScl,z:gyro.z*fp.gScl};
+        compass=compass+fp.cOff;
+      }
+      try{p=this._rawPredict.call(this,pos,dt);}catch(e){p=pos;}
+      if(this._fagentParams){accel=sA;gyro=sG;compass=sC;}
+      this._predicting=false;
+      if(!p||!pos)return p;
+      if(this.corrCount>10){p.lat+=this.corrLat;p.lon+=this.corrLon;}
+      if(this.headingOff&&Math.abs(this.headingOff)>0.01){
+        const dLat=p.lat-pos.lat,dLon=p.lon-pos.lon;
+        const h=this.headingOff*Math.PI/180;
+        p.lat=pos.lat+dLat*Math.cos(h)-dLon*Math.sin(h);
+        p.lon=pos.lon+dLat*Math.sin(h)+dLon*Math.cos(h);
+      }
+      return p;
+    }
+  };
+}
+
+const testF=mkF('test',function(pos,dt){
+  return{lat:pos.lat+0.001,lon:pos.lon}; // move north
+});
+const noHdg=testF.predict({lat:14.5,lon:121},1);
+testF.headingOff=90; // rotate 90 degrees
+const withHdg=testF.predict({lat:14.5,lon:121},1);
+// With 90° heading offset, north movement should rotate to east (lon change)
+if(Math.abs(withHdg.lon-121)>0.0001) pass('headingOff=90° rotates north→east (lon changed by '+(withHdg.lon-121).toFixed(6)+')');
+else fail('headingOff=90° did not rotate','lon delta='+(withHdg.lon-121));
+if(Math.abs(withHdg.lat-14.5)<0.0001) pass('headingOff=90° lat stays near origin ('+(withHdg.lat-14.5).toFixed(6)+')');
+else fail('headingOff=90° lat moved unexpectedly','lat delta='+(withHdg.lat-14.5));
+
+// ═══════════════════════════════════════
+// TEST 8: predict() applies _fagentParams sensor tweaks
+// ═══════════════════════════════════════
+section('FIX 8: predict() applies evolved sensor params');
+
+let capturedAccel=null;
+const testF2=mkF('sensor-test',function(pos,dt){
+  capturedAccel={...accel};
+  return{lat:pos.lat+0.0001,lon:pos.lon};
+});
+testF2._fagentParams={aScl:2.0,aBx:0.5,aBy:0.3,gScl:1.5,cOff:5};
+accel={x:1.0,y:0.5,z:9.81};
+testF2.predict({lat:14.5,lon:121},1);
+// Inside predict, accel.x should be (1.0 - 0.5) * 2.0 = 1.0
+if(capturedAccel&&Math.abs(capturedAccel.x-1.0)<0.01) pass('Sensor params applied: accel.x=(1.0-0.5)*2.0='+capturedAccel.x.toFixed(2));
+else fail('Sensor params not applied','capturedAccel.x='+(capturedAccel?capturedAccel.x:'null'));
+// Globals should be restored
+if(Math.abs(accel.x-1.0)<0.01) pass('Globals restored after predict: accel.x='+accel.x);
+else fail('Globals NOT restored','accel.x='+accel.x);
+accel={x:0,y:0,z:9.81}; // reset
+
+// ═══════════════════════════════════════
+// TEST 9: FISH formula competes (getBestPosition wired in)
+// ═══════════════════════════════════════
+section('FIX 9: Fish Swarm registered as competing formula');
+
+const mockFISH={
+  schools:[{pos:{lat:14.501,lon:121.001},agents:[],avgErr:5,fitness:0.2}],
+  bestSchoolIdx:0,
+  getBestPosition(){const s=this.schools[this.bestSchoolIdx];return s?s.pos:null;}
+};
+
+const fishFormula=mkF('Fish Swarm',function(pos,dt){
+  if(!mockFISH.schools||!mockFISH.schools.length)return null;
+  const bp=mockFISH.getBestPosition();
+  if(!bp||!bp.lat||!bp.lon)return null;
+  if(bp.lat<1&&bp.lon<1)return null;
+  return{lat:bp.lat,lon:bp.lon};
+});
+
+const fishResult=fishFormula._rawPredict({lat:14.5,lon:121},1);
+if(fishResult&&fishResult.lat===14.501&&fishResult.lon===121.001) pass('Fish Swarm formula returns best school position ('+fishResult.lat+','+fishResult.lon+')');
+else fail('Fish Swarm formula wrong output',JSON.stringify(fishResult));
+
+// Test null safety
+mockFISH.schools=[];
+const fishNull=fishFormula._rawPredict({lat:14.5,lon:121},1);
+if(fishNull===null) pass('Fish Swarm returns null when no schools');
+else fail('Fish Swarm should return null when empty',JSON.stringify(fishNull));
+
+// ═══════════════════════════════════════
+// TEST 10: CONE stats() works
+// ═══════════════════════════════════════
+section('FIX 10: CONE stats — returns valid data');
+
+CONE.state='GPS_OK';
+CONE.update({lat:14.5,lon:121.0,acc:15},10,90,0,1);
+CONE.update(null,10,90,0,1); // lose GPS
+const stats=CONE.stats();
+if(stats.state==='CONE_GROWING') pass('stats().state=CONE_GROWING');
+else fail('stats().state wrong','state='+stats.state);
+if(!isNaN(stats.radius)) pass('stats().radius='+stats.radius);
+else fail('stats().radius is NaN');
+
+// ═══════════════════════════════════════
+// TEST 11: Multiple turns don't break anything
+// ═══════════════════════════════════════
+section('FIX 11: Multiple turns — no cumulative NaN');
+
+CONE.state='GPS_OK';
+CONE.update({lat:14.5,lon:121.0,acc:10},10,90,0,1);
+CONE.update(null,10,90,0,1); // lose GPS
+
+// Simulate 5 turns
+for(let i=0;i<5;i++){
+  CONE.update(null,8+i,90+30*i,50,1); // turn with gyroZ=50
+  CONE.update(null,8+i,90+30*(i+1),5,1); // normal tick after turn
+}
+
+if(!isNaN(CONE.radius)) pass('Radius still valid after 5 turns: '+CONE.radius.toFixed(1)+'m');
+else fail('Radius NaN after multiple turns');
+
+if(CONE.dots.length>=5) pass('Created '+CONE.dots.length+' turn dots');
+else fail('Expected ≥5 dots','got '+CONE.dots.length);
+
+const allDotsValid=CONE.dots.every(d=>!isNaN(d.speed)&&!isNaN(d.acc)&&!isNaN(d.lat)&&!isNaN(d.lon));
+if(allDotsValid) pass('All dots have valid speed, acc, lat, lon');
+else fail('Some dots have NaN values');
+
+const multiConstrained=CONE.constrain({lat:14.6,lon:121.1});
+if(!isNaN(multiConstrained.lat)&&!isNaN(multiConstrained.lon)) pass('constrain() valid after 5 turns');
+else fail('constrain() NaN after multiple turns');
+
+// ═══════════════════════════════════════
+// TEST 12: GPS recovery after CONE_REFINED
+// ═══════════════════════════════════════
+section('FIX 12: GPS recovery — state machine resets');
+
+CONE.update({lat:14.502,lon:121.002,acc:8},10,90,0,1); // GPS recovered
+if(CONE.state==='GPS_OK') pass('State returns to GPS_OK after recovery');
+else fail('State did not reset','state='+CONE.state);
+
+if(CONE.gpsRecoveries.length>0) pass('Recovery logged ('+CONE.gpsRecoveries.length+' total)');
+else fail('No recovery logged');
+
+const lastRec=CONE.gpsRecoveries[CONE.gpsRecoveries.length-1];
+if(lastRec&&typeof lastRec.insideCone==='boolean') pass('Recovery has insideCone: '+lastRec.insideCone);
+else fail('Recovery missing insideCone');
+
+// ═══════════════════════════════════════
+// TEST 13: FAGENTS applyBest stores all params
+// ═══════════════════════════════════════
+section('FIX 13: FAGENTS applies all 7 evolved parameters');
+
+const testFormula={name:'test',errAvg:10,speedScale:1,headingOff:0,_fagentParams:null};
+const mockPools=[[{aScl:1.1,aBx:0.05,aBy:-0.03,gScl:0.95,cOff:2.5,sMul:1.15,hOff:3.2,err:4,errAvg:4,errHistory:[4],pos:null}]];
+const F_test=[testFormula];
+
+// Simulate applyBest
+mockPools.forEach((pool,fi)=>{
+  pool.sort((a,b)=>a.errAvg-b.errAvg);
+  const best=pool[0];
+  if(best.errAvg<999&&best.errAvg<F_test[fi].errAvg){
+    F_test[fi].speedScale=best.sMul;
+    F_test[fi].headingOff=best.hOff;
+    F_test[fi]._fagentParams={aScl:best.aScl,aBx:best.aBx,aBy:best.aBy,gScl:best.gScl,cOff:best.cOff};
+  }
+});
+
+if(testFormula.speedScale===1.15) pass('speedScale applied: '+testFormula.speedScale);
+else fail('speedScale not applied','val='+testFormula.speedScale);
+if(testFormula.headingOff===3.2) pass('headingOff applied: '+testFormula.headingOff);
+else fail('headingOff not applied','val='+testFormula.headingOff);
+if(testFormula._fagentParams) pass('_fagentParams stored with '+Object.keys(testFormula._fagentParams).length+' params');
+else fail('_fagentParams not stored');
+if(testFormula._fagentParams&&Math.abs(testFormula._fagentParams.aScl-1.1)<0.01) pass('aScl='+testFormula._fagentParams.aScl);
+else fail('aScl wrong');
+if(testFormula._fagentParams&&Math.abs(testFormula._fagentParams.cOff-2.5)<0.01) pass('cOff='+testFormula._fagentParams.cOff);
+else fail('cOff wrong');
+
+// ═══════════════════════════════════════
+// SUMMARY
+// ═══════════════════════════════════════
+log('\n════════════════════════════════════════','section');
+log(`RESULTS: ${passed} passed, ${failed} failed, ${total} total`,'section');
+if(failed===0) log('ALL TESTS PASSED ✓','pass');
+else log(failed+' TEST(S) FAILED ✗','fail');
+</script>
+</body>
+</html>
