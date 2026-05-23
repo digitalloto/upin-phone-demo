@@ -2014,11 +2014,56 @@ function mkF(name,predictFn){
   };
 }
 
+// SPEED_LEARN: learns accel-energy → speed mapping during GPS recording,
+// then estimates speed from accel alone during denial.
+const SPEED_LEARN={
+  history:[],    // [{energy, speed}] — learned during recording
+  maxHist:300,
+  lastSpeed:0,   // last known GPS speed at denial start
+  accelBuf:[],   // recent accel energies for smoothing
+
+  record(accelX,accelY,accelZ,gpsSpeed){
+    const energy=Math.abs(Math.sqrt(accelX**2+accelY**2+accelZ**2)-9.81);
+    this.history.push({energy,speed:gpsSpeed});
+    if(this.history.length>this.maxHist)this.history.shift();
+    this.lastSpeed=gpsSpeed;
+  },
+
+  estimate(){
+    if(this.history.length<10)return this.lastSpeed;
+    const ax=accel.x-(CAL?CAL.accelBias.x:0);
+    const ay=accel.y-(CAL?CAL.accelBias.y:0);
+    const az=accel.z-(CAL?CAL.accelBias.z:0);
+    const curEnergy=Math.abs(Math.sqrt(ax**2+ay**2+az**2)-9.81);
+    // Smooth over last 5 ticks
+    this.accelBuf.push(curEnergy);
+    if(this.accelBuf.length>5)this.accelBuf.shift();
+    const smoothEnergy=this.accelBuf.reduce((s,v)=>s+v,0)/this.accelBuf.length;
+    // Find closest energy match in history (k=5 nearest neighbors)
+    const sorted=this.history.map(h=>({diff:Math.abs(h.energy-smoothEnergy),speed:h.speed}))
+      .sort((a,b)=>a.diff-b.diff).slice(0,5);
+    const avgMatch=sorted.reduce((s,v)=>s+v.speed,0)/sorted.length;
+    // Detect braking/acceleration from accel trend
+    const trend=this.accelBuf.length>=3?
+      this.accelBuf[this.accelBuf.length-1]-this.accelBuf[0]:0;
+    // Blend: 60% learned match + 30% decayed last speed + 10% trend adjustment
+    this.lastSpeed=this.lastSpeed*0.995; // slow decay when no GPS
+    const est=avgMatch*0.6+this.lastSpeed*0.3+Math.max(0,this.lastSpeed+trend*2)*0.1;
+    return Math.max(0,Math.min(est,60)); // cap at 60 m/s (216 km/h)
+  },
+
+  reset(){this.accelBuf=[];}
+};
+
 // Multi-source speed + heading: every formula can use these during GPS denial
 function bestSpeed(){
-  // Priority: GPS > Layer 7 fused > CID > IMU > 0
   const gps=avgSpeed(5);
   if(gps>0.5) return gps;
+  // During denial: use learned speed from accel patterns
+  if(phase!=='recording'){
+    const learned=SPEED_LEARN.estimate();
+    if(learned>0.5)return learned;
+  }
   if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>2) return LAYER7.fused.speed_kmh/3.6;
   if(window.LAYER7&&LAYER7.cidSpeed&&LAYER7.cidSpeed.speed_kmh>2) return LAYER7.cidSpeed.speed_kmh/3.6;
   if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3) return ALGEBRA.velocity_ms;
@@ -4640,6 +4685,7 @@ function tick(){
     TERRAIN.record(activePos.lat,activePos.lon);
     MANEUVER.record(activePos.lat,activePos.lon,dt);
     TOWER_CAPTURE.capture(activePos.lat,activePos.lon,boardData);
+    SPEED_LEARN.record(accel.x,accel.y,accel.z,gpsSys?gpsSys.speed||0:0);
     // Map matching: snap to road every 5th tick
     if(MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
@@ -4794,9 +4840,16 @@ function tick(){
 
   if(phase==='jammed'||phase==='spoofed'){
     if(drPos){
-      // ALL formulas predict independently — no forced blending
       PUE.updateSensors();
       INS.update(accel,gyro,dt);
+      // Keep Layer 7 + Layer 6 alive during denial — they process accel/gyro, not GPS
+      if(window.LAYER7&&LAYER7.enabled){
+        LAYER7.tick({accel,gyro,gps:null,dt,boardData,boardTowerList});
+      }
+      if(window.LAYER6&&LAYER6.enabled){
+        const denialSpd=SPEED_LEARN.estimate()||LAYER7.fused.speed_kmh/3.6||0;
+        LAYER6.tick({accel,gyro,mag,compass,pressure,gps:null,speed:denialSpd,heading:compass+CAL.compassOff,dt,stepCount,boardTowerList,CAL,isStationary},F);
+      }
       CONE.update(null,avgSpeed(5)||0,compass+CAL.compassOff,(gyro.z-CAL.gyroBias.z)*CAL.gyroScale,dt);
       // Detect maneuvers during denial — use library to correct heading
       const maneuver=MANEUVER.detectLive();
@@ -4922,6 +4975,11 @@ function tick(){
     $('mSmp').textContent=DATA.count();$('mDst').textContent=Math.round(totalDist);
     if(startTime)$('mTime').textContent=fmt((now-startTime)/1000);
     if(isStationary){$('mSpd').textContent='0';$('mHdg').textContent=Math.round(compass)+'° STOP';}
+    else if(phase!=='recording'){
+      const estSpd=bestSpeed();
+      $('mSpd').textContent=estSpd>0.3?Math.round(estSpd*3.6)+'~':'--';
+      $('mHdg').textContent=Math.round(bestHeading())+'°';
+    }
     else if(DATA.samples.length>1){const l=DATA.samples[DATA.samples.length-1];$('mSpd').textContent=Math.round(l.speed*3.6);$('mHdg').textContent=Math.round(l.heading)+'°';}
     $('mAlt').textContent=baroAlt?baroAlt.toFixed(1):'--';
     $('ovSrc').textContent=(isStationary?'STOP ':'')+( boardConnected?(boardSource==='ble'?'BLE':'WiFi'):'PHONE');
@@ -5927,7 +5985,8 @@ function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();
   // BLOCK ALL GPS — board AND phone. gpsTrue keeps updating for drift measurement only.
   gpsSys=null;gpsSource='none';
-  PUE.activate();
+  PUE.activate();SPEED_LEARN.reset();
+  SPEED_LEARN.lastSpeed=gpsTrue?gpsTrue.speed||0:avgSpeed(5)||0;
   $('badge').textContent='JAMMED';$('badge').className='badge b-jam';
   $('b2').style.display='none';$('b3').style.display='grid';$('jalrt').style.display='block';
   $('srcGPS').innerHTML='<span class="sdot err"></span>BLOCKED';$('srcGPSd').textContent='ALL GPS DENIED';
