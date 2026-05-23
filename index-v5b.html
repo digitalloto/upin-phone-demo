@@ -4708,7 +4708,7 @@ function tick(){
     }
     // Frozen GPS + Cross-check + Drift
     const ae=Math.abs(Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81);
-    if(FROZEN_GPS.check(gpsSys,ae)){log('GPS FROZEN — switching to tower tri','var(--red)');gpsSys=null;}
+    if(FROZEN_GPS.check(gpsSys,ae)){log('GPS FROZEN — switching to tower tri','var(--red)');gpsSys=null;activePos=drPos||activePos;}
     CROSS_CHECK.update(gpsTrue,UTIN.predict()?{lat:UTIN.predict().lat,lon:UTIN.predict().lon}:null,drPos);
     if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue)trackDrift(drPos,gpsTrue);
     // GPS-MEASURED RADIUS LAYER: draw exact circles from each tower through GPS position
