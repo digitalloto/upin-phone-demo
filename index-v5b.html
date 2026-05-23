@@ -4687,9 +4687,9 @@ function tick(){
     TOWER_CAPTURE.capture(activePos.lat,activePos.lon,boardData);
     SPEED_LEARN.record(accel.x,accel.y,accel.z,gpsSys?gpsSys.speed||0:0);
     // Map matching: snap to road every 5th tick
-    if(MAP_LAYERS.flight)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
+    if(MAP_LAYERS.flight&&gpsSys)MAP_MATCH.snap(gpsSys.lat,gpsSys.lon,null);
     // Auto-capture: record tower positions when we have GPS fix
-    if(uiFrame%5===0&&boardTowerList.length>0)autoCaptureTowers(gpsSys,boardTowerList);
+    if(uiFrame%5===0&&boardTowerList.length>0&&gpsSys)autoCaptureTowers(gpsSys,boardTowerList);
     // REROUTE CHECK: if >100m off route, recalculate like Google Maps
     if(v5RouteSteps.length>0&&v5DestLat&&gpsSys){
       let minDist=Infinity;
@@ -4713,7 +4713,7 @@ function tick(){
     CROSS_CHECK.update(gpsTrue,UTIN.predict()?{lat:UTIN.predict().lat,lon:UTIN.predict().lon}:null,drPos);
     if((phase==='jammed'||phase==='spoofed')&&drPos&&gpsTrue)trackDrift(drPos,gpsTrue);
     // GPS-MEASURED RADIUS LAYER: draw exact circles from each tower through GPS position
-    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=="undefined"&&true){
+    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>0&&typeof L!=="undefined"&&gpsSys){
       gpsRadiusCircles.forEach(c=>{try{map.removeLayer(c);}catch(e){}});
       gpsRadiusLines.forEach(l=>{try{map.removeLayer(l);}catch(e){}});
       if(gpsRadiusIntersect)try{map.removeLayer(gpsRadiusIntersect);}catch(e){}
@@ -4731,7 +4731,7 @@ function tick(){
       gpsRadiusCircles.push(gpsRadiusIntersect);
     }
     // DIRECTIONAL MULTILATERATION: classify towers, predict, verify
-    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>=2){
+    if(MAP_LAYERS.gpsRadius&&boardTowerList.length>=2&&gpsSys){
       DIRECTIONAL.classifyTowers(gpsSys,boardTowerList);
       DIRECTIONAL.verify(gpsSys,boardTowerList);
       const spd=gpsSys.speed||avgSpeed(5)||0;
@@ -4769,7 +4769,7 @@ function tick(){
       if(fullRouteLine)fullRouteLine.setLatLngs(fullRoute.map(p=>[p.lat,p.lon]));
       else fullRouteLine=L.polyline(fullRoute.map(p=>[p.lat,p.lon]),{color:'rgba(77,166,255,0.3)',weight:2}).addTo(map);
     }
-    drawPos(ll,gpsSys.acc||5,'#00FF88');
+    drawPos(ll,gpsSys?gpsSys.acc||5:15,'#00FF88');
 
     // Show top 5 formula positions during recording (small dots — track how they'd do)
     if(typeof L!=='undefined'&&uiFrame%5===0){
@@ -4795,7 +4795,7 @@ function tick(){
     }
 
     // PREDICTOR T+5 marker — show where the system predicts you'll be in 5s
-    if(typeof L!=='undefined'&&PREDICTOR.lastPredPos){
+    if(typeof L!=='undefined'&&PREDICTOR.lastPredPos&&gpsSys){
       const pp=PREDICTOR.lastPredPos;
       const pConf=PREDICTOR.confidence();
       const pColor=pConf>0.7?'#3dcc6e':pConf>0.4?'#e8a832':'#f06060';
@@ -4833,9 +4833,9 @@ function tick(){
     }
 
     // FIX 5: distance counter clamp — cap at 250m/tick (≈900km/h max)
-    if(lastPos){const dd=hav(lastPos,gpsSys);if(dd<250)totalDist+=dd;}
-    lastPos={lat:gpsSys.lat,lon:gpsSys.lon};drPos={lat:gpsSys.lat,lon:gpsSys.lon};
-    F.forEach(f=>{if(!f.pos)f.pos={lat:gpsSys.lat,lon:gpsSys.lon};});
+    if(lastPos&&activePos){const dd=hav(lastPos,activePos);if(dd<250)totalDist+=dd;}
+    lastPos={lat:activePos.lat,lon:activePos.lon};drPos={lat:activePos.lat,lon:activePos.lon};
+    F.forEach(f=>{if(!f.pos)f.pos={lat:activePos.lat,lon:activePos.lon};});
   }
 
   if(phase==='jammed'||phase==='spoofed'){
