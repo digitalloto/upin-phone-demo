@@ -37,6 +37,19 @@ const TRAIN_STATIONS=[
   {name:'Trichy',lat:10.7905,lon:78.6856,code:'TPJ'},
   {name:'Madurai',lat:9.9193,lon:78.1194,code:'MDU'},
   {name:'Coimbatore',lat:11.0014,lon:76.9556,code:'CBE'},
+  // Bangalore→Chennai route intermediate stations
+  {name:'Bangalore Cantt',lat:12.9955,lon:77.5935,code:'BNC'},
+  {name:'Krishnarajapuram',lat:12.9988,lon:77.6801,code:'KJM'},
+  {name:'Whitefield',lat:12.9771,lon:77.7227,code:'WFD'},
+  {name:'Bangarapet',lat:12.9907,lon:78.1787,code:'BWT'},
+  {name:'Kuppam',lat:12.7466,lon:78.3460,code:'KPN'},
+  {name:'Gudiyatham',lat:12.9482,lon:78.8697,code:'GYM'},
+  {name:'Ambur',lat:12.7908,lon:78.7166,code:'AB'},
+  {name:'Vaniyambadi',lat:12.6820,lon:78.6170,code:'VN'},
+  {name:'Walajah Road',lat:12.9254,lon:79.3723,code:'WJR'},
+  {name:'Sholinghur',lat:13.1200,lon:79.4200,code:'SHU'},
+  {name:'Tiruttani',lat:13.1791,lon:79.6137,code:'TRT'},
+  {name:'Perambur Loco Works',lat:13.1180,lon:80.2570,code:'PEW'},
 ];
 
 const TRANSPORT_MODES={

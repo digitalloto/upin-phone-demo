@@ -1308,7 +1308,8 @@ function processBoardData(d){
   buildCIDIndex();
   boardTowerList=[];
   const cityRef=calGpsPos||gpsTrue||lastGoodFix; // calibration city is priority
-  const CITY_RADIUS=50000; // 50km — anything farther is a different city
+  const isTrainMode=window.LAYER8&&(LAYER8.mode==='train'||LAYER8.mode==='flight');
+  const CITY_RADIUS=isTrainMode?500000:50000;
   let cidHits=0,cidMisses=0;
 
   // Multi-field tower search: tries CID → LAC → MCC+MNC+proximity → API
@@ -4634,6 +4635,7 @@ function tick(){
     FAGENTS.score(activePos,dt);
     ANIMAL.recordAll(activePos.lat,activePos.lon,accel,dt);
     PUE.updateFromGPS(activePos,curSpd||bestSpeed());
+    if(gpsSys&&gpsSys.lat>6&&uiFrame%60===0)calGpsPos={lat:gpsSys.lat,lon:gpsSys.lon};
     ROUTES.record(activePos.lat,activePos.lon);
     TERRAIN.record(activePos.lat,activePos.lon);
     MANEUVER.record(activePos.lat,activePos.lon,dt);
