@@ -251,7 +251,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   <!-- Controls -->
   <div id="b1" class="btns">
     <button class="btn btn-cyan" onclick="V.calibrate()">Calibrate</button>
-    <button class="btn btn-green" id="bStart" onclick="V.startRec()" disabled style="opacity:.3">Start Recording</button>
+    <button class="btn btn-green" id="bStart" onclick="V.startRec()">Start Recording</button>
   </div>
   <div id="b2" style="display:none">
     <div class="btns">
@@ -5970,9 +5970,17 @@ function startRec(){
       gpsSys={...gpsTrue};
       log('No GPS — using last calibration position','var(--amber)');
     }else{
-      log('No position source — enable phone GPS or connect board','var(--red)');
-      return;
+      // Last resort: use a default position (Bangalore-Chennai corridor midpoint)
+      gpsTrue={lat:12.97,lon:79.15,acc:50000};
+      gpsSys={...gpsTrue};
+      log('No position source — using default. Position will correct when GPS/towers lock.','var(--amber)');
     }
+  }
+  // Quick-calibrate if not already done
+  if(!CAL.accelBias.x&&!CAL.accelBias.y){
+    CAL.accelBias={x:accel.x,y:accel.y,z:accel.z-9.81};
+    CAL.gyroBias={x:gyro.x,y:gyro.y,z:gyro.z};
+    log('Quick-cal from current sensors','var(--cyan)');
   }
   phase='recording';startTime=performance.now();lastTick=null;
   $('badge').textContent='RECORDING';$('badge').className='badge b-rec';
