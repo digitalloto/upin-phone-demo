@@ -1393,12 +1393,11 @@ function processBoardData(d){
     if(d.cell4g&&d.cell4g.cid)allT.push({cellId:d.cell4g.cid,locationAreaCode:d.cell4g.tac||0,mobileCountryCode:d.cell4g.mcc||404,mobileNetworkCode:d.cell4g.mnc||84,radioType:'lte',signalStrength:d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80)});
     const c2d=d.cell2g&&(d.cell2g.data||d.cell2g.list);
     if(c2d&&Array.isArray(c2d))c2d.forEach(c=>{if(c.cid)allT.push({cellId:c.cid,locationAreaCode:c.lac||0,mobileCountryCode:c.mcc||404,mobileNetworkCode:c.mnc||84,radioType:'gsm',signalStrength:c.rssi||-90});});
-    if(allT.length>0&&navigator.onLine){
-      log('Google batch: sending '+allT.length+' towers...','var(--cyan)');
+    if(allT.length>0){
       fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({considerIp:false,cellTowers:allT})
-      }).then(r=>r.json()).then(g=>{
+      }).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(g=>{
         if(g.location&&g.location.lat){
           log('Google batch fix: '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4)+' ±'+Math.round(g.accuracy)+'m — now looking up individual towers...','var(--green)');
           // Save batch position as temporary (will be replaced by individual lookups)
@@ -1433,7 +1432,7 @@ function processBoardData(d){
           log('Google batch: '+(g.error?g.error.message:'no result'),'var(--red)');
           processBoardData._batchDone=false;
         }
-      }).catch(e=>{log('Google batch error: '+e.message,'var(--red)');processBoardData._batchDone=false;});
+      }).catch(e=>{if(!e.message.includes('offline')&&!e.message.includes('HTTP 503'))log('Google batch error: '+e.message,'var(--red)');processBoardData._batchDone=false;});
     }
   }
 
@@ -5949,20 +5948,29 @@ function calibrate(){
       log('Auto-starting recording...','var(--green)');
       setTimeout(()=>startRec(),500);
     }else{
-      log('Waiting for GPS fix to start recording — or tap Start Recording','var(--amber)');
+      $('bStart').disabled=false;$('bStart').style.opacity='1';
+      log('Waiting for GPS fix — or tap Start Recording to begin with cell towers','var(--amber)');
     }
   },5000);
 }
 function startRec(){
-  // If no GPS, try cell tower triangulation as fallback position
   if(!gpsTrue){
     const cellPos=UTIN.predict();
     if(cellPos){
-      gpsTrue={lat:cellPos.lat,lon:cellPos.lon,acc:cellPos.acc||200};
+      gpsTrue={lat:cellPos.lat,lon:cellPos.lon,acc:cellPos.acc||500};
       gpsSys={...gpsTrue};
       log('No GPS — using cell tower position (±'+Math.round(gpsTrue.acc)+'m)','var(--amber)');
+    }else if(boardTowerList.length>0){
+      const t=boardTowerList[0];
+      gpsTrue={lat:t.lat,lon:t.lon,acc:t.acc||2000};
+      gpsSys={...gpsTrue};
+      log('No GPS — using single cell tower as rough anchor (±'+Math.round(gpsTrue.acc)+'m)','var(--amber)');
+    }else if(calGpsPos){
+      gpsTrue={lat:calGpsPos.lat,lon:calGpsPos.lon,acc:5000};
+      gpsSys={...gpsTrue};
+      log('No GPS — using last calibration position','var(--amber)');
     }else{
-      log('No GPS and no cell towers — use Phone Only or wait for GPS fix','var(--red)');
+      log('No position source — enable phone GPS or connect board','var(--red)');
       return;
     }
   }
