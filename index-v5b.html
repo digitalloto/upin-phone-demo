@@ -5130,12 +5130,16 @@ function tick(){
     $('mSmp').textContent=DATA.count();$('mDst').textContent=Math.round(totalDist);
     if(startTime)$('mTime').textContent=fmt((now-startTime)/1000);
     if(isStationary){$('mSpd').textContent='0';$('mHdg').textContent=Math.round(compass)+'° STOP';}
-    else if(phase!=='recording'){
-      const estSpd=bestSpeed();
-      $('mSpd').textContent=estSpd>0.3?Math.round(estSpd*3.6)+'~':'--';
+    else{
+      const spd=bestSpeed();
+      const spdKmh=Math.round(spd*3.6);
+      if(phase==='recording'){
+        $('mSpd').textContent=spdKmh>0?spdKmh:'0';
+      }else{
+        $('mSpd').textContent=spdKmh>0?spdKmh+'~':'--';
+      }
       $('mHdg').textContent=Math.round(bestHeading())+'°';
     }
-    else if(DATA.samples.length>1){const l=DATA.samples[DATA.samples.length-1];$('mSpd').textContent=Math.round(l.speed*3.6);$('mHdg').textContent=Math.round(l.heading)+'°';}
     $('mAlt').textContent=baroAlt?baroAlt.toFixed(1):'--';
     $('ovSrc').textContent=(isStationary?'STOP ':'')+( boardConnected?(boardSource==='ble'?'BLE':'WiFi'):'PHONE');
     // Formula table + map overlay
