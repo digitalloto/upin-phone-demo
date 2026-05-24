@@ -1110,12 +1110,14 @@ function onBLEDisconnect(){
   // DON'T auto-save report on brief disconnects — it's not a real disconnect
   // DON'T switch to phone sensors — board will reconnect in 2s
   updateBoardUI();
-  // Auto-reconnect: try 10 times (WiFi scan drops happen every 10s, need persistent retry)
-  if(wasBLE&&bleDevice&&bleReconnectAttempts<10){
+  // Auto-reconnect: unlimited retries for 3-hour stability
+  // Delay: 1.5s for first 10 attempts, then 5s to avoid thrashing
+  if(wasBLE&&bleDevice){
     bleReconnectAttempts++;
-    $('bleBtn').className='btn-hw wait';$('bleBtn').textContent='RECONNECTING ('+bleReconnectAttempts+'/10)...';
-    $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> BLE dropped (WiFi scan) — reconnecting...';
-    if(bleDropCount<=2)log('BLE dropped (firmware WiFi scan) — auto-reconnecting','var(--amber)');
+    const delay=bleReconnectAttempts<=10?1500:5000;
+    $('bleBtn').className='btn-hw wait';$('bleBtn').textContent='RECONNECTING ('+bleReconnectAttempts+')...';
+    $('boardStatus').innerHTML='<span class="sdot" style="background:var(--amber)"></span> BLE dropped — reconnecting in '+(delay/1000)+'s...';
+    if(bleDropCount<=2||bleReconnectAttempts%20===0)log('BLE dropped — auto-reconnecting (attempt '+bleReconnectAttempts+')','var(--amber)');
     setTimeout(()=>{
       if(bleDevice&&!bleDevice.gatt.connected){
         bleDevice.gatt.connect().then(server=>{
@@ -1131,22 +1133,16 @@ function onBLEDisconnect(){
           $('boardStatus').innerHTML='<span class="sdot live"></span> BLE CONNECTED';
           $('bleBtn').className='btn-hw ok';$('bleBtn').textContent='HARDWARE CONNECTED';
           updateBoardUI();
-          if(bleDropCount<=3)log('BLE reconnected','var(--green)');
+          if(bleDropCount<=3||bleDropCount%20===0)log('BLE reconnected (drop #'+bleDropCount+')','var(--green)');
         }).catch(e=>{
-          if(bleReconnectAttempts<10)onBLEDisconnect();
-          else{
-            $('bleBtn').className='btn-hw err';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
-            $('boardStatus').innerHTML='<span class="sdot err"></span> BLE lost — tap to retry';
-            bleReconnectAttempts=0;
-            log('BLE reconnect failed after 10 attempts','var(--red)');
-            initPhoneSensors();initPhoneGPS();
-          }
+          // Always retry — never give up during a 3-hour test
+          onBLEDisconnect();
         });
       }
-    },1500); // 1.5s — faster reconnect (WiFi scan is ~2s)
+    },delay);
   }else{
     $('bleBtn').className='btn-hw err';$('bleBtn').textContent='DISCONNECTED — TAP TO RECONNECT';
-    log('BLE disconnected','var(--red)');
+    log('BLE disconnected (no device ref)','var(--red)');
     bleReconnectAttempts=0;
     initPhoneSensors();initPhoneGPS();
   }
@@ -1773,14 +1769,31 @@ function initPhoneSensors(){
 // DATA CAPTURE + CALIBRATION (same as v3)
 // ═══════════════════════════════════════
 const DATA={
-  samples:[],MAX:2000,
+  samples:[],MAX:12000,
   record(ac,gy,cmp,lat,lon,dt,extra){
     if(!lat)return;let speed=0,heading=0;
-    if(this.samples.length>0){const p=this.samples[this.samples.length-1];
+    // P1.1 — GPS speed primary when accuracy is good
+    if(gpsSys&&gpsSys.speed>0&&gpsSys.acc&&gpsSys.acc<50){
+      speed=gpsSys.speed;
+    }else if(this.samples.length>0){const p=this.samples[this.samples.length-1];
       const dLa=(lat-p.lat)*111320,dLo=(lon-p.lon)*111320*Math.cos(lat*Math.PI/180);
-      speed=Math.sqrt(dLa*dLa+dLo*dLo)/Math.max(dt,0.1);heading=Math.atan2(dLo,dLa)*180/Math.PI;if(heading<0)heading+=360;
+      speed=Math.sqrt(dLa*dLa+dLo*dLo)/Math.max(dt,0.1);
       // Cap impossible speeds: >50 m/s (180km/h) = GPS jump, use last valid
       if(speed>50){speed=this.samples.length>1?this.samples[this.samples.length-1].speed:0;}}
+    if(this.samples.length>0){const p=this.samples[this.samples.length-1];
+      const dLa=(lat-p.lat)*111320,dLo=(lon-p.lon)*111320*Math.cos(lat*Math.PI/180);
+      heading=Math.atan2(dLo,dLa)*180/Math.PI;if(heading<0)heading+=360;}
+    // P1.4 — Fused speed + source per row (mirrors bestSpeed() fallback chain)
+    let _fused_spd=0,_fused_src='none';
+    const _bs=bestSpeed();
+    _fused_spd=_bs*3.6; // km/h
+    // Determine which source bestSpeed() actually used
+    const _avgGps=avgSpeed(5);
+    if(_avgGps>0.5){_fused_src='gps';}
+    else if(phase!=='recording'&&SPEED_LEARN.history.length>=10&&SPEED_LEARN.estimate()>0.5){_fused_src='learned';}
+    else if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>2){_fused_src='fused';}
+    else if(window.LAYER7&&LAYER7.cidSpeed&&LAYER7.cidSpeed.speed_kmh>2){_fused_src='cid';}
+    else if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3){_fused_src='imu';}
     this.samples.push({t:performance.now(),ax:ac.x,ay:ac.y,az:ac.z,gx:gy.x,gy:gy.y,gz:gy.z,
       compass:cmp,lat,lon,speed,heading,dt,mx:mag.x,my:mag.y,mz:mag.z,
       pressure,baroAlt,laserMm,cellTowers4G,cellTowers2G,wifiAPs,
@@ -1801,6 +1814,8 @@ const DATA={
       _zupt:window.LAYER7?LAYER7.zupt.isZUPT:false,
       _turns:window.LAYER7?LAYER7.turns.turnCount60s:0,
       _bound_score:window.BOUND?BOUND.getScore(0):0,
+      _best_spd_fused:_fused_spd,
+      _best_spd_src:_fused_src,
       ...(extra||{})});
     if(this.samples.length>this.MAX)this.samples.shift();},
   count(){return this.samples.length;}
@@ -3566,6 +3581,7 @@ const MANEUVER={
     }
 
     this.library.push(entry);
+    if(this.library.length>500)this.library.splice(0,this.library.length-500);
     if(this.library.length%10===0)this.save();
     this.current=null;
 
@@ -3579,6 +3595,7 @@ const MANEUVER={
         const popup=`<b>${icon} ${m.type.toUpperCase()}</b>${m.type==='turn'?' '+entry.angle+'° ('+entry.turnClass+')':''}<br>dur: ${entry.duration}s<br>speed: ${entry.speedStart.toFixed(1)}→${entry.speedEnd.toFixed(1)} m/s<br>gyro peak: ${peakGz}°/s<br>hdg: ${Math.round(entry.compassStart)}°→${Math.round(entry.compassEnd)}°`;
         mkr.bindPopup(popup,{className:'',maxWidth:200});
         turnMarkers.push(mkr);
+        if(turnMarkers.length>500){try{map.removeLayer(turnMarkers[0]);}catch(e){}turnMarkers.shift();}
       }
     }catch(e){}
 
@@ -4722,6 +4739,8 @@ function tick(){
     const cellP=UTIN.predict();if(cellP&&gpsSys)SCORE.scoreLayer('cell',hav(cellP,gpsSys));
     if(TERRAIN.prints.length>20){const tm=TERRAIN.match();if(tm&&gpsSys)SCORE.scoreLayer('terrain',hav(tm,gpsSys));}
     if(uiFrame%30===0)SCORE.save(); // save every 30 ticks
+    // Auto-save CSV every 5 minutes (300 ticks at 1/sec)
+    if(uiFrame%300===0&&phase==='recording')autoSaveCSV();
     // Score combos + agents against best available position
     COMBOS.score(activePos,dt);
     FAGENTS.score(activePos,dt);
@@ -4811,7 +4830,7 @@ function tick(){
     const trailColor=gpsSys?'#00FF88':'#FFB800'; // green=GPS, orange=estimated
     gpsTrail.push(ll);if(gpsTrail.length>MAX_TRAIL)gpsTrail.shift();
     if(gpsLine)gpsLine.setLatLngs(gpsTrail);else if(typeof L!=='undefined')gpsLine=L.polyline(gpsTrail,{color:trailColor,weight:3}).addTo(map);
-    fullRoute.push({lat:activePos.lat,lon:activePos.lon,t:performance.now(),spd:curSpd||0,hdg:compass,gz:gyro.z,ae:Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81});
+    fullRoute.push({lat:activePos.lat,lon:activePos.lon,t:performance.now(),spd:curSpd||0,hdg:compass,gz:gyro.z,ae:Math.sqrt(accel.x**2+accel.y**2+accel.z**2)-9.81});if(fullRoute.length>12000)fullRoute.shift();
     if(typeof L!=='undefined'){
       if(fullRouteLine)fullRouteLine.setLatLngs(fullRoute.map(p=>[p.lat,p.lon]));
       else fullRouteLine=L.polyline(fullRoute.map(p=>[p.lat,p.lon]),{color:'rgba(77,166,255,0.3)',weight:2}).addTo(map);
@@ -5832,7 +5851,7 @@ const CONE={
         if(gps&&gps.lat>6){
           const gapSec=(performance.now()-this.gpsGapStart)/1000;
           const insideCone=this.isInside(gps);
-          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});
+          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});if(this.gpsRecoveries.length>100)this.gpsRecoveries.shift();
           log('CONE: GPS recovered after '+Math.round(gapSec)+'s. Final radius: '+Math.round(this.radius)+'m. Inside cone: '+(insideCone?'YES':'NO'),'var(--green)');
           this.state='GPS_OK';
           this._removeDraw();
@@ -5857,7 +5876,7 @@ const CONE={
         if(gps&&gps.lat>6){
           const gapSec=(performance.now()-this.gpsGapStart)/1000;
           const insideCone=this.isInside(gps);
-          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});
+          this.gpsRecoveries.push({gapSec:Math.round(gapSec),finalRadius:Math.round(this.radius),insideCone});if(this.gpsRecoveries.length>100)this.gpsRecoveries.shift();
           log('CONE: GPS recovered (refined). Inside cone: '+(insideCone?'YES':'NO'),'var(--green)');
           this.state='GPS_OK';
           this._removeDraw();
@@ -5887,7 +5906,7 @@ const CONE={
       speed:speed||this.anchor.speed||0,
       acc:Math.max(this.anchor.acc||10,5)
     };
-    this.dots.push(dot);
+    this.dots.push(dot);if(this.dots.length>200)this.dots.shift();
     this.anchor=dot;
     this.arcMin=heading-30;this.arcMax=heading+30;
   },
@@ -6080,7 +6099,7 @@ function resurface(){
   const dps=bs>0?drift/bs:0;let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
   const fRes=F.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999})).sort((a,b)=>a.drift-b.drift);
   const ps=PUE.stats();
-  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected,pue:{radius:Math.round(ps.radius),enforced:ps.enforced,total:ps.total,pct:ps.pct}});
+  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected,pue:{radius:Math.round(ps.radius),enforced:ps.enforced,total:ps.total,pct:ps.pct}});if(drills.length>200)drills.shift();
   // Clean up PUE circle from map
   if(PUE._circle){map.removeLayer(PUE._circle);PUE._circle=null;}
   PUE.active=false;
@@ -6359,6 +6378,62 @@ function showReport(dur){
     </div>`;
   $('rpt').style.display='block';
 }
+// ═══════════════════════════════════════
+// AUTO-SAVE CSV — saves to localStorage every 5 minutes during recording
+// Protects against browser crash / accidental page close during 3-hour tests
+// ═══════════════════════════════════════
+function buildCSVString(){
+  let c='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,Lat,Lon,Speed,Heading,Pressure\n';
+  DATA.samples.forEach(s=>{c+=s.t.toFixed(0)+','+(boardConnected?boardSource:'phone')+','+s.ax.toFixed(3)+','+s.ay.toFixed(3)+','+s.az.toFixed(3)+','+s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+','+s.compass.toFixed(1)+','+s.lat.toFixed(7)+','+s.lon.toFixed(7)+','+s.speed.toFixed(2)+','+s.heading.toFixed(1)+','+(s.pressure||0)+'\n';});
+  return c;
+}
+function autoSaveCSV(){
+  if(DATA.samples.length===0)return;
+  try{
+    const csv=buildCSVString();
+    // Check size: localStorage typically has 5-10MB limit
+    if(csv.length>4*1024*1024){
+      // Too large for localStorage — truncate to last 3000 samples
+      let c='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,Lat,Lon,Speed,Heading,Pressure\n';
+      DATA.samples.slice(-3000).forEach(s=>{c+=s.t.toFixed(0)+','+(boardConnected?boardSource:'phone')+','+s.ax.toFixed(3)+','+s.ay.toFixed(3)+','+s.az.toFixed(3)+','+s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+','+s.compass.toFixed(1)+','+s.lat.toFixed(7)+','+s.lon.toFixed(7)+','+s.speed.toFixed(2)+','+s.heading.toFixed(1)+','+(s.pressure||0)+'\n';});
+      localStorage.setItem('upin_autosave_csv',c);
+    }else{
+      localStorage.setItem('upin_autosave_csv',csv);
+    }
+    localStorage.setItem('upin_autosave_time',Date.now().toString());
+    localStorage.setItem('upin_autosave_samples',DATA.samples.length.toString());
+    log('Auto-saved '+DATA.samples.length+' samples to localStorage','var(--tm)');
+  }catch(e){
+    // localStorage full or quota exceeded — try clearing old autosave first
+    try{localStorage.removeItem('upin_autosave_csv');localStorage.removeItem('upin_autosave_time');}catch(_){}
+    log('Auto-save failed: '+e.message,'var(--amber)');
+  }
+}
+function checkAutosaveRecovery(){
+  try{
+    const savedTime=localStorage.getItem('upin_autosave_time');
+    const savedCSV=localStorage.getItem('upin_autosave_csv');
+    const savedCount=localStorage.getItem('upin_autosave_samples');
+    if(!savedTime||!savedCSV)return;
+    const ageMin=Math.round((Date.now()-parseInt(savedTime))/60000);
+    if(ageMin>1440)return; // ignore saves older than 24 hours
+    const lines=savedCSV.split('\n').length-2; // subtract header + trailing newline
+    if(lines<10)return; // too few samples
+    const msg='Recover last session? ('+lines+' samples, '+(savedCount||'?')+' recorded, saved '+ageMin+' min ago)';
+    if(confirm(msg)){
+      const a=document.createElement('a');
+      a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(savedCSV);
+      a.download='upin-recovered-'+new Date(parseInt(savedTime)).toISOString().slice(0,19).replace(/[T:-]/g,'')+'.csv';
+      a.click();
+      log('Recovered autosave ('+lines+' samples) — downloading CSV','var(--green)');
+    }
+    // Clear autosave after recovery prompt (whether accepted or not)
+    localStorage.removeItem('upin_autosave_csv');
+    localStorage.removeItem('upin_autosave_time');
+    localStorage.removeItem('upin_autosave_samples');
+  }catch(e){}
+}
+
 function exportCSV(){
   const now=new Date();
   const runId='RUN_'+now.toISOString().slice(0,19).replace(/[T:-]/g,'')+'_Chennai_'+(phase||'idle')+'_'+UPIN_VERSION;
@@ -6377,14 +6452,14 @@ function exportCSV(){
   c+='# Profile: '+(PROFILES?PROFILES.active:'default')+'\n';
   c+='# Version: '+UPIN_VERSION+'\n';
   c+='#\n';
-  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_N,Bound_Score,Speed_IMU_kmh,DR_Lat,DR_Lon,ZUPT,Speed_CID_kmh,Speed_WiFi_kmh,Speed_RSSI_kmh,Speed_Fused_kmh,Turns_60s,Cell_Tri_Lat,Cell_Tri_Lon,Cell_Tri_N\n';
+  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_N,Bound_Score,Speed_IMU_kmh,DR_Lat,DR_Lon,ZUPT,Speed_CID_kmh,Speed_WiFi_kmh,Speed_RSSI_kmh,Speed_Fused_kmh,Turns_60s,Cell_Tri_Lat,Cell_Tri_Lon,Cell_Tri_N,Speed_Best_kmh,Speed_Source\n';
   DATA.samples.forEach((s,i)=>{
     // Speed estimator: GPS delta over 2s window
     let spdEst=s.speed;
     if(i>=2){const prev=DATA.samples[i-2];const dt=(s.t-prev.t)/1000;if(dt>0&&dt<5){const d=hav({lat:s.lat,lon:s.lon},{lat:prev.lat,lon:prev.lon});spdEst=d/dt;}}
     const l2f=window.LAYER2?LAYER2.csvFlags(s.t):'';
     // Per-row layer data from stored sample (not current snapshot)
-    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${(s._lm_lat||0).toFixed?s._lm_lat.toFixed(7):''},${(s._lm_lon||0).toFixed?s._lm_lon.toFixed(7):''},${s._lm_n||0},${s._bound_score||0},${(s._spd_imu||0).toFixed(1)},${(s._dr_lat||0).toFixed?s._dr_lat.toFixed(7):''},${(s._dr_lon||0).toFixed?s._dr_lon.toFixed(7):''},${s._zupt?1:0},${(s._spd_cid||0).toFixed(1)},${(s._spd_wifi||0).toFixed(1)},${(s._spd_rssi||0).toFixed(1)},${(s._spd_fused||0).toFixed(1)},${s._turns||0},${(s._tri_lat||0).toFixed?s._tri_lat.toFixed(7):''},${(s._tri_lon||0).toFixed?s._tri_lon.toFixed(7):''},${s._tri_n||0}\n`;
+    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${(s._lm_lat||0).toFixed?s._lm_lat.toFixed(7):''},${(s._lm_lon||0).toFixed?s._lm_lon.toFixed(7):''},${s._lm_n||0},${s._bound_score||0},${(s._spd_imu||0).toFixed(1)},${(s._dr_lat||0).toFixed?s._dr_lat.toFixed(7):''},${(s._dr_lon||0).toFixed?s._dr_lon.toFixed(7):''},${s._zupt?1:0},${(s._spd_cid||0).toFixed(1)},${(s._spd_wifi||0).toFixed(1)},${(s._spd_rssi||0).toFixed(1)},${(s._spd_fused||0).toFixed(1)},${s._turns||0},${(s._tri_lat||0).toFixed?s._tri_lat.toFixed(7):''},${(s._tri_lon||0).toFixed?s._tri_lon.toFixed(7):''},${s._tri_n||0},${(s._best_spd_fused||0).toFixed(1)},${s._best_spd_src||'none'}\n`;
   });
   // Formula rankings with status (Layer 5: RUNNING first, then PASSTHROUGH, WAITING, DISABLED)
   c+='\n# FORMULA RANKINGS\n';
@@ -6660,7 +6735,7 @@ function applyAICorrections(corrections){
     }catch(e){}
   });
   if(applied.length){
-    AI_CORRECTIONS.push({t:Date.now(),changes:applied});
+    AI_CORRECTIONS.push({t:Date.now(),changes:applied});if(AI_CORRECTIONS.length>50)AI_CORRECTIONS.shift();
     $('aiCorrections').innerHTML=AI_CORRECTIONS.slice(-5).map(c=>
       '<div style="border-bottom:1px solid var(--border);padding:2px 0">'+
       new Date(c.t).toLocaleTimeString()+': '+c.changes.join(', ')+'</div>'
@@ -6969,6 +7044,8 @@ window.addEventListener('load',()=>{
     // AUTO-ACTIVATE: phone sensors + GPS always start on load
     initPhoneSensors();initPhoneGPS();
     log('Phone sensors + GPS activated automatically','var(--green)');
+    // Check for autosaved session from a previous crash
+    checkAutosaveRecovery();
     updateDataTab();
     setInterval(updateDataTab,5000);
     // Live sensor display BEFORE recording starts (updates speed/heading/sensor bars)

@@ -137,6 +137,10 @@ const ALGEBRA={
   remaining_to_landmark_m:0, // B.7
   tri_lat:0, tri_lon:0, tri_anchors:0, // B.8
 
+  // P1.3 — GPS calibration scale for IMU velocity
+  gpsCalScale:1.0,
+  _calTickCount:0,
+
   // Internal state
   _lastAccelPeakT:0,
   _zupt_count:0,
@@ -153,6 +157,12 @@ const ALGEBRA={
   update(sensors){
     const {accel, gyro, mag, compass, pressure, gps, speed, heading, dt,
            stepCount, boardTowerList, CAL, isStationary} = sensors;
+
+    // P1.3 — Restore gpsCalScale from localStorage on first tick
+    if(!this._calRestored){
+      this._calRestored=true;
+      try{const sv=localStorage.getItem('upin_gpsCalScale');if(sv){const v=parseFloat(sv);if(v>0.1&&v<20)this.gpsCalScale=v;}}catch(e){}
+    }
 
     // B.1 — Velocity from accelerometer integration
     const ax=accel.x-(CAL?CAL.accelBias.x:0);
@@ -178,6 +188,20 @@ const ALGEBRA={
       this._zupt_count=0;
       this.velocity_ms+=horizontal_accel*dt;
       this.velocity_ms*=0.95; // stronger decay — IMU velocity drifts fast
+    }
+    // P1.3 — GPS calibration: learn imu_scale = gps_speed / imu_velocity every 10 ticks
+    this._calTickCount++;
+    if(gps&&gps.acc&&gps.acc<50&&speed>1&&this.velocity_ms>0.01&&this._calTickCount%10===0){
+      // GPS-on: compute scale factor and smooth with EMA (alpha=0.1)
+      const imu_scale=speed/(this.velocity_ms||0.01);
+      // Clamp to reasonable range to avoid outliers
+      if(imu_scale>0.1&&imu_scale<20){
+        this.gpsCalScale=this.gpsCalScale*0.9+imu_scale*0.1;
+        try{localStorage.setItem('upin_gpsCalScale',this.gpsCalScale.toFixed(4));}catch(e){}
+      }
+    } else if((!gps||!gps.acc||gps.acc>=50)&&this.velocity_ms>0.01){
+      // GPS-off: apply calibration scale to raw IMU velocity
+      this.velocity_ms*=this.gpsCalScale;
     }
     // Hard cap: max 50 m/s (180 km/h). Soft cap: decay toward L7 fused speed
     this.velocity_ms=Math.min(Math.max(this.velocity_ms,0), 50);
