@@ -5,28 +5,27 @@
 'use strict';
 
 const LAYER2={
-  version:'L2.1.0',
-  // Individual filter toggles
-  jumpReject:true,     // 2A: Speed-based jump rejection
-  motionReject:false,  // 2B: IMU-based motion plausibility (off by default, needs tuning)
-  cellSanity:false,    // 2C: Cell tower sanity check (off by default)
-  roadSnap:false,      // 2D: Road snap (future — needs OSM data)
+  version:'L2.2.0',
+  jumpReject:true,
+  motionReject:false,
+  cellSanity:false,
+  roadSnap:false,
 
-  // State
-  lastGood:null,       // {lat, lon, t}
+  lastGood:null,
   lastGoodTime:0,
+  lastRealUpdateTime:0, // when position ACTUALLY changed (not stale repeats)
   rejectStreak:0,
-  maxRejectStreak:10,  // after 10 consecutive rejects (~5s), accept (tunnel exit etc.)
-  stats:{jumpsRejected:0, motionRejected:0, cellViolations:0, totalProcessed:0},
-  _log:[],             // recent filter events for CSV
+  maxRejectStreak:10,
+  maxRejectTimeMs:5000, // after 5s of continuous rejection, force accept
+  firstRejectTime:0,
+  stats:{jumpsRejected:0, motionRejected:0, cellViolations:0, totalProcessed:0, forceAccepts:0},
+  _log:[],
 
-  // Config
-  maxSpeedKmh:200,     // vehicle mode: 200 km/h max plausible
-  walkingMaxKmh:15,    // walking mode: 15 km/h max plausible
-  stationaryRadiusM:8, // when stationary, reject GPS > this distance from frozen pos
-  mode:'vehicle',      // 'vehicle' | 'walking'
+  maxSpeedKmh:200,
+  walkingMaxKmh:15,
+  stationaryRadiusM:8,
+  mode:'vehicle',
 
-  // Main entry point: filter a raw GPS reading
   smoothGPS(raw, accelMag, isStationary, frozenPos){
     if(!raw||!raw.lat) return raw;
     this.stats.totalProcessed++;
@@ -35,31 +34,49 @@ const LAYER2={
     let rejected=false;
     let flags={};
 
-    // 2A — Jump rejection
+    // 2A — Jump rejection (with stale-GPS protection)
     if(this.jumpReject && this.lastGood){
-      const dt=(now-this.lastGoodTime)/1000;
-      if(dt>0.1){
-        const dist=this._hav(pos, this.lastGood);
-        const impliedSpeed=(dist/dt)*3.6; // km/h
-        const maxSpeed=this.mode==='walking'?this.walkingMaxKmh:this.maxSpeedKmh;
-        if(impliedSpeed>maxSpeed){
-          this.rejectStreak++;
-          this.stats.jumpsRejected++;
-          flags.gps_jump_rejected=true;
-          flags.rejected_lat=pos.lat;
-          flags.rejected_lon=pos.lon;
-          flags.implied_speed_kmh=Math.round(impliedSpeed);
-          if(this.rejectStreak<this.maxRejectStreak){
-            pos={lat:this.lastGood.lat, lon:this.lastGood.lon, acc:raw.acc, speed:0};
-            rejected=true;
-          } else {
-            // Streak exceeded: accept this position (teleport/tunnel exit)
-            this.rejectStreak=0;
-            flags.streak_override=true;
-          }
-        } else {
+      const dist=this._hav(pos, this.lastGood);
+
+      // Skip speed check for positions that haven't moved (stale repeats)
+      if(dist < 1){
+        // Position hasn't changed — don't update lastGoodTime
+        // This prevents stale GPS from resetting the timer
+        pos._l2flags=flags;
+        return pos;
+      }
+
+      // Use time since position ACTUALLY changed, not since last callback
+      const dt=Math.max((now-this.lastRealUpdateTime)/1000, 0.5);
+      const impliedSpeed=(dist/dt)*3.6;
+      const maxSpeed=this.mode==='walking'?this.walkingMaxKmh:this.maxSpeedKmh;
+
+      if(impliedSpeed>maxSpeed){
+        this.rejectStreak++;
+        this.stats.jumpsRejected++;
+        flags.gps_jump_rejected=true;
+        flags.rejected_lat=pos.lat;
+        flags.rejected_lon=pos.lon;
+        flags.implied_speed_kmh=Math.round(impliedSpeed);
+
+        // Track when rejection streak started
+        if(this.rejectStreak===1) this.firstRejectTime=now;
+
+        // Force accept after time limit OR streak limit
+        const rejectDuration=now-this.firstRejectTime;
+        if(this.rejectStreak>=this.maxRejectStreak || rejectDuration>this.maxRejectTimeMs){
           this.rejectStreak=0;
+          this.firstRejectTime=0;
+          this.stats.forceAccepts++;
+          flags.force_accepted=true;
+          flags.reject_duration_ms=Math.round(rejectDuration);
+        } else {
+          pos={lat:this.lastGood.lat, lon:this.lastGood.lon, acc:raw.acc, speed:0};
+          rejected=true;
         }
+      } else {
+        this.rejectStreak=0;
+        this.firstRejectTime=0;
       }
     }
 
@@ -75,7 +92,7 @@ const LAYER2={
       }
     }
 
-    // 2C — Cell sanity check (flag only, don't reject yet)
+    // 2C — Cell sanity check (flag only, don't reject)
     if(this.cellSanity && !rejected){
       const cellCheck=this._checkCellSanity(pos);
       if(cellCheck.violation){
@@ -89,34 +106,26 @@ const LAYER2={
     if(!rejected){
       this.lastGood={lat:pos.lat, lon:pos.lon};
       this.lastGoodTime=now;
+      this.lastRealUpdateTime=now;
     }
 
-    // Store flags for CSV
     this._log.push({t:now, flags:flags});
     if(this._log.length>500) this._log.shift();
-
-    // Attach flags to the position object for CSV export
     pos._l2flags=flags;
     return pos;
   },
 
-  // Cell sanity: check if GPS position is within reasonable range of serving cell
   _checkCellSanity(pos){
-    // Use the board's tower list if available
     if(typeof boardTowerList==='undefined'||!boardTowerList||!boardTowerList.length)
       return {violation:false};
-    // Find the closest known tower
     let minDist=Infinity;
     boardTowerList.forEach(t=>{
       if(t.lat&&t.lon){
-        const d=this._hav(pos,{lat:t.lat,lon:t.lon})/1000; // km
+        const d=this._hav(pos,{lat:t.lat,lon:t.lon})/1000;
         if(d<minDist) minDist=d;
       }
     });
-    // If closest tower is > 3km away, flag
-    if(minDist<Infinity && minDist>3){
-      return {violation:true, distKm:Math.round(minDist*10)/10};
-    }
+    if(minDist<Infinity && minDist>3) return {violation:true, distKm:Math.round(minDist*10)/10};
     return {violation:false};
   },
 
@@ -126,29 +135,29 @@ const LAYER2={
     return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
   },
 
-  // CSV columns added per row
   csvFlags(t){
     const entry=this._log.find(l=>Math.abs(l.t-t)<600);
     if(!entry||!Object.keys(entry.flags).length) return '';
     return JSON.stringify(entry.flags);
   },
 
-  // Summary stats for CSV trailer
   csvSummary(){
-    let s='# GPS-Smoothing-Layer: L2.1.0\n';
+    let s='# GPS-Smoothing-Layer: L2.2.0\n';
     s+='# L2-Jump-Rejected: '+this.stats.jumpsRejected+'\n';
+    s+='# L2-Force-Accepts: '+this.stats.forceAccepts+'\n';
     s+='# L2-Motion-Rejected: '+this.stats.motionRejected+'\n';
     s+='# L2-Cell-Violations: '+this.stats.cellViolations+'\n';
     s+='# L2-Total-Processed: '+this.stats.totalProcessed+'\n';
-    s+='# L2-Filters: jump='+(this.jumpReject?'ON':'OFF')+' motion='+(this.motionReject?'ON':'OFF')+' cell='+(this.cellSanity?'ON':'OFF')+'\n';
     return s;
   },
 
   reset(){
     this.lastGood=null;
     this.lastGoodTime=0;
+    this.lastRealUpdateTime=0;
     this.rejectStreak=0;
-    this.stats={jumpsRejected:0, motionRejected:0, cellViolations:0, totalProcessed:0};
+    this.firstRejectTime=0;
+    this.stats={jumpsRejected:0, motionRejected:0, cellViolations:0, totalProcessed:0, forceAccepts:0};
     this._log=[];
   }
 };

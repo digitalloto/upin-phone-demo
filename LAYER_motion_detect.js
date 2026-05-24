@@ -60,7 +60,7 @@ const LAYER7={
     confidence:'LOW',
 
     update(cid, now, gpsSpeed){
-      if(!cid) return;
+      if(cid===undefined||cid===null) return;
       if(this.history.length===0 || this.history[this.history.length-1].cid!==cid){
         this.history.push({cid, t:now});
       }
@@ -160,7 +160,7 @@ const LAYER7={
       if(!towers||!Array.isArray(towers)) return;
       towers.forEach(t=>{
         const cid=t.cid||t.cellid;
-        if(!cid) return;
+        if(cid===undefined||cid===null) return;
         if(!this.rssiHistory[cid]) this.rssiHistory[cid]=[];
         this.rssiHistory[cid].push({rssi:t.rssi||0, t:now});
         if(this.rssiHistory[cid].length>20) this.rssiHistory[cid].shift();
@@ -290,7 +290,7 @@ const LAYER7={
       }
       towers.forEach(t=>{
         const cid=t.cid||t.cellid;
-        if(!cid) return;
+        if(cid===undefined||cid===null) return;
         if(!this._accumulator[cid]) this._accumulator[cid]=[];
         this._accumulator[cid].push(t.rssi||0);
       });

@@ -616,8 +616,12 @@ function updateStationaryDetect(speed){
   ACCEL_ENERGY_BUF.push(energy);
   if(ACCEL_ENERGY_BUF.length>20)ACCEL_ENERGY_BUF.shift();
   const avgEnergy=ACCEL_ENERGY_BUF.reduce((s,v)=>s+v,0)/ACCEL_ENERGY_BUF.length;
-  // Stationary if: low accel energy AND low/zero speed for 3+ ticks
-  if(avgEnergy<0.4&&(speed||0)<0.5){
+  // IMU variance: if accel readings vary, device is moving (even on smooth train)
+  const accelVar=ACCEL_ENERGY_BUF.length>5?ACCEL_ENERGY_BUF.reduce((s,v)=>s+(v-avgEnergy)**2,0)/ACCEL_ENERGY_BUF.length:0;
+  // Also check gyro activity (turns on train = not stationary)
+  const gyroActive=Math.abs(gyro.z)>1;
+  // Stationary if: low energy AND low variance AND no gyro AND low speed
+  if(avgEnergy<0.4&&accelVar<0.01&&!gyroActive&&(speed||0)<0.5){
     stationaryCount++;
     if(stationaryCount>=3&&!isStationary){
       isStationary=true;
@@ -2023,9 +2027,12 @@ const SPEED_LEARN={
 
   record(accelX,accelY,accelZ,gpsSpeed){
     const energy=Math.abs(Math.sqrt(accelX**2+accelY**2+accelZ**2)-9.81);
+    // Don't learn "vibration = 0 speed" when GPS is probably frozen
+    // If accel shows motion (energy>0.15) but GPS says 0, skip this sample
+    if(gpsSpeed<0.3&&energy>0.15)return;
     this.history.push({energy,speed:gpsSpeed});
     if(this.history.length>this.maxHist)this.history.shift();
-    this.lastSpeed=gpsSpeed;
+    if(gpsSpeed>0.3)this.lastSpeed=gpsSpeed;
   },
 
   estimate(){
@@ -2254,29 +2261,36 @@ window._upin={
   getBest(){const bi=bestFormulaIdx();return{name:F[bi].name,errAvg:F[bi].errAvg};},
   getFormulas(){return F;}
 };
+let _scoreTickCount=0;
+const SCORE_FREE_RUN=10; // formulas dead-reckon for 10 ticks before scoring
 function scoreFormulas(gps,dt){
   if(!gps||DATA.samples.length<3)return;
-  // Layer 1: use surveyed landmark as truth when active
+  _scoreTickCount++;
   const rawTruth=isStationary&&frozenPos?frozenPos:gps;
   const truth=window.LAYER1&&LAYER1.enabled?LAYER1.getTruth(rawTruth):rawTruth;
+  const isScoreTick=(_scoreTickCount%SCORE_FREE_RUN===0);
   F.forEach(f=>{
     if(!f.pos)f.pos={lat:truth.lat,lon:truth.lon};
+    // Formula predicts from its OWN position (not GPS)
     const predicted=f.predict({lat:f.pos.lat,lon:f.pos.lon},dt);
     if(predicted){
-      f.err=hav(predicted,truth);
-      // When stationary: any formula predicting movement is WRONG.
-      // Penalize distance from frozen position, not GPS jitter.
-      if(isStationary&&frozenPos){
-        const moveDist=hav(predicted,frozenPos);
-        if(moveDist>2)f.err=moveDist; // you moved when you shouldn't have
-      }
-      f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();
-      f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
-      f.learnFromGPS(predicted,truth);
-      // Store the prediction for display (not the reset position)
       f._lastPredLat=predicted.lat;f._lastPredLon=predicted.lon;
+      // Update formula position to its prediction (free-running)
+      f.pos={lat:predicted.lat,lon:predicted.lon};
+      // Score against GPS truth every SCORE_FREE_RUN ticks
+      if(isScoreTick){
+        f.err=hav(predicted,truth);
+        if(isStationary&&frozenPos){
+          const moveDist=hav(predicted,frozenPos);
+          if(moveDist>2)f.err=moveDist;
+        }
+        f.errHistory.push(f.err);if(f.errHistory.length>30)f.errHistory.shift();
+        f.errAvg=f.errHistory.reduce((s,e)=>s+e,0)/f.errHistory.length;
+        f.learnFromGPS(predicted,truth);
+        // Reset to GPS truth after scoring (re-anchor for next free-run window)
+        f.pos={lat:truth.lat,lon:truth.lon};
+      }
     }
-    f.pos={lat:truth.lat,lon:truth.lon};
   });
   FISH.scoreAll(truth);
 }
@@ -4578,7 +4592,7 @@ function tick(){
     else if(UTIN.predict()) drPos={lat:UTIN.predict().lat,lon:UTIN.predict().lon};
     else if(gpsTrue) drPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
   }
-  const activePos=gpsSys||drPos;
+  let activePos=gpsSys||drPos;
   if(phase==='recording'&&activePos){
     // STATIONARY DETECTION: freeze position when not moving
     const curSpd=gpsSys?gpsSys.speed||0:(window.LAYER7?LAYER7.fused.speed_kmh/3.6:0);
@@ -4640,18 +4654,8 @@ function tick(){
         const dopF=F.find(f=>f.name==='Doppler Shift');if(dopF&&dopF.errAvg<999)ML_COMPARE.record('doppler',dopF.errAvg);
       }
     }catch(e){}
-    // ═══ 10m TRAINING CONSTRAINT: force formulas within 10m of GPS during recording ═══
-    // This is the "tight leash" — formulas that drift >10m get pulled back
-    // This makes evolution MUCH faster because bad predictions are immediately corrected
-    F.forEach(f=>{
-      if(f.pos&&gpsSys){
-        const dist=hav(f.pos,gpsSys);
-        if(dist>10){
-          const ratio=10/dist;
-          f.pos={lat:gpsSys.lat+(f.pos.lat-gpsSys.lat)*ratio,lon:gpsSys.lon+(f.pos.lon-gpsSys.lon)*ratio};
-        }
-      }
-    });
+    // Formulas free-run between scoring ticks (no 10m leash)
+    // scoreFormulas() re-anchors to GPS every SCORE_FREE_RUN ticks
     // ═══ Show cell tower triangulation on map ═══
     const cellTri=UTIN.predict();
     if(cellTri){
