@@ -258,6 +258,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
       <button class="btn btn-amber" id="bJam" onclick="V.jam()">Jam GPS</button>
       <button class="btn btn-red" id="bSpoof" onclick="V.spoof()">Spoof GPS</button>
     </div>
+    <label style="display:inline-flex;align-items:center;gap:4px;font-size:8px;color:var(--amber);cursor:pointer;margin:4px 0"><input type="checkbox" id="autoDrillToggle" onchange="AUTO_DRILL.enabled=this.checked"> Auto-Drill (20min / 60s)</label>
     <button class="btn btn-dim" onclick="V.endTest()" style="width:100%;margin-top:4px">End Test / Report</button>
     <button onclick="V.downloadReport()" style="width:100%;margin-top:4px;background:rgba(168,85,247,.1);color:#A855F7;border:1px solid #A855F7;padding:10px;font-family:inherit;font-size:8px;font-weight:700;letter-spacing:1px;cursor:pointer;border-radius:2px">DOWNLOAD REPORT</button>
   </div>
@@ -787,6 +788,7 @@ function validateFix(lat,lon,source){
     const distM=hav({lat,lon},lastGoodFix);
     const dtSec=(performance.now()-lastGoodFix.t)/1000;
     if(dtSec>0&&distM/dtSec>500) // FIX 5: >500m/s = impossible
+      DEBUG_LOG.log('WARN','L2 jump rejected: impossible_speed from '+source+' lat='+lat+' lon='+lon);
       return rejectFix(lat,lon,source,'impossible_speed');
   }
   lastGoodFix={lat,lon,t:performance.now()};
@@ -854,8 +856,65 @@ const $=id=>document.getElementById(id);
 const hav=(a,b)=>{const R=6371000,dLa=(b.lat-a.lat)*Math.PI/180,dLo=(b.lon-a.lon)*Math.PI/180,x=Math.sin(dLa/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
 const fmt=s=>{const m=Math.floor(s/60),ss=Math.floor(s%60);return m+':'+(ss<10?'0':'')+ss;};
 function ts(){const d=new Date();return d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');}
-function log(m,c){const b=$('log'),d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent='['+ts()+'] '+m;b.appendChild(d);if(b.childNodes.length>40)b.removeChild(b.firstChild);b.scrollTop=b.scrollHeight;}
+function log(m,c){const b=$('log'),d=document.createElement('div');d.style.color=c||'var(--td)';d.textContent='['+ts()+'] '+m;b.appendChild(d);if(b.childNodes.length>40)b.removeChild(b.firstChild);b.scrollTop=b.scrollHeight;if(typeof DEBUG_LOG!=='undefined')DEBUG_LOG.log('INFO',m);}
 
+// ═══════════════════════════════════════
+// DEBUG LOG — ring buffer of last 50 events, appended to CSV
+// ═══════════════════════════════════════
+const DEBUG_LOG={
+  entries:[],
+  maxEntries:50,
+  log(level,msg){
+    this.entries.push({t:new Date().toISOString(),level,msg});
+    if(this.entries.length>this.maxEntries)this.entries.shift();
+  },
+  toCSV(){
+    let s='\n# ===== DEBUG LOG (last 50 events) =====\n';
+    this.entries.forEach(e=>{s+='# '+e.t+' ['+e.level+'] '+e.msg+'\n';});
+    return s;
+  }
+};
+
+// ═══════════════════════════════════════
+// KPI TRACKING — counters for data health metrics
+// ═══════════════════════════════════════
+const KPI_TRACK={
+  boardConnectedTime:0,
+  gpsLockTime:0,
+  lastTickTime:0,
+  lastBoardState:false,
+  lastGpsState:false,
+  speedFusedSet:new Set(),
+  formulaSelectionChanges:0,
+  lastBestIdx:-1,
+  tick(now){
+    if(!startTime)return;
+    const dt=this.lastTickTime>0?(now-this.lastTickTime)/1000:1;
+    this.lastTickTime=now;
+    if(boardConnected)this.boardConnectedTime+=dt;
+    if(gpsSource!=='none')this.gpsLockTime+=dt;
+    // Track board connect/disconnect transitions
+    if(boardConnected!==this.lastBoardState){
+      DEBUG_LOG.log(boardConnected?'INFO':'WARN',boardConnected?'BLE connected':'BLE disconnected');
+      this.lastBoardState=boardConnected;
+    }
+    // Track GPS lock/lost transitions
+    if((gpsSource!=='none')!==this.lastGpsState){
+      DEBUG_LOG.log((gpsSource!=='none')?'INFO':'WARN',(gpsSource!=='none')?'GPS lock acquired ('+gpsSource+')':'GPS lock lost');
+      this.lastGpsState=(gpsSource!=='none');
+    }
+    // Track fused speed unique values
+    const fusedSpd=window.LAYER7?LAYER7.fused.speed_kmh:0;
+    if(fusedSpd>0)this.speedFusedSet.add(Math.round(fusedSpd*10)/10);
+    // Track formula selection changes
+    const bi=bestFormulaIdx();
+    if(bi!==this.lastBestIdx&&this.lastBestIdx>=0){
+      this.formulaSelectionChanges++;
+      DEBUG_LOG.log('INFO','Formula selection changed: '+F[this.lastBestIdx].name+' -> '+F[bi].name);
+    }
+    this.lastBestIdx=bi;
+  }
+};
 
 // ═══════════════════════════════════════
 // SENSOR PREPROCESSING — 5 data quality fixes
@@ -1019,6 +1078,7 @@ function connectBLE(){
   }).then(()=>{
     bleChar.addEventListener('characteristicvaluechanged',onBLEData);
     boardConnected=true;useBoard=true;boardSource='ble';bleBuffer='';blePackets=0;bleErrors=0;
+    DEBUG_LOG.log('INFO','BLE board connected — 7 sensors active');
     $('boardStatus').innerHTML='<span class="sdot live"></span> BLE CONNECTED — 7 SENSORS';
     $('bleBtn').className='btn-hw connected';$('bleBtn').textContent='BLE CONNECTED — TAP TO DISCONNECT';
     $('bStart').disabled=false;$('bStart').style.opacity='1';
@@ -1104,6 +1164,7 @@ let bleDropCount=0; // track how many times BLE drops (WiFi scan causes this)
 function onBLEDisconnect(){
   const wasBLE=(boardSource==='ble');
   bleDropCount++;
+  DEBUG_LOG.log('WARN','BLE disconnected (drop #'+bleDropCount+')');
   // DON'T reset boardConnected on brief drops — WiFi scan causes 1-2s disconnects every 10s
   // Keep recording running, just mark connection as temporarily lost
   if(wasBLE){boardConnected=false;boardSource='none';}
@@ -4624,6 +4685,32 @@ function buildFormulaTable(){
 }
 
 let lastTick=null;
+// ═══════════════════════════════════════
+// AUTO-DRILL MODE — automated GPS denial drills on interval
+// ═══════════════════════════════════════
+const AUTO_DRILL={
+  enabled:false,
+  intervalMin:20,       // drill every 20 minutes
+  durationSec:60,       // each drill lasts 60 seconds
+  minSpeedKmh:20,       // only drill when moving > 20 km/h
+  lastDrillTime:0,
+  drillCount:0,
+  tick(speedKmh,now){
+    if(!this.enabled||phase!=='recording')return;
+    if(phase==='jammed'||phase==='spoofed')return;
+    const elapsed=(now-this.lastDrillTime)/1000/60;
+    if(elapsed<this.intervalMin)return;
+    if(speedKmh<this.minSpeedKmh)return;
+    // Start auto-drill
+    this.lastDrillTime=now;
+    this.drillCount++;
+    DEBUG_LOG.log('INFO','AUTO-DRILL #'+this.drillCount+' started (speed: '+speedKmh.toFixed(1)+' km/h)');
+    jam();
+    // Auto-resurface after duration
+    setTimeout(()=>{if(phase==='jammed'){DEBUG_LOG.log('INFO','AUTO-DRILL #'+AUTO_DRILL.drillCount+' auto-resurface');resurface();}},this.durationSec*1000);
+  }
+};
+
 function tick(){
   const now=performance.now(),dt=lastTick?(now-lastTick)/1000:1;lastTick=now;uiFrame++;
   const doUI=true; // refresh every tick
@@ -4658,6 +4745,8 @@ function tick(){
     // STATIONARY DETECTION: freeze position when not moving
     const curSpd=gpsSys?gpsSys.speed||0:(window.LAYER7?LAYER7.fused.speed_kmh/3.6:0);
     updateStationaryDetect(curSpd);
+    KPI_TRACK.tick(now);
+    AUTO_DRILL.tick(curSpd*3.6,now);
     if(isStationary&&frozenPos&&gpsSys){
       gpsSys.lat=frozenPos.lat;gpsSys.lon=frozenPos.lon;gpsSys.speed=0;
       if(uiFrame%5===0)CAL.addStillSample(accel,gyro);
@@ -6066,6 +6155,7 @@ function startRec(){
 }
 function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();
+  DEBUG_LOG.log('INFO','GPS DENIAL DRILL started (jam)');
   // BLOCK ALL GPS — board AND phone. gpsTrue keeps updating for drift measurement only.
   gpsSys=null;gpsSource='none';
   PUE.activate();SPEED_LEARN.reset();
@@ -6082,6 +6172,7 @@ function jam(){
 }
 function spoof(){
   if(phase!=='recording')return;phase='spoofed';drillStart=performance.now();
+  DEBUG_LOG.log('INFO','GPS DENIAL DRILL started (spoof)');
   gpsSys=null;gpsSource='none';
   PUE.activate();
   $('badge').textContent='SPOOFED';$('badge').className='badge b-jam';
@@ -6099,7 +6190,8 @@ function resurface(){
   const dps=bs>0?drift/bs:0;let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
   const fRes=F.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999})).sort((a,b)=>a.drift-b.drift);
   const ps=PUE.stats();
-  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected,pue:{radius:Math.round(ps.radius),enforced:ps.enforced,total:ps.total,pct:ps.pct}});if(drills.length>200)drills.shift();
+  drills.push({blindSec:bs,driftM:drift,type:phase,grade,samples:DATA.count(),formulaResults:fRes,boardActive:boardConnected,pue:{radius:Math.round(ps.radius),enforced:ps.enforced,total:ps.total,pct:ps.pct}});
+  DEBUG_LOG.log('INFO','DRILL ended: drift='+drift.toFixed(1)+'m grade='+grade+' duration='+bs.toFixed(0)+'s best='+fRes[0].name);if(drills.length>200)drills.shift();
   // Clean up PUE circle from map
   if(PUE._circle){map.removeLayer(PUE._circle);PUE._circle=null;}
   PUE.active=false;
@@ -6434,6 +6526,99 @@ function checkAutosaveRecovery(){
   }catch(e){}
 }
 
+function buildKPIReport(){
+  const now=performance.now();
+  const durS=startTime?(now-startTime)/1000:0;
+  const runId='RUN_'+new Date().toISOString().slice(0,19).replace(/[T:-]/g,'')+'_KPI';
+  let r='\n# ===== UPIN v6 KPI REPORT =====\n';
+  r+='# Test_ID: '+runId+'\n';
+  r+='# Duration_s: '+durS.toFixed(1)+'\n';
+  r+='# Total_distance_km: '+(totalDist/1000).toFixed(3)+'\n';
+  r+='# Avg_speed_kmh: '+(durS>0?((totalDist/durS)*3.6).toFixed(2):'0')+'\n';
+  r+='#\n';
+  // --- Data Health ---
+  r+='# --- DATA HEALTH ---\n';
+  r+='# CSV_rows: '+DATA.count()+'\n';
+  // Count gaps > 10s
+  let gapCount=0;
+  for(let i=1;i<DATA.samples.length;i++){
+    const dtMs=DATA.samples[i].t-DATA.samples[i-1].t;
+    if(dtMs>10000)gapCount++;
+  }
+  r+='# CSV_gaps_over_10s: '+gapCount+'\n';
+  // BLE packet success %
+  const blePct=blePackets>0?((blePackets-bleErrors)/blePackets*100).toFixed(1):'N/A';
+  r+='# BLE_packet_success_pct: '+blePct+'\n';
+  // Board connected % of test
+  const totalTestTime=durS||1;
+  r+='# Board_connected_pct_of_test: '+(KPI_TRACK.boardConnectedTime/totalTestTime*100).toFixed(1)+'\n';
+  // GPS lock % of test
+  r+='# GPS_lock_pct_of_test: '+(KPI_TRACK.gpsLockTime/totalTestTime*100).toFixed(1)+'\n';
+  r+='#\n';
+  // --- Algorithm Health ---
+  r+='# --- ALGORITHM HEALTH ---\n';
+  // Count unique predicted positions across formulas
+  const uniquePredSet=new Set();
+  F.forEach(f=>{if(f._lastPredLat)uniquePredSet.add(f._lastPredLat.toFixed(6)+','+f._lastPredLon.toFixed(6));});
+  r+='# Formula_unique_positions: '+uniquePredSet.size+'\n';
+  r+='# Speed_Fused_kmh_unique_values: '+KPI_TRACK.speedFusedSet.size+'\n';
+  r+='# Formula_selection_changes: '+KPI_TRACK.formulaSelectionChanges+'\n';
+  // Cell towers seen
+  const towersSeenCount=boardTowerList?boardTowerList.length:0;
+  const utinTowers=UTIN.scanHistory?UTIN.scanHistory.reduce((s,scan)=>s+scan.length,0):0;
+  r+='# Cell_towers_seen: '+Math.max(towersSeenCount,cellTowers4G+cellTowers2G)+'\n';
+  // WiFi fingerprints
+  r+='# WiFi_fingerprints_captured: '+ANIMAL.whale.fpMap.length+'\n';
+  r+='#\n';
+  // --- GPS Denial Drill Performance ---
+  r+='# --- GPS DENIAL DRILL PERFORMANCE ---\n';
+  r+='# Total_drills: '+drills.length+'\n';
+  if(drills.length>0){
+    drills.forEach((d,i)=>{
+      r+='# Drill_'+(i+1)+': type='+d.type+' duration='+d.blindSec.toFixed(0)+'s drift='+d.driftM.toFixed(1)+'m grade='+d.grade;
+      r+=' best='+d.formulaResults[0].name+'('+d.formulaResults[0].drift.toFixed(1)+'m)';
+      r+=' board='+(d.boardActive?'yes':'no');
+      r+=' PUE='+d.pue.enforced+'/'+d.pue.total+'('+d.pue.pct+'%)';
+      r+='\n';
+    });
+  }
+  r+='#\n';
+  // --- HONEST PERFORMANCE ---
+  r+='# --- HONEST PERFORMANCE ---\n';
+  // Best/worst formula during GPS on (recording phase errors)
+  const runningFormulas=F.filter(f=>f.errAvg<999&&!f.name.includes('disabled'));
+  if(runningFormulas.length>0){
+    const sorted=[...runningFormulas].sort((a,b)=>a.errAvg-b.errAvg);
+    r+='# Best_formula_GPS_on: '+sorted[0].name+' ('+sorted[0].errAvg.toFixed(1)+'m avg err)\n';
+    r+='# Worst_formula_GPS_on: '+sorted[sorted.length-1].name+' ('+sorted[sorted.length-1].errAvg.toFixed(1)+'m avg err)\n';
+  }else{
+    r+='# Best_formula_GPS_on: N/A\n';
+    r+='# Worst_formula_GPS_on: N/A\n';
+  }
+  // Best/worst during GPS off (from drill results)
+  if(drills.length>0){
+    const allDrillFormulas=[];
+    drills.forEach(d=>{d.formulaResults.forEach(fr=>{if(fr.drift<999)allDrillFormulas.push(fr);});});
+    if(allDrillFormulas.length>0){
+      allDrillFormulas.sort((a,b)=>a.drift-b.drift);
+      r+='# Best_formula_GPS_off: '+allDrillFormulas[0].name+' ('+allDrillFormulas[0].drift.toFixed(1)+'m drift)\n';
+      r+='# Worst_formula_GPS_off: '+allDrillFormulas[allDrillFormulas.length-1].name+' ('+allDrillFormulas[allDrillFormulas.length-1].drift.toFixed(1)+'m drift)\n';
+    }
+    // Worst drift and median drift
+    const drifts=drills.map(d=>d.driftM).sort((a,b)=>a-b);
+    const medianDrift=drifts[Math.floor(drifts.length/2)];
+    r+='# Worst_drift_m: '+Math.max(...drifts).toFixed(1)+'\n';
+    r+='# Median_drift_m: '+medianDrift.toFixed(1)+'\n';
+  }else{
+    r+='# Best_formula_GPS_off: N/A (no drills)\n';
+    r+='# Worst_formula_GPS_off: N/A (no drills)\n';
+    r+='# Worst_drift_m: N/A\n';
+    r+='# Median_drift_m: N/A\n';
+  }
+  r+='# Auto_drills_run: '+AUTO_DRILL.drillCount+'\n';
+  return r;
+}
+
 function exportCSV(){
   const now=new Date();
   const runId='RUN_'+now.toISOString().slice(0,19).replace(/[T:-]/g,'')+'_Chennai_'+(phase||'idle')+'_'+UPIN_VERSION;
@@ -6491,6 +6676,8 @@ function exportCSV(){
   if(window.LAYER7&&LAYER7.enabled) c+=LAYER7.csvTrailer(boardTowerList);
   if(window.LAYER8&&LAYER8.enabled) c+=LAYER8.csvTrailer();
   if(window.LAYER9&&LAYER9.log.length>0) c+=LAYER9.csvTrailer();
+  c+=buildKPIReport();
+  c+=DEBUG_LOG.toCSV();
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(c);
   a.download=runId+'.csv';a.click();
   log('CSV exported: '+runId+'.csv ('+DATA.count()+' samples, '+clusters+' clusters)','var(--green)');
