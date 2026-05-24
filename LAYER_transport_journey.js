@@ -57,7 +57,7 @@ const TRANSPORT_MODES={
   walk:    {label:'Walking',    maxSpeed:8,   cellRadius:1500, zupt_accel:0.08, jumpReject:15,  icon:'🚶'},
   cycle:   {label:'Bicycle',    maxSpeed:35,  cellRadius:1500, zupt_accel:0.1,  jumpReject:50,  icon:'🚲'},
   car:     {label:'Car/Auto',   maxSpeed:150, cellRadius:2000, zupt_accel:0.03, jumpReject:200, icon:'🚗'},
-  train:   {label:'Train',      maxSpeed:200, cellRadius:4000, zupt_accel:0.02, jumpReject:200, icon:'🚆'},
+  train:   {label:'Train',      maxSpeed:350, cellRadius:4000, zupt_accel:0.02, jumpReject:350, icon:'🚆'},
   flight:  {label:'Flight',     maxSpeed:900, cellRadius:10000,zupt_accel:0.01, jumpReject:500, icon:'✈️'},
 };
 

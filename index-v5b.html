@@ -2087,6 +2087,38 @@ function drPredict(pos,dt,speedOverride){
   return{lat:pos.lat+(s*Math.cos(h)*dt)/111320,lon:pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
 }
 
+// TIER 1: IMU+Compass Dead Reckoning — proper DR from sensors only
+// Speed from: SPEED_LEARN > Layer 7 CID > ALGEBRA IMU > accel integration
+// Heading from: compass (absolute, GPS-independent)
+// Does NOT use GPS velocity at all
+F.push(mkF('IMU+Compass DR',function(pos,dt){
+  if(!pos)return null;
+  // Speed: multi-source, GPS-independent
+  let spd=0;
+  const learned=SPEED_LEARN.estimate();
+  if(learned>0.5){spd=learned;}
+  else if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>2){spd=LAYER7.fused.speed_kmh/3.6;}
+  else if(window.LAYER7&&LAYER7.cidSpeed&&LAYER7.cidSpeed.speed_kmh>2){spd=LAYER7.cidSpeed.speed_kmh/3.6;}
+  else if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3){spd=ALGEBRA.velocity_ms;}
+  else{
+    // Last resort: detect acceleration from IMU (not constant velocity)
+    const ax=accel.x-(CAL?CAL.accelBias.x:0);
+    const ay=accel.y-(CAL?CAL.accelBias.y:0);
+    const energy=Math.abs(Math.sqrt(ax*ax+ay*ay+(accel.z-(CAL?CAL.accelBias.z:0))**2)-9.81);
+    if(energy>0.3){
+      this._imuSpd=(this._imuSpd||0)+energy*dt*0.5;
+      this._imuSpd=Math.min(this._imuSpd,50);
+    }else{
+      this._imuSpd=(this._imuSpd||0)*0.98; // decay when no acceleration
+    }
+    spd=this._imuSpd||0;
+  }
+  if(spd<0.1)return null;
+  // Heading: compass (absolute, works without GPS)
+  const h=(compass+CAL.compassOff)*Math.PI/180;
+  return{lat:pos.lat+(spd*Math.cos(h)*dt)/111320,lon:pos.lon+(spd*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))};
+}));
+
 // F0-F2: Velocity (SMA, EMA, WMA)
 F.push(mkF('Vel SMA',(pos,dt)=>{const v=velFromGPS(5);return v?{lat:pos.lat+v.vLat*dt,lon:pos.lon+v.vLon*dt}:drPredict(pos,dt);}));
 F.push(mkF('Vel EMA',function(pos,dt){const v=velFromGPS(3);if(!v)return null;const a=0.3;this._vL=(this._vL||0)*(1-a)+v.vLat*a;this._vO=(this._vO||0)*(1-a)+v.vLon*a;return{lat:pos.lat+this._vL*dt,lon:pos.lon+this._vO*dt};}));
@@ -2248,8 +2280,20 @@ F.push(mkF('Mag Map Match',function(pos,dt){
 }));
 
 const FORMULAS=F;
+// TIER 1: Proven formulas that compute from sensors, not GPS
+const TIER1_NAMES=['Cell Direction','Salmon (cell grad)','MACD+Cell','IMU+Compass DR','Whale (wifi fp)'];
 function bestFormulaIdx(){
   if(window.LAYER5&&LAYER5.enabled) return LAYER5.bestRunningIdx(F,gpsSys);
+  // During denial: prefer TIER 1 formulas (proven sensor-based)
+  if(phase!=='recording'){
+    let b=-1,bE=Infinity;
+    F.forEach((f,i)=>{
+      if(!TIER1_NAMES.includes(f.name))return;
+      if(f.errAvg<bE&&f.errAvg<999){bE=f.errAvg;b=i;}
+    });
+    if(b>=0)return b;
+  }
+  // Fallback: best overall
   let b=0,bE=Infinity;F.forEach((f,i)=>{
   if(f.name.includes('disabled'))return;
   if(f.errAvg<bE){bE=f.errAvg;b=i;}
