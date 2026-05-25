@@ -776,17 +776,44 @@ function tick(){
     const mapPos=gpsSys||FUSION.pos||drPos;
     if(mapPos&&mapPos.lat>1&&typeof L!=='undefined'){
       const ll=[mapPos.lat,mapPos.lon];
+      const isJam=phase==='jammed';
+      const col=isJam?'#FFB800':'#00FF88';
       if(!marker){
         map.setView(ll,16);
-        marker=L.circleMarker(ll,{radius:8,color:phase==='jammed'?'#FFB800':'#00FF88',fillColor:phase==='jammed'?'#FFB800':'#00FF88',fillOpacity:1,weight:2}).addTo(map);
+        marker=L.circleMarker(ll,{radius:8,color:col,fillColor:col,fillOpacity:1,weight:2}).addTo(map);
       }else{
         marker.setLatLng(ll);
-        marker.setStyle({color:phase==='jammed'?'#FFB800':'#00FF88',fillColor:phase==='jammed'?'#FFB800':'#00FF88'});
+        marker.setStyle({color:col,fillColor:col});
       }
-      // Trail
+
+      // GPS accuracy circle
+      if(gpsSys&&gpsSys.acc&&!isJam){
+        if(!gpsAccCircle)gpsAccCircle=L.circle(ll,{radius:gpsSys.acc,color:'#00FF88',fillOpacity:0.05,weight:1,dashArray:'4,4'}).addTo(map);
+        else{gpsAccCircle.setLatLng(ll);gpsAccCircle.setRadius(gpsSys.acc);}
+      }
+      if(isJam&&gpsAccCircle){map.removeLayer(gpsAccCircle);gpsAccCircle=null;}
+
+      // Uncertainty cone: grows during denial
+      if(isJam){
+        coneRadius+=(speedNow||1)*dt;
+        if(!coneCircle)coneCircle=L.circle(ll,{radius:coneRadius,color:'#00e5ff',fillOpacity:0.04,weight:1,dashArray:'6,4'}).addTo(map);
+        else{coneCircle.setLatLng(ll);coneCircle.setRadius(coneRadius);}
+      }else{
+        coneRadius=gpsSys?gpsSys.acc||10:10;
+        if(coneCircle){map.removeLayer(coneCircle);coneCircle=null;}
+      }
+
+      // Trail — green for GPS, orange for denied
       drTrail.push(ll);if(drTrail.length>500)drTrail.shift();
-      if(drLine)drLine.setLatLngs(drTrail);
-      else drLine=L.polyline(drTrail,{color:phase==='jammed'?'#FFB800':'#00FF88',weight:3,opacity:0.7}).addTo(map);
+      if(drLine){drLine.setLatLngs(drTrail);drLine.setStyle({color:col});}
+      else drLine=L.polyline(drTrail,{color:col,weight:3,opacity:0.7}).addTo(map);
+
+      // GPS truth marker during denial (small purple dot shows real position)
+      if(isJam&&gpsTrue&&gpsTrue.lat>1){
+        const tll=[gpsTrue.lat,gpsTrue.lon];
+        if(!truthMarker)truthMarker=L.circleMarker(tll,{radius:4,color:'#A855F7',fillColor:'#A855F7',fillOpacity:0.8,weight:1}).addTo(map);
+        else truthMarker.setLatLng(tll);
+      }else if(!isJam&&truthMarker){map.removeLayer(truthMarker);truthMarker=null;}
     }
   }
 
@@ -795,6 +822,10 @@ function tick(){
     const ll=[gpsSys.lat,gpsSys.lon];
     if(!marker){map.setView(ll,16);marker=L.circleMarker(ll,{radius:8,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1,weight:2}).addTo(map);}
     else marker.setLatLng(ll);
+    if(gpsSys.acc){
+      if(!gpsAccCircle)gpsAccCircle=L.circle(ll,{radius:gpsSys.acc,color:'#00FF88',fillOpacity:0.05,weight:1,dashArray:'4,4'}).addTo(map);
+      else{gpsAccCircle.setLatLng(ll);gpsAccCircle.setRadius(gpsSys.acc);}
+    }
   }
 
   // Update UI
@@ -944,7 +975,7 @@ function autoSave(){
 }
 
 // ─── MAP ───
-let map,marker,drTrail=[],drLine;
+let map,marker,drTrail=[],drLine,gpsAccCircle,coneCircle,coneRadius=10,truthMarker;
 function initMap(){
   map=L.map('map',{zoomControl:false}).setView([13.08,80.27],15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OSM',maxZoom:19}).addTo(map);
