@@ -434,16 +434,19 @@ function connectBLE(){
   });
 }
 
+let _bleDropTime=0;
 function onBLEDrop(){
   boardConnected=false;document.getElementById('dBLE').className='sdot err';
-  log('BLE dropped — reconnecting...','var(--amber)');
+  const now=Date.now();
+  if(now-_bleDropTime>5000)log('BLE dropped — reconnecting...','var(--amber)');
+  _bleDropTime=now;
   setTimeout(()=>{if(bleDevice&&bleDevice.gatt)bleDevice.gatt.connect()
     .then(s=>s.getPrimaryService(BLE_SERVICE))
     .then(s=>s.getCharacteristic(BLE_TX_CHAR))
     .then(c=>{bleChar=c;c.startNotifications();c.addEventListener('characteristicvaluechanged',onBLEData);
       boardConnected=true;document.getElementById('dBLE').className='sdot live';
-      log('BLE reconnected','var(--green)');
-    }).catch(()=>onBLEDrop());
+      if(Date.now()-_bleDropTime>3000)log('BLE reconnected','var(--green)');
+    }).catch(()=>{setTimeout(onBLEDrop,3000);});
   },2000);
 }
 
@@ -618,6 +621,30 @@ function tick(){
 
     // Auto-save every 5 min
     if(uiFrame%300===0)autoSave();
+
+    // MAP: draw position
+    const mapPos=gpsSys||FUSION.pos||drPos;
+    if(mapPos&&mapPos.lat>1&&typeof L!=='undefined'){
+      const ll=[mapPos.lat,mapPos.lon];
+      if(!marker){
+        map.setView(ll,16);
+        marker=L.circleMarker(ll,{radius:8,color:phase==='jammed'?'#FFB800':'#00FF88',fillColor:phase==='jammed'?'#FFB800':'#00FF88',fillOpacity:1,weight:2}).addTo(map);
+      }else{
+        marker.setLatLng(ll);
+        marker.setStyle({color:phase==='jammed'?'#FFB800':'#00FF88',fillColor:phase==='jammed'?'#FFB800':'#00FF88'});
+      }
+      // Trail
+      drTrail.push(ll);if(drTrail.length>500)drTrail.shift();
+      if(drLine)drLine.setLatLngs(drTrail);
+      else drLine=L.polyline(drTrail,{color:phase==='jammed'?'#FFB800':'#00FF88',weight:3,opacity:0.7}).addTo(map);
+    }
+  }
+
+  // Even outside recording: show GPS on map if available
+  if(phase==='idle'&&gpsSys&&gpsSys.lat>1&&typeof L!=='undefined'){
+    const ll=[gpsSys.lat,gpsSys.lon];
+    if(!marker){map.setView(ll,16);marker=L.circleMarker(ll,{radius:8,color:'#00FF88',fillColor:'#00FF88',fillOpacity:1,weight:2}).addTo(map);}
+    else marker.setLatLng(ll);
   }
 
   // Update UI
