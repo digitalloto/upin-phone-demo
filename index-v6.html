@@ -518,13 +518,19 @@ function processBoardData(d){
 // ─── PHONE GPS ───
 function initPhoneGPS(){
   if(!navigator.geolocation)return;
-  navigator.geolocation.watchPosition(p=>{
-    const fix={lat:p.coords.latitude,lon:p.coords.longitude,speed:p.coords.speed||0,acc:p.coords.accuracy};
-    gpsTrue=fix;
-    if(phase!=='jammed')gpsSys=fix;
-    document.getElementById('dGPS').className='sdot live';
-    document.getElementById('dGPSv').textContent='±'+Math.round(fix.acc)+'m';
-  },{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+  navigator.geolocation.watchPosition(
+    p=>{
+      const fix={lat:p.coords.latitude,lon:p.coords.longitude,speed:p.coords.speed||0,acc:p.coords.accuracy};
+      gpsTrue=fix;
+      if(phase!=='jammed')gpsSys=fix;
+      document.getElementById('dGPS').className='sdot live';
+      document.getElementById('dGPSv').textContent='±'+Math.round(fix.acc)+'m';
+    },
+    err=>{
+      document.getElementById('dGPSv').textContent=err.code===1?'denied':err.code===3?'timeout':'error';
+    },
+    {enableHighAccuracy:true,maximumAge:2000,timeout:15000}
+  );
 }
 
 // ─── PHONE SENSORS ───
