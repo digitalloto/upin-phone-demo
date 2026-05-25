@@ -400,16 +400,38 @@ const BLE_TX_CHAR='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 let bleBuffer='';
 function connectBLE(){
   if(!navigator.bluetooth){log('Bluetooth not available','var(--red)');return;}
-  navigator.bluetooth.requestDevice({filters:[{name:'UPIN-BLE'}],optionalServices:[BLE_SERVICE]})
-  .then(d=>{bleDevice=d;d.addEventListener('gattserverdisconnected',onBLEDrop);return d.gatt.connect();})
-  .then(s=>s.getPrimaryService(BLE_SERVICE))
-  .then(s=>s.getCharacteristic(BLE_TX_CHAR))
-  .then(c=>{bleChar=c;c.startNotifications();c.addEventListener('characteristicvaluechanged',onBLEData);
-    boardConnected=true;document.getElementById('bleBtn').textContent='Board Connected';
-    document.getElementById('bleStatus').textContent='BLE active';
+  log('Requesting BLE connection...','var(--cyan)');
+  navigator.bluetooth.requestDevice({
+    filters:[{name:'UPIN-BLE'}],
+    optionalServices:[BLE_SERVICE]
+  }).then(device=>{
+    bleDevice=device;
+    device.addEventListener('gattserverdisconnected',onBLEDrop);
+    log('Device found: '+device.name+' — connecting GATT...','var(--cyan)');
+    return device.gatt.connect();
+  }).then(server=>{
+    log('GATT connected — getting UART service...','var(--cyan)');
+    return server.getPrimaryService(BLE_SERVICE);
+  }).then(service=>{
+    return service.getCharacteristic(BLE_TX_CHAR);
+  }).then(char=>{
+    bleChar=char;
+    return char.startNotifications();
+  }).then(()=>{
+    bleChar.addEventListener('characteristicvaluechanged',onBLEData);
+    boardConnected=true;
+    document.getElementById('bleBtn').textContent='Board Connected ✓';
+    document.getElementById('bleStatus').textContent='BLE active — 7 sensors';
     document.getElementById('dBLE').className='sdot live';document.getElementById('dBLEv').textContent='connected';
-    log('BLE connected','var(--green)');
-  }).catch(e=>log('BLE error: '+e.message,'var(--red)'));
+    log('BLE connected! Receiving sensor data','var(--green)');
+    initPhoneSensors();initPhoneGPS();
+  }).catch(err=>{
+    const msg=err.message||String(err);
+    log('BLE error: '+msg,'var(--red)');
+    if(msg.includes('Service')){
+      log('Try: power cycle the board, then reconnect','var(--amber)');
+    }
+  });
 }
 
 function onBLEDrop(){
