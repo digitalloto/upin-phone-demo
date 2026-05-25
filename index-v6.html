@@ -395,13 +395,15 @@ function fmt(s){const m=Math.floor(s/60);return m+':'+String(Math.floor(s%60)).p
 // ═══════════════════════════════════════════════════════════
 // LAYER 3: BLE DATA INGESTION
 // ═══════════════════════════════════════════════════════════
+const BLE_SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const BLE_TX_CHAR='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 let bleBuffer='';
 function connectBLE(){
   if(!navigator.bluetooth){log('Bluetooth not available','var(--red)');return;}
-  navigator.bluetooth.requestDevice({filters:[{namePrefix:'UPIN'}],optionalServices:['0000ffe0-0000-1000-8000-00805f9b34fb']})
+  navigator.bluetooth.requestDevice({filters:[{name:'UPIN-BLE'}],optionalServices:[BLE_SERVICE]})
   .then(d=>{bleDevice=d;d.addEventListener('gattserverdisconnected',onBLEDrop);return d.gatt.connect();})
-  .then(s=>s.getPrimaryService('0000ffe0-0000-1000-8000-00805f9b34fb'))
-  .then(s=>s.getCharacteristic('0000ffe1-0000-1000-8000-00805f9b34fb'))
+  .then(s=>s.getPrimaryService(BLE_SERVICE))
+  .then(s=>s.getCharacteristic(BLE_TX_CHAR))
   .then(c=>{bleChar=c;c.startNotifications();c.addEventListener('characteristicvaluechanged',onBLEData);
     boardConnected=true;document.getElementById('bleBtn').textContent='Board Connected';
     document.getElementById('bleStatus').textContent='BLE active';
@@ -414,8 +416,8 @@ function onBLEDrop(){
   boardConnected=false;document.getElementById('dBLE').className='sdot err';
   log('BLE dropped — reconnecting...','var(--amber)');
   setTimeout(()=>{if(bleDevice&&bleDevice.gatt)bleDevice.gatt.connect()
-    .then(s=>s.getPrimaryService('0000ffe0-0000-1000-8000-00805f9b34fb'))
-    .then(s=>s.getCharacteristic('0000ffe1-0000-1000-8000-00805f9b34fb'))
+    .then(s=>s.getPrimaryService(BLE_SERVICE))
+    .then(s=>s.getCharacteristic(BLE_TX_CHAR))
     .then(c=>{bleChar=c;c.startNotifications();c.addEventListener('characteristicvaluechanged',onBLEData);
       boardConnected=true;document.getElementById('dBLE').className='sdot live';
       log('BLE reconnected','var(--green)');
@@ -424,37 +426,68 @@ function onBLEDrop(){
 }
 
 function onBLEData(e){
-  const chunk=new TextDecoder().decode(e.target.value);
-  bleBuffer+=chunk;
-  let nl;
-  while((nl=bleBuffer.indexOf('\n'))!==-1){
-    const line=bleBuffer.substring(0,nl).trim();
-    bleBuffer=bleBuffer.substring(nl+1);
-    if(!line)continue;
-    try{const d=JSON.parse(line);processBoardData(d);}catch(e){}
+  const raw=new TextDecoder().decode(e.target.value);
+  bleBuffer+=raw;
+  // Strip keepalive packets
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}\$/g,'');
+  bleBuffer=bleBuffer.replace(/\{"k":[^}]*\}/g,'');
+  // Firmware uses $ as packet delimiter, packets overlap in BLE chunks
+  let found=true;
+  while(found){
+    found=false;
+    const delimIdx=bleBuffer.indexOf('$');
+    if(delimIdx>=0){
+      const chunk=bleBuffer.substring(0,delimIdx);
+      bleBuffer=bleBuffer.substring(delimIdx+1);
+      const lastStart=chunk.lastIndexOf('{"t":');
+      if(lastStart>=0){
+        try{const d=JSON.parse(chunk.substring(lastStart));processBoardData(d);}catch(err){}
+      }
+      found=true;
+    }
   }
+  if(bleBuffer.length>10000)bleBuffer='';
 }
 
 function processBoardData(d){
-  if(d.imu){
+  // IMU: accel + gyro + mag (from firmware d.imu object)
+  if(d.imu&&d.imu.ok){
     accel={x:d.imu.ax||0,y:d.imu.ay||0,z:d.imu.az||0};
     gyro={x:d.imu.gx||0,y:d.imu.gy||0,z:d.imu.gz||0};
+    if(d.imu.mx!==undefined)mag={x:d.imu.mx||0,y:d.imu.my||0,z:d.imu.mz||0};
+    if(d.imu.hdg!==undefined)compass=d.imu.hdg;
     document.getElementById('dIMU').className='sdot live';
-    document.getElementById('dIMUv').textContent='ax:'+accel.x.toFixed(1);
+    document.getElementById('dIMUv').textContent='hdg:'+Math.round(compass)+'°';
   }
-  if(d.mag){mag={x:d.mag.mx||0,y:d.mag.my||0,z:d.mag.mz||0};compass=Math.atan2(mag.y,mag.x)*180/Math.PI;if(compass<0)compass+=360;}
-  if(d.baro){pressure=d.baro.hpa||0;temp=d.baro.temp||0;baroAlt=d.baro.alt||0;
-    document.getElementById('dBaro').className='sdot live';document.getElementById('dBarov').textContent=pressure.toFixed(0)+'hPa';}
-  if(d.gps&&d.gps.lat>1){
-    const fix={lat:d.gps.lat,lon:d.gps.lon,speed:d.gps.speed||0,acc:d.gps.acc||50};
+  // Barometer
+  if(d.baro&&d.baro.ok){
+    pressure=d.baro.hpa||0;temp=d.baro.temp||0;baroAlt=d.baro.alt||0;
+    document.getElementById('dBaro').className='sdot live';
+    document.getElementById('dBarov').textContent=pressure.toFixed(0)+'hPa';
+  }
+  // GPS (board GPS module)
+  if(d.gps&&d.gps.ok&&d.gps.lat>1){
+    const acc=(d.gps.hdop||2)*5;
+    const fix={lat:d.gps.lat,lon:d.gps.lon,speed:d.gps.speed||0,acc:acc};
     gpsTrue=fix;
     if(phase!=='jammed')gpsSys=fix;
-    document.getElementById('dGPS').className='sdot live';document.getElementById('dGPSv').textContent='±'+(fix.acc||'?')+'m';
+    document.getElementById('dGPS').className='sdot live';
+    document.getElementById('dGPSv').textContent='±'+Math.round(acc)+'m';
   }
-  if(d.cell4g){cellTowers=[{cid:d.cell4g.cid,lat:0,lon:0,signal:d.cell4g.rssi||0}];
-    document.getElementById('dCell').className='sdot live';document.getElementById('dCellv').textContent='CID:'+d.cell4g.cid;}
-  if(d.wifi&&d.wifi.list){wifiAPs=d.wifi.list;
-    document.getElementById('dWifi').className='sdot live';document.getElementById('dWifiv').textContent=wifiAPs.length+' APs';}
+  // Cell modem (4G)
+  if(d.cell4g&&d.cell4g.cid){
+    const rssi=d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
+    cellTowers=[{cid:d.cell4g.cid,mcc:d.cell4g.mcc||404,mnc:d.cell4g.mnc||0,tac:d.cell4g.tac||0,signal:rssi,lat:0,lon:0}];
+    document.getElementById('dCell').className='sdot live';
+    document.getElementById('dCellv').textContent='CID:'+d.cell4g.cid;
+  }
+  // WiFi scan
+  if(d.wifi){
+    const list=d.wifi.list||d.wifi.data||[];
+    if(list.length)wifiAPs=list;
+    document.getElementById('dWifi').className='sdot live';
+    document.getElementById('dWifiv').textContent=wifiAPs.length+' APs';
+  }
 }
 
 // ─── PHONE GPS ───
