@@ -147,6 +147,24 @@ let accel={x:0,y:0,z:9.81}, gyro={x:0,y:0,z:0}, compass=0, mag={x:0,y:0,z:0};
 let pressure=0, baroAlt=0, temp=0;
 let boardConnected=false, bleDevice=null, bleChar=null;
 let cellTowers=[], wifiAPs=[];
+// Tower position database: learned from GPS when we see a CID
+const towerDB={};
+function learnTower(cid,lat,lon,signal){
+  if(!cid||!lat||lat<1)return;
+  if(!towerDB[cid])towerDB[cid]={lat,lon,signal,count:1};
+  else{
+    const t=towerDB[cid];
+    t.lat=t.lat*0.9+lat*0.1;t.lon=t.lon*0.9+lon*0.1;
+    t.signal=signal;t.count++;
+  }
+}
+function enrichTowers(towers){
+  return towers.map(t=>{
+    const known=towerDB[t.cid];
+    if(known)return{...t,lat:known.lat,lon:known.lon};
+    return t;
+  });
+}
 let mode='car'; // static|walk|car|train
 
 // ─── LAYER 3: DATA INGESTION ───
@@ -287,7 +305,11 @@ const ALG={
         this._speed*=0.97; // decay
       }
 
-      if(this._speed<0.1){this.confidence=0;return null;}
+      if(this._speed<0.1){
+        this.confidence=0;
+        if(pos)this.pos={lat:pos.lat,lon:pos.lon}; // keep position anchor for when movement starts
+        return null;
+      }
       const h=compassDeg*Math.PI/180;
       this.pos={
         lat:pos.lat+(this._speed*Math.cos(h)*dt)/111320,
@@ -475,12 +497,17 @@ function onBLEData(e){
 }
 
 function processBoardData(d){
-  // IMU: accel + gyro + mag (from firmware d.imu object)
   if(d.imu&&d.imu.ok){
     accel={x:d.imu.ax||0,y:d.imu.ay||0,z:d.imu.az||0};
     gyro={x:d.imu.gx||0,y:d.imu.gy||0,z:d.imu.gz||0};
     if(d.imu.mx!==undefined)mag={x:d.imu.mx||0,y:d.imu.my||0,z:d.imu.mz||0};
-    if(d.imu.hdg!==undefined)compass=d.imu.hdg;
+    // Compass: use firmware heading if available, else compute from magnetometer
+    if(d.imu.hdg!==undefined&&d.imu.hdg!==0){
+      compass=d.imu.hdg;
+    }else if(mag.x!==0||mag.y!==0){
+      compass=Math.atan2(mag.y,mag.x)*180/Math.PI;
+      if(compass<0)compass+=360;
+    }
     document.getElementById('dIMU').className='sdot live';
     document.getElementById('dIMUv').textContent='hdg:'+Math.round(compass)+'°';
   }
@@ -502,9 +529,25 @@ function processBoardData(d){
   // Cell modem (4G)
   if(d.cell4g&&d.cell4g.cid){
     const rssi=d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
+    // Learn tower position from GPS when available
+    if(gpsSys&&gpsSys.lat>1&&gpsSys.acc<100)learnTower(d.cell4g.cid,gpsSys.lat,gpsSys.lon,rssi);
+    // Build tower list with known positions
     cellTowers=[{cid:d.cell4g.cid,mcc:d.cell4g.mcc||404,mnc:d.cell4g.mnc||0,tac:d.cell4g.tac||0,signal:rssi,lat:0,lon:0}];
+    cellTowers=enrichTowers(cellTowers);
+    // Also add 2G neighbor cells
+    if(d.cell2g){
+      const c2=d.cell2g.data||d.cell2g.list||[];
+      if(Array.isArray(c2))c2.forEach(c=>{
+        if(c.cid){
+          if(gpsSys&&gpsSys.lat>1)learnTower(c.cid,gpsSys.lat,gpsSys.lon,c.rssi||-90);
+          cellTowers.push({cid:c.cid,signal:c.rssi||-90,lat:0,lon:0});
+        }
+      });
+      cellTowers=enrichTowers(cellTowers);
+    }
+    const knownCount=cellTowers.filter(t=>t.lat>1).length;
     document.getElementById('dCell').className='sdot live';
-    document.getElementById('dCellv').textContent='CID:'+d.cell4g.cid;
+    document.getElementById('dCellv').textContent=knownCount+'/'+cellTowers.length+' towers';
   }
   // WiFi scan
   if(d.wifi){
