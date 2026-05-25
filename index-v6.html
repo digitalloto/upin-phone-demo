@@ -573,9 +573,12 @@ function tick(){
       speedNow, speedSource, phase
     };
 
-    // Layer 4: validate
-    const valid=L4.validate(row);
-    if(!valid)return;
+    // Layer 4: validate (flag bad data, but ALWAYS record the row)
+    const l4=L4.validate(row);
+    if(!l4)row._l4_rejected=true; else Object.assign(row,l4);
+
+    // ALWAYS record — even with nulls. Missing data = null, not missing row.
+    DATA.record(row);
 
     // Layer 5: run all 5 algorithms
     const pos=FUSION.pos||gpsSys||(gpsTrue?{lat:gpsTrue.lat,lon:gpsTrue.lon}:null);
@@ -589,26 +592,24 @@ function tick(){
     // Layer 6: fusion
     FUSION.update();
 
-    // Snapshot algorithm outputs into the row (per-row, not live state)
-    valid.ct_lat=ALG.cellTri.pos?ALG.cellTri.pos.lat:null;
-    valid.ct_lon=ALG.cellTri.pos?ALG.cellTri.pos.lon:null;
-    valid.ct_conf=ALG.cellTri.confidence;
-    valid.cd_lat=ALG.cellDir.pos?ALG.cellDir.pos.lat:null;
-    valid.cd_lon=ALG.cellDir.pos?ALG.cellDir.pos.lon:null;
-    valid.cd_conf=ALG.cellDir.confidence;
-    valid.wf_lat=ALG.wifiFP.pos?ALG.wifiFP.pos.lat:null;
-    valid.wf_lon=ALG.wifiFP.pos?ALG.wifiFP.pos.lon:null;
-    valid.wf_conf=ALG.wifiFP.confidence;
-    valid.dr_lat=ALG.imuDR.pos?ALG.imuDR.pos.lat:null;
-    valid.dr_lon=ALG.imuDR.pos?ALG.imuDR.pos.lon:null;
-    valid.dr_conf=ALG.imuDR.confidence;
-    valid.pa_alt=ALG.baro.altitude;
-    valid.fused_lat=FUSION.pos?FUSION.pos.lat:null;
-    valid.fused_lon=FUSION.pos?FUSION.pos.lon:null;
-    valid.fused_conf=FUSION.confidence;
-    valid.fused_src=FUSION.source;
-
-    DATA.record(valid);
+    // Snapshot algorithm outputs into the row
+    row.ct_lat=ALG.cellTri.pos?ALG.cellTri.pos.lat:null;
+    row.ct_lon=ALG.cellTri.pos?ALG.cellTri.pos.lon:null;
+    row.ct_conf=ALG.cellTri.confidence;
+    row.cd_lat=ALG.cellDir.pos?ALG.cellDir.pos.lat:null;
+    row.cd_lon=ALG.cellDir.pos?ALG.cellDir.pos.lon:null;
+    row.cd_conf=ALG.cellDir.confidence;
+    row.wf_lat=ALG.wifiFP.pos?ALG.wifiFP.pos.lat:null;
+    row.wf_lon=ALG.wifiFP.pos?ALG.wifiFP.pos.lon:null;
+    row.wf_conf=ALG.wifiFP.confidence;
+    row.dr_lat=ALG.imuDR.pos?ALG.imuDR.pos.lat:null;
+    row.dr_lon=ALG.imuDR.pos?ALG.imuDR.pos.lon:null;
+    row.dr_conf=ALG.imuDR.confidence;
+    row.pa_alt=ALG.baro.altitude;
+    row.fused_lat=FUSION.pos?FUSION.pos.lat:null;
+    row.fused_lon=FUSION.pos?FUSION.pos.lon:null;
+    row.fused_conf=FUSION.confidence;
+    row.fused_src=FUSION.source;
 
     // Distance
     if(FUSION.pos&&lastPos){
