@@ -170,24 +170,32 @@ const ALGEBRA={
     const az=accel.z-(CAL?CAL.accelBias.z:0);
     const accelMag=Math.sqrt(ax*ax+ay*ay+az*az);
     const gravityMag=9.81;
-    // Horizontal acceleration: project accel onto horizontal plane
-    // Gravity direction estimated from low-pass filtered accel
-    // True horizontal = total accel minus gravity component
-    // Simple: if magnitude ≈ 9.81 (within 0.5), device is not accelerating
     const gDiff=Math.abs(accelMag-gravityMag);
-    const horizontal_accel=gDiff>0.5?Math.min(gDiff-0.3,3.0):0; // deadband 0.3, cap 3 m/s²
 
-    // ZUPT: use Layer 7 multi-modal ZUPT if available, else basic threshold
-    const zupt_active=window.LAYER7&&LAYER7.enabled?LAYER7.zupt.isZUPT:(Math.abs(accelMag-gravityMag)<0.3);
+    // ZUPT: robust multi-signal zero-velocity detection
+    if(!this._accelBuf)this._accelBuf=[];
+    if(!this._gyroBuf)this._gyroBuf=[];
+    this._accelBuf.push(gDiff);if(this._accelBuf.length>20)this._accelBuf.shift();
+    this._gyroBuf.push(Math.abs(gyro.z-(CAL?CAL.gyroBias.z:0)));if(this._gyroBuf.length>20)this._gyroBuf.shift();
+    const accelMean=this._accelBuf.reduce((s,v)=>s+v,0)/this._accelBuf.length;
+    const accelStd=Math.sqrt(this._accelBuf.reduce((s,v)=>s+(v-accelMean)**2,0)/this._accelBuf.length);
+    const gyroMean=this._gyroBuf.reduce((s,v)=>s+v,0)/this._gyroBuf.length;
+    const gyroStd=Math.sqrt(this._gyroBuf.reduce((s,v)=>s+(v-gyroMean)**2,0)/this._gyroBuf.length);
+    const gpsZero=!speed||speed<0.5;
+    const zupt_active=accelStd<0.15&&gyroStd<0.3&&gpsZero;
+
     if(zupt_active){
       this._zupt_count++;
-      if(this._zupt_count>=(2/Math.max(dt,0.01))){
+      if(this._zupt_count>=3){
         this.velocity_ms=0;
+        this.zuptActive=true;
       }
     } else {
       this._zupt_count=0;
+      this.zuptActive=false;
+      const horizontal_accel=gDiff>0.5?Math.min(gDiff-0.3,3.0):0;
       this.velocity_ms+=horizontal_accel*dt;
-      this.velocity_ms*=0.95; // stronger decay — IMU velocity drifts fast
+      this.velocity_ms*=0.95;
     }
     // P1.3 — GPS calibration: learn imu_scale = gps_speed / imu_velocity every 10 ticks
     this._calTickCount++;

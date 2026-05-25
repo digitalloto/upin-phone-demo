@@ -1893,7 +1893,8 @@ const CAL={
     let asPairs=[];s.forEach(d=>{const am=Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2);if(d.speed>0.3)asPairs.push({a:am,s:d.speed});});
     if(asPairs.length>10){const aA=asPairs.reduce((s,p)=>s+p.a,0)/asPairs.length;const aS=asPairs.reduce((s,p)=>s+p.s,0)/asPairs.length;if(aA>0.1)this.accelScale=aS/aA;}
     let sErr=0,sN=0;s.forEach(d=>{const am=Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2);sErr+=Math.abs(am*this.accelScale-d.speed);sN++;});
-    if(sN>5){const avgP=s.reduce((a,d)=>a+Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2)*this.accelScale,0)/sN;const avgA=s.reduce((a,d)=>a+d.speed,0)/sN;if(avgP>0.1)this.speedMult=avgA/avgP;}
+    const movingSamples=s.filter(d=>d.speed>1.4);
+    if(movingSamples.length>5){const avgP=movingSamples.reduce((a,d)=>a+Math.sqrt((d.ax-this.accelBias.x)**2+(d.ay-this.accelBias.y)**2)*this.accelScale,0)/movingSamples.length;const avgA=movingSamples.reduce((a,d)=>a+d.speed,0)/movingSamples.length;if(avgP>0.1){this.speedMult=Math.max(0.01,Math.min(10,avgA/avgP));}}
     let gTP=[];for(let i=1;i<s.length;i++){const d=s[i],p=s[i-1];if(d.speed>0.5&&p.speed>0.5){let dh=d.heading-p.heading;if(dh>180)dh-=360;if(dh<-180)dh+=360;if(Math.abs(p.gz-this.gyroBias.z)>0.3)gTP.push({g:p.gz-this.gyroBias.z,t:dh/Math.max(d.dt,0.1)});}}
     if(gTP.length>5){const aG=gTP.reduce((s,p)=>s+Math.abs(p.g),0)/gTP.length;const aT=gTP.reduce((s,p)=>s+Math.abs(p.t),0)/gTP.length;if(aG>0.1)this.gyroScale=aT/aG;}
     let tPE=0,pN=0;for(let i=1;i<s.length;i++){const p=s[i-1],c=s[i];const r=DATA.samples.slice(-5);let vL=0,vO=0;for(let j=1;j<r.length;j++){vL+=(r[j].lat-r[j-1].lat)/(r[j].dt||1);vO+=(r[j].lon-r[j-1].lon)/(r[j].dt||1);}vL/=Math.max(1,r.length-1);vO/=Math.max(1,r.length-1);const pLa=p.lat+vL*c.dt,pLo=p.lon+vO*c.dt;tPE+=hav({lat:pLa,lon:pLo},{lat:c.lat,lon:c.lon});pN++;}
@@ -2138,17 +2139,32 @@ const SPEED_LEARN={
 };
 
 // Multi-source speed + heading: every formula can use these during GPS denial
+let _bestSpeedSource='none';
 function bestSpeed(){
+  // 1. GPS first — if recent, valid, and accurate
+  if(gpsSys&&gpsSys.speed>=0&&gpsSys.acc&&gpsSys.acc<50){
+    _bestSpeedSource='gps';
+    return gpsSys.speed;
+  }
   const gps=avgSpeed(5);
-  if(gps>0.5) return gps;
-  // During denial: use learned speed from accel patterns
+  if(gps>0.5){_bestSpeedSource='gps';return gps;}
+  // 2. CID speed — only if 2+ changes, capped at 120 km/h
+  if(window.LAYER7&&LAYER7.cidSpeed&&LAYER7.cidSpeed.speed_kmh>0&&LAYER7.cidSpeed.speed_kmh<120){
+    _bestSpeedSource='cid';
+    return Math.min(LAYER7.cidSpeed.speed_kmh,120)/3.6;
+  }
+  // 3. Learned speed (denial only) — only if not insane
   if(phase!=='recording'){
     const learned=SPEED_LEARN.estimate();
-    if(learned>0.5)return learned;
+    if(learned>0.5&&learned<50){_bestSpeedSource='learned';return learned;}
   }
-  if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>2) return LAYER7.fused.speed_kmh/3.6;
-  if(window.LAYER7&&LAYER7.cidSpeed&&LAYER7.cidSpeed.speed_kmh>2) return LAYER7.cidSpeed.speed_kmh/3.6;
-  if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3) return ALGEBRA.velocity_ms;
+  // 4. IMU LAST — only if ZUPT is NOT active and value is sane
+  if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3&&ALGEBRA.velocity_ms<15&&!ALGEBRA.zuptActive){
+    _bestSpeedSource='imu';
+    return ALGEBRA.velocity_ms;
+  }
+  // 5. Nothing trustworthy
+  _bestSpeedSource='none';
   return 0;
 }
 function bestHeading(){
@@ -4987,8 +5003,15 @@ function tick(){
       }
     }
 
-    // FIX 5: distance counter clamp — cap at 250m/tick (≈900km/h max)
-    if(lastPos&&activePos){const dd=hav(lastPos,activePos);if(dd<250)totalDist+=dd;}
+    // Distance: from GPS position changes OR from speed×dt
+    if(lastPos&&activePos){
+      const dd=hav(lastPos,activePos);
+      if(dd>0.5&&dd<250)totalDist+=dd;
+      else{
+        const spdDist=bestSpeed()*dt;
+        if(spdDist>0.5&&spdDist<250)totalDist+=spdDist;
+      }
+    }
     lastPos={lat:activePos.lat,lon:activePos.lon};drPos={lat:activePos.lat,lon:activePos.lon};
     F.forEach(f=>{if(!f.pos)f.pos={lat:activePos.lat,lon:activePos.lon};});
   }

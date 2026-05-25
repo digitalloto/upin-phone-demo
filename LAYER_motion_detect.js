@@ -73,10 +73,10 @@ const LAYER7={
       // Speed = CID changes × cell radius / time, but capped to reasonable values
       // 1 change in 60s at 1500m = 90 km/h is too high for urban
       // Use: distance = changes × radius × 0.5 (cell overlap means you cross at ~half radius)
-      this.speed_kmh=this.changeCount60s>0?(this.changeCount60s*this.cellRadius_m*0.5)/60*3.6:0;
-      // Cap at 200 km/h max
-      this.speed_kmh=Math.min(this.speed_kmh,200);
-      this.confidence=this.changeCount60s>=3?'HIGH':this.changeCount60s>=1?'MEDIUM':'LOW';
+      // Require 2+ CID changes to compute speed (1 change could be tower load balancing)
+      this.speed_kmh=this.changeCount60s>=2?(this.changeCount60s*this.cellRadius_m*0.5)/60*3.6:0;
+      this.speed_kmh=Math.min(this.speed_kmh,120);
+      this.confidence=this.changeCount60s>=3?'HIGH':this.changeCount60s>=2?'MEDIUM':'LOW';
 
       // Auto-tune radius when GPS speed available
       if(gpsSpeed>2 && this.changeCount60s>0){
@@ -226,43 +226,34 @@ const LAYER7={
     _integratedAngle:0,
     _consecutiveAbove:0,
 
+    _cumulativeHdg:0,
+    _lastTurnTime:0,
+
     update(gyroZ, dt, lat, lon, now){
       this.gyroZBuf.push({gz:gyroZ, t:now});
-      if(this.gyroZBuf.length>300) this.gyroZBuf.shift(); // ~30s at 10Hz
-      // Detect: |gyroZ| > 25°/s for 5+ consecutive samples
-      if(Math.abs(gyroZ)>25){
-        this._consecutiveAbove++;
-        if(!this._detecting && this._consecutiveAbove>=5){
-          this._detecting=true;
-          this._detectStart=now;
-          this._integratedAngle=0;
+      if(this.gyroZBuf.length>300) this.gyroZBuf.shift();
+
+      // Accumulate heading change from gyro
+      this._cumulativeHdg+=gyroZ*dt;
+
+      // Turn detected when cumulative change exceeds 30 degrees
+      if(Math.abs(this._cumulativeHdg)>=30){
+        // Don't double-count same turn (3s debounce)
+        if(now-this._lastTurnTime>3000){
+          this.turnHistory.push({t:now, angle:Math.round(this._cumulativeHdg), lat, lon});
+          this._lastTurnTime=now;
         }
-      } else {
-        if(this._detecting){
-          // Turn ended: check if integrated angle > 30°
-          if(Math.abs(this._integratedAngle)>30){
-            this.turnHistory.push({t:now, angle:this._integratedAngle, lat, lon});
-          }
-          this._detecting=false;
-          this._integratedAngle=0;
-        }
-        this._consecutiveAbove=0;
+        this._cumulativeHdg=0;
       }
-      if(this._detecting){
-        this._integratedAngle+=gyroZ*dt;
-        if((now-this._detectStart)>5000){
-          // Max 5s — force end
-          if(Math.abs(this._integratedAngle)>30){
-            this.turnHistory.push({t:now, angle:this._integratedAngle, lat, lon});
-          }
-          this._detecting=false;
-          this._integratedAngle=0;
-          this._consecutiveAbove=0;
-        }
+
+      // Decay accumulated heading when gyro is quiet (prevents drift-triggered turns)
+      if(Math.abs(gyroZ)<2){
+        this._cumulativeHdg*=0.95;
       }
+
       // Count turns in last 60s
       const cutoff=now-60000;
-      this.turnHistory=this.turnHistory.filter(t=>t.t>cutoff-300000); // keep 5 min
+      this.turnHistory=this.turnHistory.filter(t=>t.t>cutoff-300000);
       this.turnCount60s=this.turnHistory.filter(t=>t.t>cutoff).length;
     },
 
