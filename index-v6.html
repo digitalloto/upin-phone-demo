@@ -98,7 +98,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 
 <!-- 5 Algorithms -->
 <div class="panel">
-  <h2>5 POSITIONING ALGORITHMS</h2>
+  <h2>6 POSITIONING ALGORITHMS</h2>
   <div id="algList"></div>
 </div>
 
@@ -332,6 +332,96 @@ const ALG={
       this.confidence=0.8;
       return{altitude:this.altitude};
     }
+  },
+
+  // Algorithm 6 — Fish School (genetic swarm)
+  fish:{
+    name:'Fish School',
+    pos:null, confidence:0, source:'fish_swarm',
+    schools:[], SCHOOLS:3, AGENTS:20, generation:0,
+
+    init(lat,lon){
+      this.schools=[];
+      for(let s=0;s<this.SCHOOLS;s++){
+        const agents=[];
+        for(let a=0;a<this.AGENTS;a++){
+          agents.push({
+            dna:{velW:Math.random(),accelW:Math.random(),compassW:0.3+Math.random()*0.7,decay:0.95+Math.random()*0.04},
+            pos:{lat,lon},fitness:0,err:999
+          });
+        }
+        this.schools.push({agents,pos:{lat,lon},avgErr:999});
+      }
+      this.generation=0;
+    },
+
+    predict(pos,accelData,compassDeg,speed,dt,calBias){
+      if(!this.schools.length||!pos)return null;
+      // Each agent predicts independently
+      this.schools.forEach(school=>{
+        let sLat=0,sLon=0,sW=0;
+        school.agents.forEach(ag=>{
+          const d=ag.dna;
+          const ax=(accelData.x-(calBias?calBias.x:0));
+          const ay=(accelData.y-(calBias?calBias.y:0));
+          const aEnergy=Math.sqrt(ax*ax+ay*ay);
+          const s=speed*d.velW+aEnergy*d.accelW*0.1;
+          const h=compassDeg*d.compassW*Math.PI/180;
+          ag.pos={
+            lat:ag.pos.lat+(s*Math.cos(h)*dt)/111320,
+            lon:ag.pos.lon+(s*Math.sin(h)*dt)/(111320*Math.cos(ag.pos.lat*Math.PI/180))
+          };
+          ag.pos.lat=ag.pos.lat*(1-0.001)+pos.lat*0.001; // tiny anchor drift
+          const w=Math.max(0.01,ag.fitness);
+          sLat+=ag.pos.lat*w;sLon+=ag.pos.lon*w;sW+=w;
+        });
+        if(sW>0)school.pos={lat:sLat/sW,lon:sLon/sW};
+      });
+      // Best school output
+      let bestS=this.schools[0];
+      this.schools.forEach(s=>{if(s.avgErr<bestS.avgErr)bestS=s;});
+      this.pos=bestS.pos?{lat:bestS.pos.lat,lon:bestS.pos.lon}:null;
+      this.confidence=bestS.avgErr<999?Math.min(0.7,1/(bestS.avgErr+1)):0.1;
+      return this.pos;
+    },
+
+    score(gps){
+      if(!gps||!this.schools.length)return;
+      this.schools.forEach(school=>{
+        let totalErr=0,n=0;
+        school.agents.forEach(ag=>{
+          if(!ag.pos)return;
+          ag.err=hav(ag.pos,gps);
+          ag.fitness=1/(ag.err+0.1);
+          ag.pos={lat:gps.lat,lon:gps.lon}; // reset to truth
+          totalErr+=ag.err;n++;
+        });
+        school.avgErr=n>0?totalErr/n:999;
+      });
+      this.generation++;
+      if(this.generation%10===0)this.evolve();
+    },
+
+    evolve(){
+      this.schools.forEach(school=>{
+        school.agents.sort((a,b)=>b.fitness-a.fitness);
+        const n=school.agents.length;
+        const kill=Math.floor(n*0.1);
+        for(let i=0;i<kill;i++){
+          const parent=school.agents[Math.floor(Math.random()*kill)];
+          const child={
+            dna:{
+              velW:Math.max(0,Math.min(1,parent.dna.velW+(Math.random()-0.5)*0.1)),
+              accelW:Math.max(0,Math.min(1,parent.dna.accelW+(Math.random()-0.5)*0.1)),
+              compassW:Math.max(0.1,Math.min(1.5,parent.dna.compassW+(Math.random()-0.5)*0.1)),
+              decay:Math.max(0.9,Math.min(0.999,parent.dna.decay+(Math.random()-0.5)*0.02))
+            },
+            pos:parent.pos?{...parent.pos}:{lat:0,lon:0},fitness:0,err:999
+          };
+          school.agents[n-1-i]=child;
+        }
+      });
+    }
   }
 };
 
@@ -346,6 +436,9 @@ const FUSION={
     }
     if(ALG.wifiFP.pos&&ALG.wifiFP.confidence>0.4){
       this.pos={...ALG.wifiFP.pos};this.confidence=ALG.wifiFP.confidence;this.source='wifiFP';return;
+    }
+    if(ALG.fish.pos&&ALG.fish.confidence>0.4){
+      this.pos={...ALG.fish.pos};this.confidence=ALG.fish.confidence;this.source='fish';return;
     }
     if(ALG.imuDR.pos&&ALG.imuDR.confidence>0.3){
       this.pos={...ALG.imuDR.pos};this.confidence=ALG.imuDR.confidence;this.source='imuDR';return;
@@ -631,6 +724,10 @@ function tick(){
     ALG.wifiFP.predict(wifiAPs);
     ALG.imuDR.predict(pos,accel,gyro,compass,speedNow,dt,CAL.bias);
     ALG.baro.predict(pressure,baroAlt);
+    // Fish School: init on first GPS, predict always, score when GPS available
+    if(!ALG.fish.schools.length&&gpsSys&&gpsSys.lat>1)ALG.fish.init(gpsSys.lat,gpsSys.lon);
+    if(ALG.fish.schools.length)ALG.fish.predict(pos,accel,compass,speedNow,dt,CAL.bias);
+    if(gpsSys&&gpsSys.lat>1&&ALG.fish.schools.length)ALG.fish.score(gpsSys);
 
     // Layer 6: fusion
     FUSION.update();
@@ -649,6 +746,9 @@ function tick(){
     row.dr_lon=ALG.imuDR.pos?ALG.imuDR.pos.lon:null;
     row.dr_conf=ALG.imuDR.confidence;
     row.pa_alt=ALG.baro.altitude;
+    row.fish_lat=ALG.fish.pos?ALG.fish.pos.lat:null;
+    row.fish_lon=ALG.fish.pos?ALG.fish.pos.lon:null;
+    row.fish_conf=ALG.fish.confidence;
     row.fused_lat=FUSION.pos?FUSION.pos.lat:null;
     row.fused_lon=FUSION.pos?FUSION.pos.lon:null;
     row.fused_conf=FUSION.confidence;
@@ -713,7 +813,7 @@ function updateUI(){
 
   // Algorithm display
   let algHTML='';
-  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro].forEach(a=>{
+  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish].forEach(a=>{
     const conf=Math.round(a.confidence*100);
     const col=conf>50?'var(--green)':conf>20?'var(--amber)':'var(--td)';
     const posStr=a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude!==null?a.altitude.toFixed(1)+'m':'--');
@@ -789,7 +889,7 @@ function setMode(m){mode=m;log('Mode: '+m,'var(--cyan)');}
 // ─── CSV EXPORT ───
 function exportCSV(){
   // Layer 3 columns + Layer 5 per-algorithm columns + Layer 6 fusion columns
-  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
+  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
   DATA.samples.forEach(s=>{
     const n=v=>v!==null&&v!==undefined?v:'';
     const f=(v,d)=>v!==null&&v!==undefined?Number(v).toFixed(d):'';
@@ -803,6 +903,7 @@ function exportCSV(){
     csv+=f(s.wf_lat,7)+','+f(s.wf_lon,7)+','+f(s.wf_conf,2)+',';
     csv+=f(s.dr_lat,7)+','+f(s.dr_lon,7)+','+f(s.dr_conf,2)+',';
     csv+=f(s.pa_alt,1)+',';
+    csv+=f(s.fish_lat,7)+','+f(s.fish_lon,7)+','+f(s.fish_conf,2)+',';
     csv+=f(s.fused_lat,7)+','+f(s.fused_lon,7)+','+f(s.fused_conf,2)+','+n(s.fused_src)+'\n';
   });
 
@@ -814,6 +915,9 @@ function exportCSV(){
   csv+='# Samples: '+DATA.count()+'\n';
   csv+='# L4_accepted: '+L4.accepted+'\n';
   csv+='# L4_rejected: '+L4.rejected+'\n';
+  csv+='# Fish_generations: '+ALG.fish.generation+'\n';
+  csv+='# Fish_schools: '+ALG.fish.schools.length+'\n';
+  csv+='# Fish_best_err: '+(ALG.fish.schools.length?Math.min(...ALG.fish.schools.map(s=>s.avgErr)).toFixed(1):'--')+'\n';
   csv+='# Drills: '+drills.length+'\n';
   drills.forEach((d,i)=>{
     csv+='# Drill_'+(i+1)+'_duration_s: '+(d.duration||0)+'\n';
