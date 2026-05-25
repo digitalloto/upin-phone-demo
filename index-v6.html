@@ -511,7 +511,7 @@ function tick(){
 
     // Layer 4: validate
     const valid=L4.validate(row);
-    if(valid)DATA.record(valid);
+    if(!valid)return;
 
     // Layer 5: run all 5 algorithms
     const pos=FUSION.pos||gpsSys||(gpsTrue?{lat:gpsTrue.lat,lon:gpsTrue.lon}:null);
@@ -524,6 +524,27 @@ function tick(){
 
     // Layer 6: fusion
     FUSION.update();
+
+    // Snapshot algorithm outputs into the row (per-row, not live state)
+    valid.ct_lat=ALG.cellTri.pos?ALG.cellTri.pos.lat:null;
+    valid.ct_lon=ALG.cellTri.pos?ALG.cellTri.pos.lon:null;
+    valid.ct_conf=ALG.cellTri.confidence;
+    valid.cd_lat=ALG.cellDir.pos?ALG.cellDir.pos.lat:null;
+    valid.cd_lon=ALG.cellDir.pos?ALG.cellDir.pos.lon:null;
+    valid.cd_conf=ALG.cellDir.confidence;
+    valid.wf_lat=ALG.wifiFP.pos?ALG.wifiFP.pos.lat:null;
+    valid.wf_lon=ALG.wifiFP.pos?ALG.wifiFP.pos.lon:null;
+    valid.wf_conf=ALG.wifiFP.confidence;
+    valid.dr_lat=ALG.imuDR.pos?ALG.imuDR.pos.lat:null;
+    valid.dr_lon=ALG.imuDR.pos?ALG.imuDR.pos.lon:null;
+    valid.dr_conf=ALG.imuDR.confidence;
+    valid.pa_alt=ALG.baro.altitude;
+    valid.fused_lat=FUSION.pos?FUSION.pos.lat:null;
+    valid.fused_lon=FUSION.pos?FUSION.pos.lon:null;
+    valid.fused_conf=FUSION.confidence;
+    valid.fused_src=FUSION.source;
+
+    DATA.record(valid);
 
     // Distance
     if(FUSION.pos&&lastPos){
@@ -635,20 +656,22 @@ function setMode(m){mode=m;log('Mode: '+m,'var(--cyan)');}
 
 // ─── CSV EXPORT ───
 function exportCSV(){
-  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Speed_Now,Speed_Source,CellTri_Lat,CellTri_Lon,CellTri_Conf,CellDir_Lat,CellDir_Lon,CellDir_Conf,WiFi_Lat,WiFi_Lon,WiFi_Conf,IMU_Lat,IMU_Lon,IMU_Conf,Baro_Alt,Fusion_Lat,Fusion_Lon,Fusion_Conf,Fusion_Src\n';
+  // Layer 3 columns + Layer 5 per-algorithm columns + Layer 6 fusion columns
+  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
   DATA.samples.forEach(s=>{
+    const n=v=>v!==null&&v!==undefined?v:'';
+    const f=(v,d)=>v!==null&&v!==undefined?Number(v).toFixed(d):'';
     csv+=s.t+','+s.phase+','+s.ax.toFixed(3)+','+s.ay.toFixed(3)+','+s.az.toFixed(3)+',';
     csv+=s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+','+s.compass.toFixed(1)+',';
     csv+=s.gpsLat.toFixed(7)+','+s.gpsLon.toFixed(7)+','+(s.gpsSpd||0).toFixed(1)+','+(s.gpsAcc||999).toFixed(0)+',';
     csv+=(s.pressure||0).toFixed(1)+','+(s.baroAlt||0).toFixed(1)+',';
     csv+=(s.speedNow*3.6).toFixed(1)+','+s.speedSource+',';
-    // Per-algorithm columns
-    const ct=ALG.cellTri;csv+=(ct.pos?ct.pos.lat.toFixed(7):'')+','+(ct.pos?ct.pos.lon.toFixed(7):'')+','+ct.confidence.toFixed(2)+',';
-    const cd=ALG.cellDir;csv+=(cd.pos?cd.pos.lat.toFixed(7):'')+','+(cd.pos?cd.pos.lon.toFixed(7):'')+','+cd.confidence.toFixed(2)+',';
-    const wf=ALG.wifiFP;csv+=(wf.pos?wf.pos.lat.toFixed(7):'')+','+(wf.pos?wf.pos.lon.toFixed(7):'')+','+wf.confidence.toFixed(2)+',';
-    const im=ALG.imuDR;csv+=(im.pos?im.pos.lat.toFixed(7):'')+','+(im.pos?im.pos.lon.toFixed(7):'')+','+im.confidence.toFixed(2)+',';
-    csv+=(ALG.baro.altitude!==null?ALG.baro.altitude.toFixed(1):'')+',';
-    const fu=FUSION;csv+=(fu.pos?fu.pos.lat.toFixed(7):'')+','+(fu.pos?fu.pos.lon.toFixed(7):'')+','+fu.confidence.toFixed(2)+','+fu.source+'\n';
+    csv+=f(s.ct_lat,7)+','+f(s.ct_lon,7)+','+f(s.ct_conf,2)+',';
+    csv+=f(s.cd_lat,7)+','+f(s.cd_lon,7)+','+f(s.cd_conf,2)+',';
+    csv+=f(s.wf_lat,7)+','+f(s.wf_lon,7)+','+f(s.wf_conf,2)+',';
+    csv+=f(s.dr_lat,7)+','+f(s.dr_lon,7)+','+f(s.dr_conf,2)+',';
+    csv+=f(s.pa_alt,1)+',';
+    csv+=f(s.fused_lat,7)+','+f(s.fused_lon,7)+','+f(s.fused_conf,2)+','+n(s.fused_src)+'\n';
   });
 
   // KPI Report
