@@ -713,11 +713,15 @@ function onBLEData(e){
 
 function processBoardData(d){
   if(d.imu&&d.imu.ok){
-    accel={x:d.imu.ax||0,y:d.imu.ay||0,z:d.imu.az||0};
-    gyro={x:d.imu.gx||0,y:d.imu.gy||0,z:d.imu.gz||0};
-    if(d.imu.mx!==undefined)mag={x:d.imu.mx||0,y:d.imu.my||0,z:d.imu.mz||0};
-    // Compass: use firmware heading if available, else compute from magnetometer
-    if(d.imu.hdg!==undefined&&d.imu.hdg!==0){
+    // Only update if real values (not zero/undefined) — persist last known on BLE drop
+    if(d.imu.ax!==undefined)accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    if(d.imu.gx!==undefined)gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
+    // Magnetometer: accept any value including 0 (0 is valid for some axes)
+    if(d.imu.mx!==undefined&&d.imu.mx!==null){
+      mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
+    }
+    // Compass: firmware hdg > computed from mag > keep last known
+    if(d.imu.hdg!==undefined&&d.imu.hdg!==null&&d.imu.hdg!==0){
       compass=d.imu.hdg;
     }else if(mag.x!==0||mag.y!==0){
       compass=Math.atan2(mag.y,mag.x)*180/Math.PI;
@@ -741,26 +745,31 @@ function processBoardData(d){
     document.getElementById('dGPS').className='sdot live';
     document.getElementById('dGPSv').textContent='±'+Math.round(acc)+'m';
   }
-  // Cell modem (4G)
+  // Cell modem — handle 4G and 2G separately (4G may be down)
+  let cellUpdated=false;
   if(d.cell4g&&d.cell4g.cid){
     const rssi=d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
-    // Learn tower position from GPS when available
     if(gpsSys&&gpsSys.lat>1&&gpsSys.acc<100)learnTower(d.cell4g.cid,gpsSys.lat,gpsSys.lon,rssi);
     lookupTowerGoogle(d.cell4g.cid,d.cell4g.mcc,d.cell4g.mnc,d.cell4g.tac);
-    // Build tower list with known positions
     cellTowers=[{cid:d.cell4g.cid,mcc:d.cell4g.mcc||404,mnc:d.cell4g.mnc||0,tac:d.cell4g.tac||0,signal:rssi,lat:0,lon:0}];
-    cellTowers=enrichTowers(cellTowers);
-    // Also add 2G neighbor cells
-    if(d.cell2g){
-      const c2=d.cell2g.data||d.cell2g.list||[];
-      if(Array.isArray(c2))c2.forEach(c=>{
+    cellUpdated=true;
+  }
+  // 2G neighbor cells — handle even if 4G is down
+  if(d.cell2g){
+    const c2=d.cell2g.data||d.cell2g.list||[];
+    if(Array.isArray(c2)&&c2.length>0){
+      if(!cellUpdated)cellTowers=[]; // start fresh only if no 4G
+      c2.forEach(c=>{
         if(c.cid){
           if(gpsSys&&gpsSys.lat>1)learnTower(c.cid,gpsSys.lat,gpsSys.lon,c.rssi||-90);
-          cellTowers.push({cid:c.cid,signal:c.rssi||-90,lat:0,lon:0});
+          cellTowers.push({cid:c.cid,signal:c.rssi||-90,lat:0,lon:0,mcc:c.mcc||404,mnc:c.mnc||0});
         }
       });
-      cellTowers=enrichTowers(cellTowers);
+      cellUpdated=true;
     }
+  }
+  if(cellUpdated){
+    cellTowers=enrichTowers(cellTowers);
     const knownCount=cellTowers.filter(t=>t.lat>1).length;
     document.getElementById('dCell').className='sdot live';
     document.getElementById('dCellv').textContent=knownCount+'/'+cellTowers.length+' towers';
