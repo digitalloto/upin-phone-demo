@@ -37,6 +37,10 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 .alg-name{font-weight:700;font-size:9px}.alg-val{font-size:9px}
 .conf-bar{height:4px;border-radius:2px;background:var(--border);margin-top:2px}
 .conf-fill{height:100%;border-radius:2px}
+.tabs{display:flex;background:var(--panel);border-bottom:2px solid var(--border);overflow-x:auto}
+.tab{padding:8px 12px;font-size:9px;font-weight:700;color:var(--td);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;letter-spacing:1px}
+.tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.tab-body{display:none}.tab-body.active{display:block}
 </style>
 </head>
 <body>
@@ -47,9 +51,18 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
   <div style="font-size:8px;color:var(--td)" id="clock"></div>
 </div>
 
+<div class="tabs">
+  <div class="tab active" onclick="switchTab(0)">Dashboard</div>
+  <div class="tab" onclick="switchTab(1)">Algorithms</div>
+  <div class="tab" onclick="switchTab(2)">Data</div>
+  <div class="tab" onclick="switchTab(3)">Drills</div>
+  <div class="tab" onclick="switchTab(4)">Towers</div>
+</div>
+
+<!-- TAB 0: DASHBOARD -->
+<div class="tab-body active" id="tab0">
 <div id="map"></div>
 
-<!-- Controls -->
 <div class="panel" id="controls">
   <div id="b1" style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="btn btn-cyan" onclick="calibrate()">Calibrate</button>
@@ -85,6 +98,16 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
   </div>
 </div>
 
+<!-- Fusion Output -->
+<div class="panel">
+  <h2>FUSION OUTPUT</h2>
+  <div class="grid2">
+    <div class="mc"><div class="ml">Position</div><div class="mv" id="fPos" style="font-size:11px">--</div></div>
+    <div class="mc"><div class="ml">Confidence</div><div class="mv" id="fConf">--</div><div class="mu" id="fSrc">--</div></div>
+  </div>
+  <div class="mc" style="margin-top:4px"><div class="ml">Drift from GPS</div><div class="mv" id="fDrift" style="color:var(--amber)">--</div><div class="mu">meters</div></div>
+</div>
+
 <!-- Data Sources -->
 <div class="panel">
   <h2>DATA SOURCES</h2>
@@ -98,50 +121,6 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
   </div>
 </div>
 
-<!-- IMU Raw -->
-<div class="panel">
-  <h2>IMU (9-AXIS)</h2>
-  <div class="grid3" style="font-size:9px">
-    <div>AccX <b id="iAx">0</b></div><div>AccY <b id="iAy">0</b></div><div>AccZ <b id="iAz">0</b></div>
-    <div>GyrX <b id="iGx">0</b></div><div>GyrY <b id="iGy">0</b></div><div>GyrZ <b id="iGz">0</b></div>
-    <div>MagX <b id="iMx">0</b></div><div>MagY <b id="iMy">0</b></div><div>MagZ <b id="iMz">0</b></div>
-  </div>
-  <div style="font-size:9px;margin-top:4px">Compass: <b id="iHdg">0</b>° | Pressure: <b id="iPrs">0</b>hPa | Alt: <b id="iAlt">0</b>m</div>
-</div>
-
-<!-- 5 Algorithms -->
-<div class="panel">
-  <h2>6 POSITIONING ALGORITHMS</h2>
-  <div id="algList"></div>
-</div>
-
-<!-- Fusion Output -->
-<div class="panel">
-  <h2>FUSION OUTPUT</h2>
-  <div class="grid2">
-    <div class="mc"><div class="ml">Position</div><div class="mv" id="fPos" style="font-size:11px">--</div></div>
-    <div class="mc"><div class="ml">Confidence</div><div class="mv" id="fConf">--</div><div class="mu" id="fSrc">--</div></div>
-  </div>
-  <div class="mc" style="margin-top:4px"><div class="ml">Drift from GPS</div><div class="mv" id="fDrift" style="color:var(--amber)">--</div><div class="mu">meters</div></div>
-</div>
-
-<!-- Log -->
-<div class="panel">
-  <h2>LOG</h2>
-  <div class="log" id="logBox"></div>
-</div>
-
-<!-- Demo Mode -->
-<div class="panel">
-  <h2>DEMO MODE</h2>
-  <div style="display:flex;gap:4px;flex-wrap:wrap">
-    <button class="btn btn-green" onclick="runDemo('quick')" style="flex:1;font-size:8px">QUICK<br>3min</button>
-    <button class="btn btn-amber" onclick="runDemo('full')" style="flex:1;font-size:8px">FULL<br>15min</button>
-    <button class="btn btn-cyan" onclick="runDemo('train')" style="flex:1;font-size:8px">TRAIN<br>14min</button>
-  </div>
-  <div style="font-size:8px;color:var(--td);margin-top:4px" id="demoStatus"></div>
-</div>
-
 <!-- Map Layers -->
 <div class="panel">
   <h2>MAP LAYERS</h2>
@@ -152,13 +131,85 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
     <label><input type="checkbox" checked id="mlCone" onchange="toggleLayer('cone',this.checked)"> Cone</label>
   </div>
 </div>
+</div><!-- end tab0 -->
 
-<!-- BLE Connect + Report -->
+<!-- TAB 1: ALGORITHMS -->
+<div class="tab-body" id="tab1">
+<div class="panel">
+  <h2>6 POSITIONING ALGORITHMS</h2>
+  <div id="algList"></div>
+</div>
+<div class="panel">
+  <h2>ALGORITHM DETAILS</h2>
+  <div id="algDetails" style="font-size:9px"></div>
+</div>
+</div><!-- end tab1 -->
+
+<!-- TAB 2: DATA -->
+<div class="tab-body" id="tab2">
+<div class="panel">
+  <h2>IMU (9-AXIS)</h2>
+  <div class="grid3" style="font-size:9px">
+    <div>AccX <b id="iAx">0</b></div><div>AccY <b id="iAy">0</b></div><div>AccZ <b id="iAz">0</b></div>
+    <div>GyrX <b id="iGx">0</b></div><div>GyrY <b id="iGy">0</b></div><div>GyrZ <b id="iGz">0</b></div>
+    <div>MagX <b id="iMx">0</b></div><div>MagY <b id="iMy">0</b></div><div>MagZ <b id="iMz">0</b></div>
+  </div>
+  <div style="font-size:9px;margin-top:4px">Compass: <b id="iHdg">0</b>° | Pressure: <b id="iPrs">0</b>hPa | Alt: <b id="iAlt">0</b>m</div>
+</div>
+
+<!-- Log + BLE -->
+<div class="panel">
+  <h2>LOG</h2>
+  <div class="log" id="logBox"></div>
+</div>
 <div class="panel" style="text-align:center">
   <button class="btn btn-cyan" onclick="connectBLE()" id="bleBtn">Connect Board (BLE)</button>
-  <button class="btn btn-amber" onclick="downloadReport()" style="margin-left:8px">Download Report</button>
+  <button class="btn btn-amber" onclick="downloadReport()" style="margin-left:8px">Report</button>
+  <button class="btn btn-green" onclick="exportCSV()" style="margin-left:8px">CSV</button>
   <div style="font-size:8px;color:var(--td);margin-top:4px" id="bleStatus">Not connected</div>
 </div>
+</div><!-- end tab2 -->
+
+<!-- TAB 3: DRILLS -->
+<div class="tab-body" id="tab3">
+<div class="panel">
+  <h2>DEMO MODE</h2>
+  <div style="display:flex;gap:4px;flex-wrap:wrap">
+    <button class="btn btn-green" onclick="runDemo('quick')" style="flex:1;font-size:8px">QUICK<br>3min</button>
+    <button class="btn btn-amber" onclick="runDemo('full')" style="flex:1;font-size:8px">FULL<br>15min</button>
+    <button class="btn btn-cyan" onclick="runDemo('train')" style="flex:1;font-size:8px">TRAIN<br>14min</button>
+  </div>
+  <div style="font-size:8px;color:var(--td);margin-top:4px" id="demoStatus"></div>
+</div>
+<div class="panel">
+  <h2>DRILL RESULTS</h2>
+  <div id="drillResults" style="font-size:9px">No drills yet — press JAM GPS or run a demo</div>
+</div>
+</div><!-- end tab3 -->
+
+<!-- TAB 4: TOWERS -->
+<div class="tab-body" id="tab4">
+<div class="panel">
+  <h2>CELL TOWER DATABASE</h2>
+  <div id="towerInfo" style="font-size:9px">
+    <div>Preloaded: <b id="tPreloaded">0</b> towers</div>
+    <div>Learned this session: <b id="tLearned">0</b></div>
+    <div>Currently visible: <b id="tVisible">0</b></div>
+    <div>With known positions: <b id="tKnown">0</b></div>
+  </div>
+</div>
+<div class="panel">
+  <h2>VISIBLE TOWERS</h2>
+  <div id="towerList" style="font-size:9px">No towers detected</div>
+</div>
+<div class="panel">
+  <h2>WIFI DATABASE</h2>
+  <div id="wifiInfo" style="font-size:9px">
+    <div>APs visible: <b id="wVisible">0</b></div>
+    <div>APs in DB: <b id="wKnown">0</b></div>
+  </div>
+</div>
+</div><!-- end tab4 -->
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -173,7 +224,12 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.2.0';
+const VERSION='v6.3.0';
+
+function switchTab(idx){
+  document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
+  document.querySelectorAll('.tab-body').forEach((t,i)=>t.className='tab-body'+(i===idx?' active':''));
+}
 const GOOGLE_GEO_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
 
 // Google Geolocation API for tower position lookup
@@ -1080,6 +1136,46 @@ function updateUI(){
     document.getElementById('fDrift').textContent=Math.round(drift)+'m';
     document.getElementById('fDrift').style.color=drift<50?'var(--green)':drift<200?'var(--amber)':'var(--red)';
   }
+
+  // Algorithm details (tab 1)
+  let detHTML='';
+  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish].forEach(a=>{
+    detHTML+='<div style="margin-bottom:8px;padding:6px;background:var(--bg);border-radius:3px">';
+    detHTML+='<div style="font-weight:700;color:var(--cyan)">'+a.name+'</div>';
+    detHTML+='<div>Confidence: '+Math.round(a.confidence*100)+'%</div>';
+    detHTML+='<div>Source: '+a.source+'</div>';
+    if(a.pos)detHTML+='<div>Position: '+a.pos.lat.toFixed(6)+', '+a.pos.lon.toFixed(6)+'</div>';
+    if(a.altitude!==undefined&&a.altitude!==null)detHTML+='<div>Altitude: '+a.altitude.toFixed(1)+'m</div>';
+    if(a.name==='Fish School')detHTML+='<div>Gen: '+ALG.fish.generation+' | Schools: '+ALG.fish.schools.length+'</div>';
+    detHTML+='</div>';
+  });
+  try{document.getElementById('algDetails').innerHTML=detHTML;}catch(e){}
+
+  // Drill results (tab 3)
+  if(drills.length>0){
+    let drHTML='<table style="width:100%;font-size:8px;border-collapse:collapse"><tr style="color:var(--td)"><th>#</th><th>Dur</th><th>Drift</th><th>Winner</th></tr>';
+    drills.forEach((d,i)=>{
+      const col=d.drift<100?'var(--green)':d.drift<500?'var(--amber)':'var(--red)';
+      drHTML+='<tr><td>'+(i+1)+'</td><td>'+(d.duration||0)+'s</td><td style="color:'+col+'">'+(d.drift||0)+'m</td><td>'+(d.winner||'--')+'</td></tr>';
+    });
+    drHTML+='</table>';
+    try{document.getElementById('drillResults').innerHTML=drHTML;}catch(e){}
+  }
+
+  // Tower info (tab 4)
+  try{
+    document.getElementById('tPreloaded').textContent=typeof TOWERS!=='undefined'?TOWERS.length:0;
+    document.getElementById('tLearned').textContent=Object.keys(towerDB).length;
+    document.getElementById('tVisible').textContent=cellTowers.length;
+    document.getElementById('tKnown').textContent=cellTowers.filter(t=>t.lat>1).length;
+    document.getElementById('wVisible').textContent=wifiAPs.length;
+    document.getElementById('wKnown').textContent=Object.keys(WIFI_DB).length;
+    let tlHTML='';
+    cellTowers.forEach(t=>{
+      tlHTML+='<div style="padding:2px 0;border-bottom:1px solid var(--border)">CID:'+t.cid+' '+Math.round(t.signal)+'dBm'+(t.lat>1?' <span style="color:var(--green)">'+t.lat.toFixed(4)+','+t.lon.toFixed(4)+'</span>':' <span style="color:var(--red)">unknown</span>')+'</div>';
+    });
+    document.getElementById('towerList').innerHTML=tlHTML||'No towers detected';
+  }catch(e){}
 }
 
 // ─── CONTROLS ───
