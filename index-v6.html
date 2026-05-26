@@ -715,9 +715,25 @@ function processBoardData(d){
   if(d.imu&&d.imu.ok){
     if(d.imu.ax!==undefined)accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
     if(d.imu.gx!==undefined)gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
+    // Mag might be in d.imu OR d.compass (firmware v6 uses separate compass object)
     if(d.imu.mx!==undefined&&d.imu.mx!==null){
       mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
     }
+    document.getElementById('dIMU').className='sdot live';
+    document.getElementById('dIMUv').textContent='hdg:'+Math.round(compass)+'°';
+  }
+  // Compass: separate object in firmware v6 with mx/my/mz/hdg
+  if(d.compass&&d.compass.ok){
+    mag={x:d.compass.mx||0,y:d.compass.my||0,z:d.compass.mz||0};
+    if(d.compass.hdg!==undefined&&d.compass.hdg!==null){
+      compass=d.compass.hdg;
+    }else if(mag.x!==0||mag.y!==0){
+      compass=Math.atan2(mag.y,mag.x)*180/Math.PI;
+      if(compass<0)compass+=360;
+    }
+    document.getElementById('dIMUv').textContent='hdg:'+Math.round(compass)+'°';
+  }else if(d.imu&&d.imu.ok){
+    // Fallback: compass from imu object
     if(d.imu.hdg!==undefined&&d.imu.hdg!==null&&d.imu.hdg!==0){
       compass=d.imu.hdg;
     }else if(mag.x!==0||mag.y!==0){
