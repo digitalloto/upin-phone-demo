@@ -713,14 +713,11 @@ function onBLEData(e){
 
 function processBoardData(d){
   if(d.imu&&d.imu.ok){
-    // Only update if real values (not zero/undefined) — persist last known on BLE drop
     if(d.imu.ax!==undefined)accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
     if(d.imu.gx!==undefined)gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
-    // Magnetometer: accept any value including 0 (0 is valid for some axes)
     if(d.imu.mx!==undefined&&d.imu.mx!==null){
       mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
     }
-    // Compass: firmware hdg > computed from mag > keep last known
     if(d.imu.hdg!==undefined&&d.imu.hdg!==null&&d.imu.hdg!==0){
       compass=d.imu.hdg;
     }else if(mag.x!==0||mag.y!==0){
@@ -789,6 +786,22 @@ function processBoardData(d){
     document.getElementById('dWifi').className='sdot live';
     document.getElementById('dWifiv').textContent=wifiAPs.length+' APs ('+knownCount+' known)';
   }
+  // Live UI update — shows sensor values even before recording
+  try{
+    document.getElementById('iAx').textContent=accel.x.toFixed(2);
+    document.getElementById('iAy').textContent=accel.y.toFixed(2);
+    document.getElementById('iAz').textContent=accel.z.toFixed(2);
+    document.getElementById('iGx').textContent=gyro.x.toFixed(1);
+    document.getElementById('iGy').textContent=gyro.y.toFixed(1);
+    document.getElementById('iGz').textContent=gyro.z.toFixed(1);
+    document.getElementById('iMx').textContent=mag.x.toFixed(0);
+    document.getElementById('iMy').textContent=mag.y.toFixed(0);
+    document.getElementById('iMz').textContent=mag.z.toFixed(0);
+    document.getElementById('iHdg').textContent=Math.round(compass);
+    document.getElementById('iPrs').textContent=pressure.toFixed(0);
+    document.getElementById('iAlt').textContent=baroAlt.toFixed(1);
+    document.getElementById('mHdg').textContent=Math.round(compass)+'°';
+  }catch(e){}
 }
 
 // ─── PHONE GPS ───
