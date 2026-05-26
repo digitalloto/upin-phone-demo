@@ -98,6 +98,17 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
   </div>
 </div>
 
+<!-- IMU Raw -->
+<div class="panel">
+  <h2>IMU (9-AXIS)</h2>
+  <div class="grid3" style="font-size:9px">
+    <div>AccX <b id="iAx">0</b></div><div>AccY <b id="iAy">0</b></div><div>AccZ <b id="iAz">0</b></div>
+    <div>GyrX <b id="iGx">0</b></div><div>GyrY <b id="iGy">0</b></div><div>GyrZ <b id="iGz">0</b></div>
+    <div>MagX <b id="iMx">0</b></div><div>MagY <b id="iMy">0</b></div><div>MagZ <b id="iMz">0</b></div>
+  </div>
+  <div style="font-size:9px;margin-top:4px">Compass: <b id="iHdg">0</b>° | Pressure: <b id="iPrs">0</b>hPa | Alt: <b id="iAlt">0</b>m</div>
+</div>
+
 <!-- 5 Algorithms -->
 <div class="panel">
   <h2>6 POSITIONING ALGORITHMS</h2>
@@ -910,6 +921,20 @@ function updateUI(){
   if(startTime)document.getElementById('mTime').textContent=fmt((performance.now()-startTime)/1000);
   document.getElementById('clock').textContent=new Date().toLocaleTimeString();
 
+  // IMU raw display
+  document.getElementById('iAx').textContent=accel.x.toFixed(2);
+  document.getElementById('iAy').textContent=accel.y.toFixed(2);
+  document.getElementById('iAz').textContent=accel.z.toFixed(2);
+  document.getElementById('iGx').textContent=gyro.x.toFixed(1);
+  document.getElementById('iGy').textContent=gyro.y.toFixed(1);
+  document.getElementById('iGz').textContent=gyro.z.toFixed(1);
+  document.getElementById('iMx').textContent=mag.x.toFixed(0);
+  document.getElementById('iMy').textContent=mag.y.toFixed(0);
+  document.getElementById('iMz').textContent=mag.z.toFixed(0);
+  document.getElementById('iHdg').textContent=Math.round(compass);
+  document.getElementById('iPrs').textContent=pressure.toFixed(0);
+  document.getElementById('iAlt').textContent=baroAlt.toFixed(1);
+
   // Algorithm display
   let algHTML='';
   [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish].forEach(a=>{
@@ -1007,25 +1032,63 @@ function exportCSV(){
   });
 
   // KPI Report
+  const dur=Math.round((performance.now()-startTime)/1000);
   csv+='\n# ===== UPIN v6 KPI REPORT =====\n';
   csv+='# Version: '+VERSION+'\n';
-  csv+='# Duration_s: '+Math.round((performance.now()-startTime)/1000)+'\n';
+  csv+='# Duration_s: '+dur+'\n';
   csv+='# Total_distance_m: '+Math.round(totalDist)+'\n';
+  csv+='# Avg_speed_kmh: '+(dur>0?(totalDist/dur*3.6).toFixed(1):'0')+'\n';
   csv+='# Samples: '+DATA.count()+'\n';
+  csv+='# --- DATA HEALTH ---\n';
   csv+='# L4_accepted: '+L4.accepted+'\n';
   csv+='# L4_rejected: '+L4.rejected+'\n';
+  const gpsRows=DATA.samples.filter(s=>s.gpsLat>1).length;
+  csv+='# GPS_lock_pct: '+Math.round(gpsRows/Math.max(1,DATA.count())*100)+'\n';
+  csv+='# Board_connected: '+(boardConnected?'YES':'NO')+'\n';
+  csv+='# Towers_in_DB: '+(typeof TOWERS!=='undefined'?TOWERS.length:0)+'+'+Object.keys(towerDB).length+' learned\n';
+  csv+='# CID_speed_kmh: '+CID_SPEED.speed_kmh.toFixed(1)+'\n';
+  csv+='# CID_cell_radius: '+Math.round(CID_SPEED.cellRadius)+'m\n';
+  csv+='# --- ALGORITHM HEALTH ---\n';
+  const ctU=new Set(DATA.samples.map(s=>s.ct_lat).filter(v=>v)).size;
+  const cdU=new Set(DATA.samples.map(s=>s.cd_lat).filter(v=>v)).size;
+  const drU=new Set(DATA.samples.map(s=>s.dr_lat).filter(v=>v)).size;
+  const wfU=new Set(DATA.samples.map(s=>s.wf_lat).filter(v=>v)).size;
+  const fishU=new Set(DATA.samples.map(s=>s.fish_lat).filter(v=>v)).size;
+  const fusedU=new Set(DATA.samples.map(s=>s.fused_lat).filter(v=>v)).size;
+  csv+='# CT_unique_positions: '+ctU+'\n';
+  csv+='# CD_unique_positions: '+cdU+'\n';
+  csv+='# DR_unique_positions: '+drU+'\n';
+  csv+='# WF_unique_positions: '+wfU+'\n';
+  csv+='# Fish_unique_positions: '+fishU+'\n';
+  csv+='# Fused_unique_positions: '+fusedU+'\n';
   csv+='# Fish_generations: '+ALG.fish.generation+'\n';
-  csv+='# Fish_schools: '+ALG.fish.schools.length+'\n';
   csv+='# Fish_best_err: '+(ALG.fish.schools.length?Math.min(...ALG.fish.schools.map(s=>s.avgErr)).toFixed(1):'--')+'\n';
+  const srcCounts={};DATA.samples.forEach(s=>{const src=s.fused_src||'none';srcCounts[src]=(srcCounts[src]||0)+1;});
+  csv+='# Fused_source_distribution: '+Object.entries(srcCounts).map(([k,v])=>k+':'+v).join(' ')+'\n';
+  csv+='# Speed_unique_values: '+new Set(DATA.samples.map(s=>Math.round(s.speedNow*3.6))).size+'\n';
+  csv+='# Compass_unique_values: '+new Set(DATA.samples.map(s=>Math.round(s.compass))).size+'\n';
+  csv+='# --- GPS DENIAL DRILLS ---\n';
   csv+='# Drills: '+drills.length+'\n';
   drills.forEach((d,i)=>{
     csv+='# Drill_'+(i+1)+'_duration_s: '+(d.duration||0)+'\n';
     csv+='# Drill_'+(i+1)+'_drift_m: '+(d.drift||0)+'\n';
     csv+='# Drill_'+(i+1)+'_winner: '+(d.winner||'none')+'\n';
   });
+  // Honest performance
+  if(drills.length>0){
+    const drifts=drills.filter(d=>d.drift>0).map(d=>d.drift);
+    if(drifts.length>0){
+      drifts.sort((a,b)=>a-b);
+      csv+='# --- HONEST PERFORMANCE ---\n';
+      csv+='# Worst_drift_m: '+Math.max(...drifts)+'\n';
+      csv+='# Median_drift_m: '+drifts[Math.floor(drifts.length/2)]+'\n';
+      csv+='# Best_drift_m: '+Math.min(...drifts)+'\n';
+      csv+='# Avg_drift_m: '+Math.round(drifts.reduce((s,v)=>s+v,0)/drifts.length)+'\n';
+    }
+  }
 
   // Debug log
-  csv+='\n# ===== DEBUG LOG =====\n';
+  csv+='\n# ===== DEBUG LOG (last 50) =====\n';
   DEBUG.slice(-50).forEach(d=>{csv+='# '+d.t+' '+d.msg+'\n';});
 
   const blob=new Blob([csv],{type:'text/csv'});
