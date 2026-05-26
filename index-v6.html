@@ -175,6 +175,29 @@ let gpsSys=null, gpsTrue=null, drPos=null;
 let accel={x:0,y:0,z:9.81}, gyro={x:0,y:0,z:0}, compass=0, mag={x:0,y:0,z:0};
 let pressure=0, baroAlt=0, temp=0;
 let boardConnected=false, bleDevice=null, bleChar=null;
+
+// WiFi AP position database — learned from GPS
+const WIFI_DB={};
+function learnWiFiAP(bssid,lat,lon,rssi,ssid){
+  if(!bssid||!lat||lat<1)return;
+  if(!WIFI_DB[bssid])WIFI_DB[bssid]={lat,lon,rssi,ssid:ssid||'',count:1,positions:[]};
+  else{
+    const ap=WIFI_DB[bssid];
+    ap.positions.push({lat,lon,rssi});
+    if(ap.positions.length>30)ap.positions.shift();
+    ap.lat=ap.positions.reduce((s,p)=>s+p.lat,0)/ap.positions.length;
+    ap.lon=ap.positions.reduce((s,p)=>s+p.lon,0)/ap.positions.length;
+    ap.rssi=rssi;ap.count++;
+  }
+}
+function getKnownAPs(aps){
+  return aps.map(a=>{
+    const bssid=a.bssid||a.mac;
+    const known=WIFI_DB[bssid];
+    if(known&&known.count>=2)return{...a,bssid,lat:known.lat,lon:known.lon,ssid:known.ssid};
+    return{...a,bssid,lat:0,lon:0};
+  }).filter(a=>a.lat>1);
+}
 let cellTowers=[], wifiAPs=[];
 // Tower position database: TOWERS[] from towers-data.js + learned from GPS
 const towerDB={};
@@ -297,7 +320,27 @@ const ALG={
       if(this.db.length>2000)this.db.shift();
     },
     predict(aps){
-      if(!aps||!aps.length||this.db.length<5)return null;
+      if(!aps||!aps.length)return null;
+
+      // Method A: RSSI trilateration from known AP positions
+      const knownAPs=getKnownAPs(aps);
+      if(knownAPs.length>=2){
+        let sLat=0,sLon=0,sW=0;
+        knownAPs.forEach(ap=>{
+          const rssi=ap.rssi||ap.signal||-80;
+          const w=Math.pow(10,(rssi+50)/20); // higher RSSI = closer = more weight
+          sLat+=ap.lat*w;sLon+=ap.lon*w;sW+=w;
+        });
+        if(sW>0){
+          this.pos={lat:sLat/sW,lon:sLon/sW};
+          this.confidence=Math.min(0.8,knownAPs.length*0.15);
+          this.source='wifi_tri';
+          return this.pos;
+        }
+      }
+
+      // Method B: Fingerprint matching (fallback)
+      if(this.db.length<5)return null;
       const current=new Map(aps.map(a=>[a.bssid||a.mac,a.rssi||a.signal]));
       let bestScore=-1,bestFP=null;
       this.db.forEach(fp=>{
@@ -314,6 +357,7 @@ const ALG={
       if(!bestFP)return null;
       this.pos={lat:bestFP.lat,lon:bestFP.lon};
       this.confidence=Math.min(0.7,bestScore*0.3);
+      this.source='wifi_fp';
       return this.pos;
     }
   },
@@ -725,8 +769,16 @@ function processBoardData(d){
   if(d.wifi){
     const list=d.wifi.list||d.wifi.data||[];
     if(list.length)wifiAPs=list;
+    // Learn AP positions when GPS is available
+    if(gpsSys&&gpsSys.lat>1&&gpsSys.acc<50){
+      list.forEach(ap=>{
+        const bssid=ap.bssid||ap.mac;
+        if(bssid)learnWiFiAP(bssid,gpsSys.lat,gpsSys.lon,ap.rssi||ap.signal||-80,ap.ssid||'');
+      });
+    }
+    const knownCount=Object.keys(WIFI_DB).length;
     document.getElementById('dWifi').className='sdot live';
-    document.getElementById('dWifiv').textContent=wifiAPs.length+' APs';
+    document.getElementById('dWifiv').textContent=wifiAPs.length+' APs ('+knownCount+' known)';
   }
 }
 
