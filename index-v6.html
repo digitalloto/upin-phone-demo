@@ -131,9 +131,32 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
   <div class="log" id="logBox"></div>
 </div>
 
-<!-- BLE Connect -->
+<!-- Demo Mode -->
+<div class="panel">
+  <h2>DEMO MODE</h2>
+  <div style="display:flex;gap:4px;flex-wrap:wrap">
+    <button class="btn btn-green" onclick="runDemo('quick')" style="flex:1;font-size:8px">QUICK<br>3min</button>
+    <button class="btn btn-amber" onclick="runDemo('full')" style="flex:1;font-size:8px">FULL<br>15min</button>
+    <button class="btn btn-cyan" onclick="runDemo('train')" style="flex:1;font-size:8px">TRAIN<br>14min</button>
+  </div>
+  <div style="font-size:8px;color:var(--td);margin-top:4px" id="demoStatus"></div>
+</div>
+
+<!-- Map Layers -->
+<div class="panel">
+  <h2>MAP LAYERS</h2>
+  <div style="font-size:9px;display:flex;flex-wrap:wrap;gap:6px">
+    <label><input type="checkbox" id="mlTowers" onchange="toggleLayer('towers',this.checked)"> Cell Towers</label>
+    <label><input type="checkbox" id="mlFormulas" onchange="toggleLayer('formulas',this.checked)"> Formula Dots</label>
+    <label><input type="checkbox" checked id="mlTrail" onchange="toggleLayer('trail',this.checked)"> Trail</label>
+    <label><input type="checkbox" checked id="mlCone" onchange="toggleLayer('cone',this.checked)"> Cone</label>
+  </div>
+</div>
+
+<!-- BLE Connect + Report -->
 <div class="panel" style="text-align:center">
   <button class="btn btn-cyan" onclick="connectBLE()" id="bleBtn">Connect Board (BLE)</button>
+  <button class="btn btn-amber" onclick="downloadReport()" style="margin-left:8px">Download Report</button>
   <div style="font-size:8px;color:var(--td);margin-top:4px" id="bleStatus">Not connected</div>
 </div>
 
@@ -945,6 +968,8 @@ function tick(){
 
     // Auto-drill
     AUTO_DRILL.tick(speedNow*3.6,now);
+    // Draw tower markers and formula dots every 5 ticks
+    if(uiFrame%5===0){drawTowerMarkers();drawFormulaDots();}
 
     // Auto-save every 5 min
     if(uiFrame%300===0)autoSave();
@@ -1210,9 +1235,103 @@ function autoSave(){
 
 // ─── MAP ───
 let map,marker,drTrail=[],drLine,gpsAccCircle,coneCircle,coneRadius=10,truthMarker;
+let towerMarkers=[],formulaDots=[];
+let mapLayers={towers:false,formulas:false,trail:true,cone:true};
+
 function initMap(){
   map=L.map('map',{zoomControl:false}).setView([13.08,80.27],15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OSM',maxZoom:19}).addTo(map);
+}
+
+function toggleLayer(name,on){
+  mapLayers[name]=on;
+  if(name==='towers'&&!on){towerMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});towerMarkers=[];}
+  if(name==='formulas'&&!on){formulaDots.forEach(m=>{try{map.removeLayer(m);}catch(e){}});formulaDots=[];}
+  if(name==='trail'&&!on&&drLine){try{map.removeLayer(drLine);}catch(e){}}
+  if(name==='cone'&&!on&&coneCircle){try{map.removeLayer(coneCircle);}catch(e){}coneCircle=null;}
+}
+
+function drawTowerMarkers(){
+  if(!mapLayers.towers||typeof L==='undefined')return;
+  towerMarkers.forEach(m=>{try{map.removeLayer(m);}catch(e){}});towerMarkers=[];
+  cellTowers.forEach(t=>{
+    if(t.lat>1){
+      const m=L.circleMarker([t.lat,t.lon],{radius:5,color:'#e8a832',fillColor:'#e8a832',fillOpacity:0.6,weight:1})
+        .bindTooltip('CID:'+t.cid+' '+Math.round(t.signal)+'dBm',{permanent:false}).addTo(map);
+      towerMarkers.push(m);
+    }
+  });
+}
+
+function drawFormulaDots(){
+  if(!mapLayers.formulas||typeof L==='undefined')return;
+  formulaDots.forEach(m=>{try{map.removeLayer(m);}catch(e){}});formulaDots=[];
+  const colors=['#00e5ff','#3dcc6e','#A855F7','#FFB800','#f06060','#3B82F6'];
+  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.fish].forEach((a,i)=>{
+    if(a.pos&&a.pos.lat>1&&a.confidence>0){
+      const m=L.circleMarker([a.pos.lat,a.pos.lon],{radius:4,color:colors[i],fillColor:colors[i],fillOpacity:0.8,weight:1})
+        .bindTooltip(a.name+' ('+Math.round(a.confidence*100)+'%)',{permanent:false}).addTo(map);
+      formulaDots.push(m);
+    }
+  });
+}
+
+// ─── DEMO MODE ───
+const DEMO_SEQS={
+  quick:[['GPS',30],['JAM',15],['GPS',15],['JAM',30],['GPS',15],['JAM',60],['GPS',15]],
+  full:[['GPS',120],['JAM',30],['GPS',30],['JAM',60],['GPS',30],['JAM',120],['GPS',30],['JAM',180],['GPS',30],['JAM',300],['GPS',60]],
+  train:[['GPS',60],['JAM',30],['GPS',20],['JAM',60],['GPS',20],['JAM',120],['GPS',20],['JAM',180],['GPS',20],['JAM',300],['GPS',30]]
+};
+let demoRunning=false,demoStep=0,demoSeq=[],demoIv=null;
+function runDemo(mode){
+  if(demoRunning){demoRunning=false;if(demoIv)clearInterval(demoIv);if(phase==='jammed')resurface();document.getElementById('demoStatus').textContent='Stopped';return;}
+  if(phase!=='recording'){log('Start recording first','var(--red)');return;}
+  demoSeq=DEMO_SEQS[mode]||DEMO_SEQS.quick;demoStep=0;demoRunning=true;
+  document.getElementById('demoStatus').textContent=mode+' running...';
+  runDemoStep();
+}
+function runDemoStep(){
+  if(!demoRunning||demoStep>=demoSeq.length){demoRunning=false;document.getElementById('demoStatus').textContent='Done ('+drills.length+' drills)';return;}
+  const [action,dur]=demoSeq[demoStep];
+  if(action==='JAM')jamGPS(); else if(phase==='jammed')resurface();
+  document.getElementById('demoStatus').textContent=(action==='JAM'?'GPS DENIED':'GPS ON')+' — '+dur+'s (step '+(demoStep+1)+'/'+demoSeq.length+')';
+  demoStep++;
+  setTimeout(runDemoStep,dur*1000);
+}
+
+// ─── HTML REPORT ───
+function downloadReport(){
+  let h='<!DOCTYPE html><html><head><title>UPIN v6 Report</title><style>body{font-family:monospace;background:#0a0e14;color:#e6edf3;padding:20px;font-size:12px}h1{color:#00e5ff}h2{color:#3dcc6e;margin-top:20px}.good{color:#3dcc6e}.bad{color:#f06060}.warn{color:#e8a832}table{border-collapse:collapse;width:100%}td,th{border:1px solid #1e2a3a;padding:4px 8px;text-align:left}th{background:#111820}</style></head><body>';
+  h+='<h1>UPIN v6 Field Test Report</h1>';
+  h+='<p>Generated: '+new Date().toLocaleString()+'</p>';
+  h+='<h2>Summary</h2>';
+  const dur=startTime?Math.round((performance.now()-startTime)/1000):0;
+  h+='<table><tr><th>Metric</th><th>Value</th></tr>';
+  h+='<tr><td>Duration</td><td>'+Math.floor(dur/60)+'m '+dur%60+'s</td></tr>';
+  h+='<tr><td>Samples</td><td>'+DATA.count()+'</td></tr>';
+  h+='<tr><td>Distance</td><td>'+Math.round(totalDist)+'m</td></tr>';
+  h+='<tr><td>Drills</td><td>'+drills.length+'</td></tr>';
+  h+='<tr><td>GPS lock</td><td>'+Math.round(DATA.samples.filter(s=>s.gpsLat>1).length/Math.max(1,DATA.count())*100)+'%</td></tr>';
+  h+='</table>';
+  h+='<h2>GPS Denial Drills</h2>';
+  if(drills.length===0)h+='<p>No drills run</p>';
+  else{
+    h+='<table><tr><th>#</th><th>Duration</th><th>Drift</th><th>Winner</th></tr>';
+    drills.forEach((d,i)=>{h+='<tr><td>'+(i+1)+'</td><td>'+(d.duration||0)+'s</td><td class="'+(d.drift<100?'good':d.drift<500?'warn':'bad')+'">'+(d.drift||0)+'m</td><td>'+d.winner+'</td></tr>';});
+    h+='</table>';
+  }
+  h+='<h2>Algorithm Performance</h2><table><tr><th>Algorithm</th><th>Confidence</th><th>Position</th></tr>';
+  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish].forEach(a=>{
+    h+='<tr><td>'+a.name+'</td><td>'+Math.round(a.confidence*100)+'%</td><td>'+(a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude?a.altitude.toFixed(1)+'m':'--'))+'</td></tr>';
+  });
+  h+='</table>';
+  h+='<h2>Fusion</h2><p>Source: <b>'+FUSION.source+'</b> | Confidence: <b>'+Math.round(FUSION.confidence*100)+'%</b></p>';
+  if(FUSION.pos)h+='<p>Position: '+FUSION.pos.lat.toFixed(6)+', '+FUSION.pos.lon.toFixed(6)+'</p>';
+  h+='</body></html>';
+  const blob=new Blob([h],{type:'text/html'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='UPIN_v6_report_'+new Date().toISOString().substring(0,10)+'.html';
+  a.click();log('Report downloaded','var(--green)');
 }
 
 // ─── INIT ───
