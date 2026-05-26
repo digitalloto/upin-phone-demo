@@ -836,7 +836,15 @@ function tick(){
       mx:mag.x, my:mag.y, mz:mag.z, compass,
       gpsLat:gpsSys?gpsSys.lat:0, gpsLon:gpsSys?gpsSys.lon:0,
       gpsSpd:gpsSys?gpsSys.speed:0, gpsAcc:gpsSys?gpsSys.acc:999,
-      pressure, baroAlt, cellTowers:[...cellTowers], wifiAPs:[...wifiAPs],
+      pressure, baroAlt, temp,
+      cell4g_cid:cellTowers.length?cellTowers[0].cid:0,
+      cell4g_mcc:cellTowers.length?cellTowers[0].mcc:0,
+      cell4g_mnc:cellTowers.length?cellTowers[0].mnc:0,
+      cell4g_rssi:cellTowers.length?cellTowers[0].signal:0,
+      cell2g_count:cellTowers.length>1?cellTowers.length-1:0,
+      wifi_count:wifiAPs.length,
+      wifi_known:Object.keys(WIFI_DB).length,
+      cellTowers:[...cellTowers], wifiAPs:[...wifiAPs],
       speedNow, speedSource, phase
     };
 
@@ -1065,15 +1073,19 @@ function setMode(m){mode=m;log('Mode: '+m,'var(--cyan)');}
 
 // ─── CSV EXPORT ───
 function exportCSV(){
-  // Layer 3 columns + Layer 5 per-algorithm columns + Layer 6 fusion columns
-  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
+  // Layer 3: ALL raw sensor columns first. Layer 5/6 algorithm columns after.
+  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Temp,Cell4G_CID,Cell4G_MCC,Cell4G_MNC,Cell4G_RSSI,Cell2G_Count,WiFi_APs,WiFi_Known,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
   DATA.samples.forEach(s=>{
     const n=v=>v!==null&&v!==undefined?v:'';
     const f=(v,d)=>v!==null&&v!==undefined?Number(v).toFixed(d):'';
+    // Layer 3 raw sensor data
     csv+=s.t+','+s.phase+','+s.ax.toFixed(3)+','+s.ay.toFixed(3)+','+s.az.toFixed(3)+',';
-    csv+=s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+','+s.compass.toFixed(1)+',';
+    csv+=s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+',';
+    csv+=(s.mx||0).toFixed(1)+','+(s.my||0).toFixed(1)+','+(s.mz||0).toFixed(1)+','+s.compass.toFixed(1)+',';
     csv+=s.gpsLat.toFixed(7)+','+s.gpsLon.toFixed(7)+','+(s.gpsSpd||0).toFixed(1)+','+(s.gpsAcc||999).toFixed(0)+',';
-    csv+=(s.pressure||0).toFixed(1)+','+(s.baroAlt||0).toFixed(1)+',';
+    csv+=(s.pressure||0).toFixed(1)+','+(s.baroAlt||0).toFixed(1)+','+(s.temp||0).toFixed(1)+',';
+    csv+=(s.cell4g_cid||0)+','+(s.cell4g_mcc||0)+','+(s.cell4g_mnc||0)+','+(s.cell4g_rssi||0)+',';
+    csv+=(s.cell2g_count||0)+','+(s.wifi_count||0)+','+(s.wifi_known||0)+',';
     csv+=(s.speedNow*3.6).toFixed(1)+','+s.speedSource+',';
     csv+=f(s.ct_lat,7)+','+f(s.ct_lon,7)+','+f(s.ct_conf,2)+',';
     csv+=f(s.cd_lat,7)+','+f(s.cd_lon,7)+','+f(s.cd_conf,2)+',';

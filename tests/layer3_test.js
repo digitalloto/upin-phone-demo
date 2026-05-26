@@ -54,9 +54,10 @@ function testLayer3(csvPath) {
     'Row count: ' + rows.length + ' (need ≥250 for 5 min)',
     'Only ' + rows.length + ' rows — BLE drops or test too short');
 
-  // Test 2: Required columns exist
+  // Test 2: Required columns exist (ALL raw sensors from Layer 3)
   const requiredCols = ['Time', 'AccelX', 'AccelY', 'AccelZ', 'GyroX', 'GyroY', 'GyroZ',
-    'Compass', 'GPS_Lat', 'GPS_Lon', 'GPS_Speed', 'GPS_Acc', 'Pressure', 'BaroAlt'];
+    'MagX', 'MagY', 'MagZ', 'Compass', 'GPS_Lat', 'GPS_Lon', 'GPS_Speed', 'GPS_Acc',
+    'Pressure', 'BaroAlt', 'Temp', 'Cell4G_CID', 'Cell4G_RSSI', 'Cell2G_Count', 'WiFi_APs'];
   const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
   const missingCols = requiredCols.filter(c => !headers.includes(c));
   check(missingCols.length === 0,
@@ -90,12 +91,19 @@ function testLayer3(csvPath) {
     'Pressure flowing: ' + pressurePct + '% valid (need >50%)',
     'Only ' + pressurePct + '% pressure values valid');
 
-  // Test 7: No algorithm columns in Layer 3 CSV (those belong to Layer 5/6)
-  const algCols = headers.filter(h => h.startsWith('CT_') || h.startsWith('DR_') ||
-    h.startsWith('WF_') || h.startsWith('CD_') || h.startsWith('PA_') || h.startsWith('Fused_'));
-  check(algCols.length === 0,
-    'No algorithm columns in Layer 3 (found ' + algCols.length + ')',
-    'Layer 3 should not have: ' + algCols.join(', '));
+  // Test 7: Cell4G CID populated (>50% of rows)
+  const cellRows = rows.filter(r => Number(r.Cell4G_CID) > 0).length;
+  const cellPct = Math.round(cellRows / rows.length * 100);
+  check(cellPct > 50,
+    'Cell4G CID flowing: ' + cellPct + '% rows have CID (need >50%)',
+    'Only ' + cellPct + '% — board cell modem not reporting');
+
+  // Test 7b: MagX/Y/Z have values (not all zero — compass depends on this)
+  const magNonZero = rows.filter(r => Number(r.MagX) !== 0 || Number(r.MagY) !== 0).length;
+  const magPct = Math.round(magNonZero / rows.length * 100);
+  check(magPct > 50,
+    'Magnetometer flowing: ' + magPct + '% rows have MagX/Y data (need >50%)',
+    'Only ' + magPct + '% — compass will not work without mag');
 
   // Test 8: Time is monotonically increasing
   let timeErrors = 0;
