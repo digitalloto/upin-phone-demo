@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>UPIN v6</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="towers-data.js"></script>
+<script src="landmarks-data.js"></script>
 <style>
 :root{--bg:#0a0e14;--panel:#111820;--border:#1e2a3a;--tp:#e6edf3;--td:#7d8590;--green:#3dcc6e;--red:#f06060;--amber:#e8a832;--cyan:#00e5ff;--blue:#3B82F6}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -137,7 +139,23 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.0.1';
+const VERSION='v6.2.0';
+const GOOGLE_GEO_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
+
+// Google Geolocation API for tower position lookup
+function lookupTowerGoogle(cid,mcc,mnc,tac){
+  if(!navigator.onLine||!cid)return;
+  if(towerDB[cid]&&towerDB[cid].count>0)return; // already known
+  const body={considerIp:false,cellTowers:[{cellId:cid,locationAreaCode:tac||0,mobileCountryCode:mcc||404,mobileNetworkCode:mnc||84,radioType:'lte'}]};
+  fetch('https://www.googleapis.com/geolocation/v1/geolocate?key='+GOOGLE_GEO_KEY,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(g=>{
+      if(g.location&&g.location.lat){
+        towerDB[cid]={lat:g.location.lat,lon:g.location.lng,signal:0,count:1};
+        log('Tower CID:'+cid+' → '+g.location.lat.toFixed(4)+','+g.location.lng.toFixed(4),'var(--green)');
+      }
+    }).catch(()=>{}); // silent fail when offline
+}
 
 // ─── STATE ───
 let phase='idle'; // idle | recording | jammed
@@ -147,8 +165,15 @@ let accel={x:0,y:0,z:9.81}, gyro={x:0,y:0,z:0}, compass=0, mag={x:0,y:0,z:0};
 let pressure=0, baroAlt=0, temp=0;
 let boardConnected=false, bleDevice=null, bleChar=null;
 let cellTowers=[], wifiAPs=[];
-// Tower position database: learned from GPS when we see a CID
+// Tower position database: TOWERS[] from towers-data.js + learned from GPS
 const towerDB={};
+let _towerIdx=null;
+function buildTowerIndex(){
+  if(_towerIdx||typeof TOWERS==='undefined')return;
+  _towerIdx={};
+  TOWERS.forEach(t=>{_towerIdx[t.c]={lat:t.l,lon:t.o,mnc:t.m};});
+  log('Tower DB loaded: '+TOWERS.length+' towers','var(--cyan)');
+}
 function learnTower(cid,lat,lon,signal){
   if(!cid||!lat||lat<1)return;
   if(!towerDB[cid])towerDB[cid]={lat,lon,signal,count:1};
@@ -159,9 +184,16 @@ function learnTower(cid,lat,lon,signal){
   }
 }
 function enrichTowers(towers){
+  buildTowerIndex();
   return towers.map(t=>{
-    const known=towerDB[t.cid];
-    if(known)return{...t,lat:known.lat,lon:known.lon};
+    // 1. Check runtime learned DB
+    const learned=towerDB[t.cid];
+    if(learned&&learned.lat>1)return{...t,lat:learned.lat,lon:learned.lon};
+    // 2. Check static TOWERS database
+    if(_towerIdx){
+      const static_t=_towerIdx[t.cid];
+      if(static_t)return{...t,lat:static_t.lat,lon:static_t.lon};
+    }
     return t;
   });
 }
@@ -454,13 +486,48 @@ const FUSION={
   }
 };
 
+// ─── CID SPEED TRACKER ───
+const CID_SPEED={
+  history:[], // [{cid, t}]
+  cellRadius:1500, // meters, auto-tunes from GPS
+  speed_kmh:0,
+  update(cid,now,gpsSpeed){
+    if(cid===undefined||cid===null)return;
+    if(!this.history.length||this.history[this.history.length-1].cid!==cid){
+      this.history.push({cid,t:now});
+    }
+    // Keep last 60s
+    this.history=this.history.filter(h=>h.t>now-60000);
+    // Count changes
+    let changes=0;
+    for(let i=1;i<this.history.length;i++){
+      if(this.history[i].cid!==this.history[i-1].cid)changes++;
+    }
+    // Need 2+ changes (1 could be tower load balancing)
+    this.speed_kmh=changes>=2?(changes*this.cellRadius*0.5)/60*3.6:0;
+    this.speed_kmh=Math.min(this.speed_kmh,120);
+    // Auto-tune radius from GPS
+    if(gpsSpeed>2&&changes>0){
+      const actual=gpsSpeed/((changes/60)*3.6)*1000;
+      if(actual>500&&actual<10000)this.cellRadius=this.cellRadius*0.9+actual*0.1;
+    }
+  }
+};
+
 // ─── SPEED (strict priority, no blending) ───
 let speedNow=0, speedSource='none';
 function updateSpeed(){
+  // Update CID speed tracker
+  if(cellTowers.length>0)CID_SPEED.update(cellTowers[0].cid,performance.now(),gpsSys?gpsSys.speed*3.6:0);
+  // 1. GPS first
   if(gpsSys&&gpsSys.speed>=0&&gpsSys.acc&&gpsSys.acc<50){
     speedNow=gpsSys.speed;speedSource='gps';return;
   }
-  // CID speed would go here when Layer 7 CID tracking is added
+  // 2. CID speed (need 2+ transitions)
+  if(CID_SPEED.speed_kmh>2&&CID_SPEED.speed_kmh<120){
+    speedNow=CID_SPEED.speed_kmh/3.6;speedSource='cid';return;
+  }
+  // 3. IMU (only if sane)
   if(ALG.imuDR._speed>0.3&&ALG.imuDR._speed<15){
     speedNow=ALG.imuDR._speed;speedSource='imu';return;
   }
@@ -624,6 +691,7 @@ function processBoardData(d){
     const rssi=d.cell4g.rssi>0?-113+d.cell4g.rssi*2:(d.cell4g.rssi||-80);
     // Learn tower position from GPS when available
     if(gpsSys&&gpsSys.lat>1&&gpsSys.acc<100)learnTower(d.cell4g.cid,gpsSys.lat,gpsSys.lon,rssi);
+    lookupTowerGoogle(d.cell4g.cid,d.cell4g.mcc,d.cell4g.mnc,d.cell4g.tac);
     // Build tower list with known positions
     cellTowers=[{cid:d.cell4g.cid,mcc:d.cell4g.mcc||404,mnc:d.cell4g.mnc||0,tac:d.cell4g.tac||0,signal:rssi,lat:0,lon:0}];
     cellTowers=enrichTowers(cellTowers);
