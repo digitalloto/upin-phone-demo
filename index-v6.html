@@ -224,7 +224,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.3.0';
+const VERSION='v6.4.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -588,6 +588,225 @@ const ALG={
         }
       });
     }
+  },
+
+  // Algorithm 7 — Pedometer DR (step-based dead reckoning)
+  pedDR:{
+    name:'Pedometer DR',
+    pos:null, confidence:0, source:'ped_dr',
+    _steps:0, _stepLen:0.72, _accelBuf:[], _lastPeak:0, _peakCooldown:300,
+    predict(pos,accelData,compassDeg,dt,calBias){
+      if(!pos)return null;
+      const ax=accelData.x-(calBias?calBias.x:0);
+      const ay=accelData.y-(calBias?calBias.y:0);
+      const az=accelData.z-(calBias?calBias.z:0);
+      const aMag=Math.sqrt(ax*ax+ay*ay+az*az);
+      this._accelBuf.push(aMag);if(this._accelBuf.length>30)this._accelBuf.shift();
+      if(this._accelBuf.length<10)return null;
+      const mean=this._accelBuf.reduce((s,v)=>s+v,0)/this._accelBuf.length;
+      const now=performance.now();
+      // Step detection: peak above mean+1.5 with cooldown
+      if(aMag>mean+1.5&&(now-this._lastPeak)>this._peakCooldown){
+        this._lastPeak=now;
+        this._steps++;
+        const h=compassDeg*Math.PI/180;
+        if(!this.pos)this.pos={lat:pos.lat,lon:pos.lon};
+        this.pos={
+          lat:this.pos.lat+(this._stepLen*Math.cos(h))/111320,
+          lon:this.pos.lon+(this._stepLen*Math.sin(h))/(111320*Math.cos(this.pos.lat*Math.PI/180))
+        };
+        this.confidence=Math.min(0.65,0.3+this._steps*0.005);
+        return this.pos;
+      }
+      if(this.pos)this.confidence=Math.max(0,this.confidence-0.005);
+      return this.pos;
+    }
+  },
+
+  // Algorithm 8 — Landmark Proximity
+  landmark:{
+    name:'Landmark Snap',
+    pos:null, confidence:0, source:'landmark',
+    _lastCheck:0,
+    predict(estPos){
+      if(!estPos||typeof LANDMARKS==='undefined'||!LANDMARKS.length)return null;
+      const now=performance.now();
+      if(now-this._lastCheck<5000)return this.pos; // check every 5s
+      this._lastCheck=now;
+      let bestDist=Infinity,bestLM=null;
+      LANDMARKS.forEach(lm=>{
+        const d=hav(estPos,{lat:lm.lat,lon:lm.lon});
+        if(d<bestDist){bestDist=d;bestLM=lm;}
+      });
+      if(!bestLM||bestDist>500)return null;
+      // Within 500m of a landmark — use as confidence anchor
+      if(bestDist<100){
+        this.pos={lat:bestLM.lat,lon:bestLM.lon};
+        this.confidence=Math.min(0.75,0.5+0.25*(1-bestDist/100));
+      }else if(bestDist<300){
+        // Pull toward landmark proportionally
+        const pull=0.1*(1-bestDist/300);
+        this.pos={
+          lat:estPos.lat+(bestLM.lat-estPos.lat)*pull,
+          lon:estPos.lon+(bestLM.lon-estPos.lon)*pull
+        };
+        this.confidence=Math.min(0.5,0.2+0.3*(1-bestDist/300));
+      }else{
+        this.pos=null;this.confidence=0;
+      }
+      return this.pos;
+    }
+  },
+
+  // Algorithm 9 — CID Sequence Path Matching
+  cidPath:{
+    name:'CID Path Match',
+    pos:null, confidence:0, source:'cid_path',
+    _routes:[], // [{seq:[cid,...], positions:[{lat,lon},...]}]
+    _current:[], // current CID sequence
+    _maxRoutes:50,
+    learn(cid,lat,lon){
+      if(!cid||!lat||lat<1)return;
+      if(!this._current.length||this._current[this._current.length-1].cid!==cid){
+        this._current.push({cid,lat,lon});
+      }
+      if(this._current.length>100)this._current.shift();
+    },
+    saveRoute(){
+      if(this._current.length<5)return;
+      this._routes.push({
+        seq:this._current.map(c=>c.cid),
+        positions:this._current.map(c=>({lat:c.lat,lon:c.lon}))
+      });
+      if(this._routes.length>this._maxRoutes)this._routes.shift();
+      this._current=[];
+    },
+    predict(cid){
+      if(!cid||this._routes.length===0)return null;
+      // Build recent CID sequence (last 5)
+      if(!this._current.length||this._current[this._current.length-1].cid!==cid){
+        this._current.push({cid,lat:0,lon:0});
+      }
+      const recent=this._current.slice(-5).map(c=>c.cid);
+      if(recent.length<3)return null;
+      // Find matching route
+      let bestMatch=0,bestPos=null;
+      this._routes.forEach(route=>{
+        const seq=route.seq;
+        for(let i=0;i<=seq.length-recent.length;i++){
+          let matched=0;
+          for(let j=0;j<recent.length;j++){
+            if(seq[i+j]===recent[j])matched++;
+          }
+          if(matched>bestMatch&&matched>=3){
+            bestMatch=matched;
+            const nextIdx=Math.min(i+recent.length,route.positions.length-1);
+            bestPos=route.positions[nextIdx];
+          }
+        }
+      });
+      if(!bestPos)return null;
+      this.pos={lat:bestPos.lat,lon:bestPos.lon};
+      this.confidence=Math.min(0.7,bestMatch*0.15);
+      return this.pos;
+    }
+  },
+
+  // Algorithm 10 — Magnetic Fingerprint
+  magFP:{
+    name:'Magnetic FP',
+    pos:null, confidence:0, source:'mag_fp',
+    db:[], // [{lat,lon,mx,my,mz,mag}]
+    _maxDB:2000,
+    record(lat,lon,mx,my,mz){
+      if(!lat||lat<1||(!mx&&!my&&!mz))return;
+      const mag=Math.sqrt(mx*mx+my*my+mz*mz);
+      this.db.push({lat,lon,mx,my,mz,mag});
+      if(this.db.length>this._maxDB)this.db.shift();
+    },
+    predict(mx,my,mz){
+      if(this.db.length<20)return null;
+      if(!mx&&!my&&!mz)return null;
+      const curMag=Math.sqrt(mx*mx+my*my+mz*mz);
+      let bestScore=-1,bestFP=null;
+      this.db.forEach(fp=>{
+        // Compare magnetic field vectors
+        const dMag=Math.abs(fp.mag-curMag);
+        const dx=Math.abs(fp.mx-mx),dy=Math.abs(fp.my-my),dz=Math.abs(fp.mz-mz);
+        const diff=dx+dy+dz+dMag*2;
+        const score=1/(diff+0.1);
+        if(score>bestScore){bestScore=score;bestFP=fp;}
+      });
+      if(!bestFP||bestScore<0.05)return null;
+      this.pos={lat:bestFP.lat,lon:bestFP.lon};
+      this.confidence=Math.min(0.6,bestScore*0.3);
+      return this.pos;
+    }
+  },
+
+  // Algorithm 11 — Turn Detector
+  turnDet:{
+    name:'Turn Detector',
+    pos:null, confidence:0, source:'turn_det',
+    _turns:[], // [{type:'L'|'R'|'S', dist:m, heading:deg}]
+    _cumHeading:0, _lastHeading:null, _segDist:0, _turnThresh:25,
+    _routes:[], // learned turn sequences with positions
+    _maxRoutes:30,
+    update(compassDeg,speed,dt){
+      if(this._lastHeading===null){this._lastHeading=compassDeg;return;}
+      let dH=compassDeg-this._lastHeading;
+      if(dH>180)dH-=360;if(dH<-180)dH+=360;
+      this._cumHeading+=dH;
+      this._segDist+=speed*dt;
+      this._lastHeading=compassDeg;
+      // Detect turn when cumulative heading change exceeds threshold
+      if(Math.abs(this._cumHeading)>this._turnThresh&&this._segDist>2){
+        this._turns.push({
+          type:this._cumHeading>0?'R':'L',
+          dist:this._segDist,
+          heading:compassDeg
+        });
+        if(this._turns.length>50)this._turns.shift();
+        this._cumHeading=0;
+        this._segDist=0;
+      }else if(this._segDist>20&&Math.abs(this._cumHeading)<10){
+        this._turns.push({type:'S',dist:this._segDist,heading:compassDeg});
+        if(this._turns.length>50)this._turns.shift();
+        this._segDist=0;
+        this._cumHeading=0;
+      }
+    },
+    learnRoute(pos){
+      if(!pos||this._turns.length<3)return;
+      this._routes.push({
+        turns:this._turns.slice(-10).map(t=>t.type).join(''),
+        positions:this._turns.slice(-10).map(()=>({lat:pos.lat,lon:pos.lon}))
+      });
+      if(this._routes.length>this._maxRoutes)this._routes.shift();
+    },
+    predict(){
+      if(this._turns.length<3||this._routes.length===0)return null;
+      const recent=this._turns.slice(-5).map(t=>t.type).join('');
+      if(recent.length<3)return null;
+      let bestMatch=0,bestPos=null;
+      this._routes.forEach(route=>{
+        for(let i=0;i<=route.turns.length-recent.length;i++){
+          let matched=0;
+          for(let j=0;j<recent.length;j++){
+            if(route.turns[i+j]===recent[j])matched++;
+          }
+          if(matched>bestMatch&&matched>=3){
+            bestMatch=matched;
+            const idx=Math.min(i+recent.length,route.positions.length-1);
+            bestPos=route.positions[idx];
+          }
+        }
+      });
+      if(!bestPos)return null;
+      this.pos={lat:bestPos.lat,lon:bestPos.lon};
+      this.confidence=Math.min(0.55,bestMatch*0.12);
+      return this.pos;
+    }
   }
 };
 
@@ -603,14 +822,29 @@ const FUSION={
     if(ALG.wifiFP.pos&&ALG.wifiFP.confidence>0.4){
       this.pos={...ALG.wifiFP.pos};this.confidence=ALG.wifiFP.confidence;this.source='wifiFP';return;
     }
+    if(ALG.landmark.pos&&ALG.landmark.confidence>0.4){
+      this.pos={...ALG.landmark.pos};this.confidence=ALG.landmark.confidence;this.source='landmark';return;
+    }
     if(ALG.fish.pos&&ALG.fish.confidence>0.4){
       this.pos={...ALG.fish.pos};this.confidence=ALG.fish.confidence;this.source='fish';return;
+    }
+    if(ALG.pedDR.pos&&ALG.pedDR.confidence>0.35){
+      this.pos={...ALG.pedDR.pos};this.confidence=ALG.pedDR.confidence;this.source='pedDR';return;
     }
     if(ALG.imuDR.pos&&ALG.imuDR.confidence>0.3){
       this.pos={...ALG.imuDR.pos};this.confidence=ALG.imuDR.confidence;this.source='imuDR';return;
     }
+    if(ALG.cidPath.pos&&ALG.cidPath.confidence>0.3){
+      this.pos={...ALG.cidPath.pos};this.confidence=ALG.cidPath.confidence;this.source='cidPath';return;
+    }
+    if(ALG.magFP.pos&&ALG.magFP.confidence>0.3){
+      this.pos={...ALG.magFP.pos};this.confidence=ALG.magFP.confidence;this.source='magFP';return;
+    }
     if(ALG.cellDir.pos&&ALG.cellDir.confidence>0.3){
       this.pos={...ALG.cellDir.pos};this.confidence=ALG.cellDir.confidence;this.source='cellDir';return;
+    }
+    if(ALG.turnDet.pos&&ALG.turnDet.confidence>0.3){
+      this.pos={...ALG.turnDet.pos};this.confidence=ALG.turnDet.confidence;this.source='turnDet';return;
     }
     // Nothing trustworthy — hold last position with decaying confidence
     if(this.pos)this.confidence=Math.max(0,this.confidence-0.01);
@@ -972,7 +1206,7 @@ function tick(){
     // ALWAYS record — even with nulls. Missing data = null, not missing row.
     DATA.record(row);
 
-    // Layer 5: run all 5 algorithms
+    // Layer 5: run all 11 algorithms
     const pos=FUSION.pos||gpsSys||(gpsTrue?{lat:gpsTrue.lat,lon:gpsTrue.lon}:null);
     ALG.cellTri.predict(cellTowers);
     ALG.cellDir.predict(cellTowers,pos,speedNow,dt);
@@ -984,6 +1218,20 @@ function tick(){
     if(!ALG.fish.schools.length&&gpsSys&&gpsSys.lat>1)ALG.fish.init(gpsSys.lat,gpsSys.lon);
     if(ALG.fish.schools.length)ALG.fish.predict(pos,accel,compass,speedNow,dt,CAL.bias);
     if(gpsSys&&gpsSys.lat>1&&ALG.fish.schools.length)ALG.fish.score(gpsSys);
+    // Pedometer DR
+    ALG.pedDR.predict(pos,accel,compass,dt,CAL.bias);
+    // Landmark proximity
+    ALG.landmark.predict(pos);
+    // CID path: learn during GPS, predict always
+    if(gpsSys&&gpsSys.lat>1&&cellTowers.length>0)ALG.cidPath.learn(cellTowers[0].cid,gpsSys.lat,gpsSys.lon);
+    if(cellTowers.length>0)ALG.cidPath.predict(cellTowers[0].cid);
+    // Magnetic fingerprint: learn during GPS, predict always
+    if(gpsSys&&gpsSys.lat>1&&phase==='recording')ALG.magFP.record(gpsSys.lat,gpsSys.lon,mag.x,mag.y,mag.z);
+    ALG.magFP.predict(mag.x,mag.y,mag.z);
+    // Turn detector
+    ALG.turnDet.update(compass,speedNow,dt);
+    if(gpsSys&&gpsSys.lat>1)ALG.turnDet.learnRoute(gpsSys);
+    ALG.turnDet.predict();
 
     // Layer 6: fusion
     FUSION.update();
@@ -1005,6 +1253,22 @@ function tick(){
     row.fish_lat=ALG.fish.pos?ALG.fish.pos.lat:null;
     row.fish_lon=ALG.fish.pos?ALG.fish.pos.lon:null;
     row.fish_conf=ALG.fish.confidence;
+    row.ped_lat=ALG.pedDR.pos?ALG.pedDR.pos.lat:null;
+    row.ped_lon=ALG.pedDR.pos?ALG.pedDR.pos.lon:null;
+    row.ped_conf=ALG.pedDR.confidence;
+    row.ped_steps=ALG.pedDR._steps;
+    row.lm_lat=ALG.landmark.pos?ALG.landmark.pos.lat:null;
+    row.lm_lon=ALG.landmark.pos?ALG.landmark.pos.lon:null;
+    row.lm_conf=ALG.landmark.confidence;
+    row.cp_lat=ALG.cidPath.pos?ALG.cidPath.pos.lat:null;
+    row.cp_lon=ALG.cidPath.pos?ALG.cidPath.pos.lon:null;
+    row.cp_conf=ALG.cidPath.confidence;
+    row.mf_lat=ALG.magFP.pos?ALG.magFP.pos.lat:null;
+    row.mf_lon=ALG.magFP.pos?ALG.magFP.pos.lon:null;
+    row.mf_conf=ALG.magFP.confidence;
+    row.td_lat=ALG.turnDet.pos?ALG.turnDet.pos.lat:null;
+    row.td_lon=ALG.turnDet.pos?ALG.turnDet.pos.lon:null;
+    row.td_conf=ALG.turnDet.confidence;
     row.fused_lat=FUSION.pos?FUSION.pos.lat:null;
     row.fused_lon=FUSION.pos?FUSION.pos.lon:null;
     row.fused_conf=FUSION.confidence;
@@ -1117,10 +1381,10 @@ function updateUI(){
 
   // Algorithm display
   let algHTML='';
-  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish].forEach(a=>{
+  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish,ALG.pedDR,ALG.landmark,ALG.cidPath,ALG.magFP,ALG.turnDet].forEach(a=>{
     const conf=Math.round(a.confidence*100);
     const col=conf>50?'var(--green)':conf>20?'var(--amber)':'var(--td)';
-    const posStr=a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude!==null?a.altitude.toFixed(1)+'m':'--');
+    const posStr=a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude!==null&&a.altitude!==undefined?a.altitude.toFixed(1)+'m':'--');
     algHTML+='<div class="alg-row"><span class="alg-name">'+a.name+'</span><span class="alg-val" style="color:'+col+'">'+posStr+' ('+conf+'%)</span></div>';
   });
   document.getElementById('algList').innerHTML=algHTML;
@@ -1139,7 +1403,7 @@ function updateUI(){
 
   // Algorithm details (tab 1)
   let detHTML='';
-  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish].forEach(a=>{
+  [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish,ALG.pedDR,ALG.landmark,ALG.cidPath,ALG.magFP,ALG.turnDet].forEach(a=>{
     detHTML+='<div style="margin-bottom:8px;padding:6px;background:var(--bg);border-radius:3px">';
     detHTML+='<div style="font-weight:700;color:var(--cyan)">'+a.name+'</div>';
     detHTML+='<div>Confidence: '+Math.round(a.confidence*100)+'%</div>';
@@ -1147,6 +1411,10 @@ function updateUI(){
     if(a.pos)detHTML+='<div>Position: '+a.pos.lat.toFixed(6)+', '+a.pos.lon.toFixed(6)+'</div>';
     if(a.altitude!==undefined&&a.altitude!==null)detHTML+='<div>Altitude: '+a.altitude.toFixed(1)+'m</div>';
     if(a.name==='Fish School')detHTML+='<div>Gen: '+ALG.fish.generation+' | Schools: '+ALG.fish.schools.length+'</div>';
+    if(a.name==='Pedometer DR')detHTML+='<div>Steps: '+ALG.pedDR._steps+' | Step len: '+ALG.pedDR._stepLen+'m</div>';
+    if(a.name==='Magnetic FP')detHTML+='<div>DB size: '+ALG.magFP.db.length+' fingerprints</div>';
+    if(a.name==='CID Path Match')detHTML+='<div>Routes: '+ALG.cidPath._routes.length+' | Seq len: '+ALG.cidPath._current.length+'</div>';
+    if(a.name==='Turn Detector')detHTML+='<div>Turns: '+ALG.turnDet._turns.length+' | Routes: '+ALG.turnDet._routes.length+'</div>';
     detHTML+='</div>';
   });
   try{document.getElementById('algDetails').innerHTML=detHTML;}catch(e){}
@@ -1224,6 +1492,7 @@ function endTest(){
   phase='idle';if(tickIv){clearInterval(tickIv);tickIv=null;}
   document.getElementById('badge').textContent='IDLE';document.getElementById('badge').className='badge b-idle';
   document.getElementById('b1').style.display='flex';document.getElementById('b2').style.display='none';
+  ALG.cidPath.saveRoute();
   exportCSV();
   log('Test ended — '+DATA.count()+' samples, '+drills.length+' drills','var(--cyan)');
 }
@@ -1233,7 +1502,7 @@ function setMode(m){mode=m;log('Mode: '+m,'var(--cyan)');}
 // ─── CSV EXPORT ───
 function exportCSV(){
   // Layer 3: ALL raw sensor columns first. Layer 5/6 algorithm columns after.
-  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Temp,Cell4G_CID,Cell4G_MCC,Cell4G_MNC,Cell4G_RSSI,Cell2G_Count,WiFi_APs,WiFi_Known,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
+  let csv='Time,Phase,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Temp,Cell4G_CID,Cell4G_MCC,Cell4G_MNC,Cell4G_RSSI,Cell2G_Count,WiFi_APs,WiFi_Known,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Ped_Lat,Ped_Lon,Ped_Conf,Ped_Steps,LM_Lat,LM_Lon,LM_Conf,CP_Lat,CP_Lon,CP_Conf,MF_Lat,MF_Lon,MF_Conf,TD_Lat,TD_Lon,TD_Conf,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
   DATA.samples.forEach(s=>{
     const n=v=>v!==null&&v!==undefined?v:'';
     const f=(v,d)=>v!==null&&v!==undefined?Number(v).toFixed(d):'';
@@ -1252,6 +1521,11 @@ function exportCSV(){
     csv+=f(s.dr_lat,7)+','+f(s.dr_lon,7)+','+f(s.dr_conf,2)+',';
     csv+=f(s.pa_alt,1)+',';
     csv+=f(s.fish_lat,7)+','+f(s.fish_lon,7)+','+f(s.fish_conf,2)+',';
+    csv+=f(s.ped_lat,7)+','+f(s.ped_lon,7)+','+f(s.ped_conf,2)+','+(s.ped_steps||0)+',';
+    csv+=f(s.lm_lat,7)+','+f(s.lm_lon,7)+','+f(s.lm_conf,2)+',';
+    csv+=f(s.cp_lat,7)+','+f(s.cp_lon,7)+','+f(s.cp_conf,2)+',';
+    csv+=f(s.mf_lat,7)+','+f(s.mf_lon,7)+','+f(s.mf_conf,2)+',';
+    csv+=f(s.td_lat,7)+','+f(s.td_lon,7)+','+f(s.td_conf,2)+',';
     csv+=f(s.fused_lat,7)+','+f(s.fused_lon,7)+','+f(s.fused_conf,2)+','+n(s.fused_src)+'\n';
   });
 
@@ -1279,11 +1553,25 @@ function exportCSV(){
   const wfU=new Set(DATA.samples.map(s=>s.wf_lat).filter(v=>v)).size;
   const fishU=new Set(DATA.samples.map(s=>s.fish_lat).filter(v=>v)).size;
   const fusedU=new Set(DATA.samples.map(s=>s.fused_lat).filter(v=>v)).size;
+  const pedU=new Set(DATA.samples.map(s=>s.ped_lat).filter(v=>v)).size;
+  const lmU=new Set(DATA.samples.map(s=>s.lm_lat).filter(v=>v)).size;
+  const cpU=new Set(DATA.samples.map(s=>s.cp_lat).filter(v=>v)).size;
+  const mfU=new Set(DATA.samples.map(s=>s.mf_lat).filter(v=>v)).size;
+  const tdU=new Set(DATA.samples.map(s=>s.td_lat).filter(v=>v)).size;
   csv+='# CT_unique_positions: '+ctU+'\n';
   csv+='# CD_unique_positions: '+cdU+'\n';
   csv+='# DR_unique_positions: '+drU+'\n';
   csv+='# WF_unique_positions: '+wfU+'\n';
   csv+='# Fish_unique_positions: '+fishU+'\n';
+  csv+='# Ped_unique_positions: '+pedU+'\n';
+  csv+='# Ped_steps: '+ALG.pedDR._steps+'\n';
+  csv+='# LM_unique_positions: '+lmU+'\n';
+  csv+='# CP_unique_positions: '+cpU+'\n';
+  csv+='# CP_routes_learned: '+ALG.cidPath._routes.length+'\n';
+  csv+='# MF_unique_positions: '+mfU+'\n';
+  csv+='# MF_db_size: '+ALG.magFP.db.length+'\n';
+  csv+='# TD_unique_positions: '+tdU+'\n';
+  csv+='# TD_turns_detected: '+ALG.turnDet._turns.length+'\n';
   csv+='# Fused_unique_positions: '+fusedU+'\n';
   csv+='# Fish_generations: '+ALG.fish.generation+'\n';
   csv+='# Fish_best_err: '+(ALG.fish.schools.length?Math.min(...ALG.fish.schools.map(s=>s.avgErr)).toFixed(1):'--')+'\n';
@@ -1435,7 +1723,7 @@ window.addEventListener('load',()=>{
   initMap();
   initPhoneGPS();
   initPhoneSensors();
-  log('UPIN '+VERSION+' — 5 algorithms, layered architecture','var(--cyan)');
+  log('UPIN '+VERSION+' — 11 algorithms, layered architecture','var(--cyan)');
   log('Connect board or use phone sensors','var(--td)');
 });
 </script>
