@@ -285,8 +285,10 @@ const GPS_STALE={
     const accelStd=this._accelBuf.length>5?Math.sqrt(this._accelBuf.reduce((s,v)=>s+(v-accelMean)**2,0)/this._accelBuf.length):0;
     // Check 3: Is accuracy suspiciously constant?
     const accUnique=this._accBuf.length>10?new Set(this._accBuf.map(v=>Math.round(v))).size:99;
-    // STALE if: GPS frozen for 10s + accel shows movement + accuracy constant
-    this.stale=(frozenSec>10&&accelStd>0.5)||(frozenSec>10&&accUnique<=2)||(frozenSec>20&&gps.speed<0.3);
+    // STALE only if: GPS frozen AND accelerometer proves we're moving
+    // accelStd>0.5 = device vibrating/moving. If accelStd<0.15 = genuinely still, GPS freeze is expected
+    const imuSaysMoving=accelStd>0.3;
+    this.stale=(frozenSec>10&&imuSaysMoving)||(frozenSec>30&&imuSaysMoving&&accUnique<=2);
     if(this.stale&&!this._logged){
       log('GPS STALE: frozen '+Math.round(frozenSec)+'s, accel_std='+accelStd.toFixed(2)+', acc_unique='+accUnique,'var(--red)');
       this._logged=true;

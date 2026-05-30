@@ -625,7 +625,8 @@ const GPS_STALE={
     const accelMean=this._accelBuf.length>5?this._accelBuf.reduce((s,v)=>s+v,0)/this._accelBuf.length:0;
     const accelStd=this._accelBuf.length>5?Math.sqrt(this._accelBuf.reduce((s,v)=>s+(v-accelMean)**2,0)/this._accelBuf.length):0;
     const accUnique=this._accBuf.length>10?new Set(this._accBuf.map(v=>Math.round(v))).size:99;
-    this.stale=(frozenSec>10&&accelStd>0.5)||(frozenSec>10&&accUnique<=2)||(frozenSec>20&&gps.speed<0.3);
+    const imuSaysMoving=accelStd>0.3;
+    this.stale=(frozenSec>10&&imuSaysMoving)||(frozenSec>30&&imuSaysMoving&&accUnique<=2);
     if(this.stale&&!this._logged){
       try{log('GPS STALE: frozen '+Math.round(frozenSec)+'s, accel_std='+accelStd.toFixed(2),'var(--red)');}catch(e){}
       this._logged=true;
