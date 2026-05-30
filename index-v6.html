@@ -1405,50 +1405,130 @@ const SPEED={
     }
   },
 
-  // Source 5: RSSI Rate of Change — signal strength change rate = speed
-  rssiRate:{
-    speed:0, _prevSignals:new Map(),
+  // Source 5: RSSI Gradient Speed — per-tower signal slope = approach/retreat speed
+  rssiGrad:{
+    speed:0, _history:new Map(), // cid → [{signal, t}]
+    update(towers){
+      if(!towers||!towers.length){this.speed*=0.9;if(this.speed<0.2)this.speed=0;return;}
+      const now=performance.now();
+      let totalSpeed=0,count=0;
+      towers.forEach(t=>{
+        if(!t.cid||!t.lat||t.lat<1)return;
+        const key=t.cid;
+        if(!this._history.has(key))this._history.set(key,[]);
+        const hist=this._history.get(key);
+        hist.push({signal:t.signal,t:now});
+        if(hist.length>30)hist.shift();
+        if(hist.length<5)return;
+        // Linear regression on RSSI over last 10 samples → dBm/sec slope
+        const recent=hist.slice(-10);
+        const tStart=recent[0].t/1000;
+        let sx=0,sy=0,sxx=0,sxy=0,n=recent.length;
+        recent.forEach(p=>{const x=p.t/1000-tStart;sx+=x;sy+=p.signal;sxx+=x*x;sxy+=x*p.signal;});
+        const slope=(n*sxy-sx*sy)/(n*sxx-sx*sx||1); // dBm/sec
+        // Path loss model: RSSI ≈ -10*n*log10(d) → dRSSI/dt = -10*n/(d*ln10) * v
+        // At typical d=1000m, n=3: v ≈ |slope| * d * ln(10) / (10*n)
+        const estDist=Math.pow(10,(-40-t.signal)/(10*3))*100; // rough distance from RSSI
+        const v=Math.abs(slope)*Math.max(100,estDist)*Math.log(10)/(10*3);
+        if(v>0.5&&v<50){totalSpeed+=v;count++;}
+      });
+      this.speed=count>0?totalSpeed/count:this.speed*0.9;
+      if(this.speed<0.2)this.speed=0;
+    }
+  },
+
+  // Source 6: Cell Tri Position Delta — speed from CT position change over time
+  ctDelta:{
+    speed:0, _prevPos:null, _prevT:0,
+    update(ctPos){
+      if(!ctPos)return;
+      const now=performance.now();
+      if(this._prevPos){
+        const dt=(now-this._prevT)/1000;
+        if(dt>0.5&&dt<10){
+          const d=hav(this._prevPos,ctPos);
+          if(d>1&&d<500){
+            const spd=d/dt;
+            if(spd<50)this.speed=this.speed*0.7+spd*0.3; // smooth
+          }
+        }
+      }
+      this._prevPos={lat:ctPos.lat,lon:ctPos.lon};
+      this._prevT=now;
+      if(this.speed<0.2)this.speed=0;
+    }
+  },
+
+  // Source 7: 2G Neighbor Churn — how fast neighbor cells appear/disappear
+  neighborChurn:{
+    speed:0, _prevSet:new Set(), _churnBuf:[],
+    update(towers){
+      if(!towers||towers.length<2){return;}
+      const curSet=new Set(towers.map(t=>t.cid).filter(c=>c));
+      if(this._prevSet.size>0){
+        let appeared=0,disappeared=0;
+        curSet.forEach(c=>{if(!this._prevSet.has(c))appeared++;});
+        this._prevSet.forEach(c=>{if(!curSet.has(c))disappeared++;});
+        const churn=appeared+disappeared;
+        this._churnBuf.push(churn);if(this._churnBuf.length>30)this._churnBuf.shift();
+        const avgChurn=this._churnBuf.reduce((s,v)=>s+v,0)/this._churnBuf.length;
+        // More churn = faster movement. 1 churn/sec ≈ 5-10 m/s in urban
+        this.speed=Math.min(30,avgChurn*5);
+      }
+      this._prevSet=curSet;
+      if(this.speed<0.2)this.speed=0;
+    }
+  },
+
+  // Source 8: Signal Fade Rate — how quickly strongest signal drops after peak
+  signalFade:{
+    speed:0, _peakSignal:-999, _peakTime:0, _peakCID:null,
     update(towers){
       if(!towers||!towers.length)return;
-      let totalRate=0,count=0;
-      towers.forEach(t=>{
-        const key=t.cid||'t'+t.lat;
-        const prev=this._prevSignals.get(key);
-        this._prevSignals.set(key,t.signal);
-        if(prev!==undefined){
-          const rate=Math.abs(t.signal-prev);
-          if(rate>0.5){totalRate+=rate;count++;}
-        }
-      });
-      if(count>0){
-        const avgRate=totalRate/count;
-        this.speed=Math.min(25,avgRate*2); // 1dB/s ≈ 2 m/s rough estimate
-      }else{
-        this.speed*=0.9;
+      const strongest=towers.reduce((best,t)=>t.signal>best.signal?t:best,towers[0]);
+      if(!strongest.cid)return;
+      const now=performance.now();
+      if(strongest.cid!==this._peakCID||strongest.signal>this._peakSignal){
+        this._peakSignal=strongest.signal;
+        this._peakTime=now;
+        this._peakCID=strongest.cid;
+      }
+      const elapsed=(now-this._peakTime)/1000;
+      if(elapsed>2&&this._peakSignal>-100){
+        const fade=this._peakSignal-strongest.signal; // dB drop since peak
+        const fadeRate=fade/elapsed; // dB/sec
+        // Fast fade = fast movement. At 300m cell, 3dB/s ≈ 10 m/s
+        this.speed=Math.min(30,Math.max(0,fadeRate*3));
       }
       if(this.speed<0.2)this.speed=0;
     }
   },
 
-  // ─── FUSION: pick best speed from all 5 sources ───
+  // ─── FUSION: pick best speed from all 8 sources ───
   fused:0, fusedSource:'none',
   fusedSpeedKmh:0,
 
   update(accel,gyro,cellTowers,dt){
-    // Run all 5 estimators
+    // Run all 8 estimators
     this.steps.update(accel,dt);
     this.accelInt.update(accel,gyro,dt);
     if(cellTowers.length>0)this.cid.update(cellTowers[0].cid,performance.now());
     this.vibration.update(accel,dt);
-    this.rssiRate.update(cellTowers);
+    this.rssiGrad.update(cellTowers);
+    if(ALG.cellTri.pos)this.ctDelta.update(ALG.cellTri.pos);
+    this.neighborChurn.update(cellTowers);
+    this.signalFade.update(cellTowers);
 
-    // Pick the highest non-zero speed from sensor-only sources
+    // Pick from all 8 sensor-only sources
     const sources=[
       {name:'steps',speed:this.steps.speed},
       {name:'accel',speed:this.accelInt.speed},
       {name:'cid',speed:this.cid.speed_kmh/3.6},
       {name:'vibration',speed:this.vibration.speed},
-      {name:'rssi',speed:this.rssiRate.speed}
+      {name:'rssiGrad',speed:this.rssiGrad.speed},
+      {name:'ctDelta',speed:this.ctDelta.speed},
+      {name:'nbrChurn',speed:this.neighborChurn.speed},
+      {name:'sigFade',speed:this.signalFade.speed}
     ].filter(s=>s.speed>0.2);
 
     if(sources.length===0){
@@ -1948,7 +2028,10 @@ function tick(){
     row.spd_accel=SPEED.accelInt.speed;
     row.spd_cid=SPEED.cid.speed_kmh;
     row.spd_vibration=SPEED.vibration.speed;
-    row.spd_rssi=SPEED.rssiRate.speed;
+    row.spd_rssi=SPEED.rssiGrad.speed;
+    row.spd_ctdelta=SPEED.ctDelta.speed;
+    row.spd_churn=SPEED.neighborChurn.speed;
+    row.spd_fade=SPEED.signalFade.speed;
     row.fused_lat=FUSION.pos?FUSION.pos.lat:null;
     row.fused_lon=FUSION.pos?FUSION.pos.lon:null;
     row.fused_conf=FUSION.confidence;
@@ -2191,7 +2274,7 @@ function setMode(m){mode=m;log('Mode: '+m,'var(--cyan)');}
 // ─── CSV EXPORT ───
 function exportCSV(){
   // Layer 3: ALL raw sensor columns first. Layer 5/6 algorithm columns after.
-  let csv='Time,Phase,Activity,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Temp,Laser_mm,Cell4G_CID,Cell4G_MCC,Cell4G_MNC,Cell4G_RSSI,Cell2G_Count,WiFi_APs,WiFi_Known,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Ped_Lat,Ped_Lon,Ped_Conf,Ped_Steps,LM_Lat,LM_Lon,LM_Conf,CP_Lat,CP_Lon,CP_Conf,MF_Lat,MF_Lon,MF_Conf,TD_Lat,TD_Lon,TD_Conf,GK_Lat,GK_Lon,GK_Conf,RP_Lat,RP_Lon,RP_Conf,PF_Lat,PF_Lon,PF_Conf,CDW_Lat,CDW_Lon,CDW_Conf,GDR_Lat,GDR_Lon,GDR_Conf,SM_Lat,SM_Lon,SM_Conf,CHD_Lat,CHD_Lon,CHD_Conf,VP_Lat,VP_Lon,VP_Conf,FL_Alt,FL_Floor,GPS_Stale,Spd_Steps,Spd_Accel,Spd_CID,Spd_Vibration,Spd_RSSI,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
+  let csv='Time,Phase,Activity,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Temp,Laser_mm,Cell4G_CID,Cell4G_MCC,Cell4G_MNC,Cell4G_RSSI,Cell2G_Count,WiFi_APs,WiFi_Known,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Ped_Lat,Ped_Lon,Ped_Conf,Ped_Steps,LM_Lat,LM_Lon,LM_Conf,CP_Lat,CP_Lon,CP_Conf,MF_Lat,MF_Lon,MF_Conf,TD_Lat,TD_Lon,TD_Conf,GK_Lat,GK_Lon,GK_Conf,RP_Lat,RP_Lon,RP_Conf,PF_Lat,PF_Lon,PF_Conf,CDW_Lat,CDW_Lon,CDW_Conf,GDR_Lat,GDR_Lon,GDR_Conf,SM_Lat,SM_Lon,SM_Conf,CHD_Lat,CHD_Lon,CHD_Conf,VP_Lat,VP_Lon,VP_Conf,FL_Alt,FL_Floor,GPS_Stale,Spd_Steps,Spd_Accel,Spd_CID,Spd_Vibration,Spd_RSSI_Grad,Spd_CT_Delta,Spd_Nbr_Churn,Spd_Sig_Fade,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
   DATA.samples.forEach(s=>{
     const n=v=>v!==null&&v!==undefined?v:'';
     const f=(v,d)=>v!==null&&v!==undefined?Number(v).toFixed(d):'';
@@ -2224,7 +2307,7 @@ function exportCSV(){
     csv+=f(s.chd_lat,7)+','+f(s.chd_lon,7)+','+f(s.chd_conf,2)+',';
     csv+=f(s.vp_lat,7)+','+f(s.vp_lon,7)+','+f(s.vp_conf,2)+',';
     csv+=f(s.fl_alt,1)+','+(s.fl_floor||0)+','+(s.gps_stale||0)+',';
-    csv+=(s.spd_steps||0).toFixed(1)+','+(s.spd_accel||0).toFixed(1)+','+(s.spd_cid||0).toFixed(1)+','+(s.spd_vibration||0).toFixed(1)+','+(s.spd_rssi||0).toFixed(1)+',';
+    csv+=(s.spd_steps||0).toFixed(1)+','+(s.spd_accel||0).toFixed(1)+','+(s.spd_cid||0).toFixed(1)+','+(s.spd_vibration||0).toFixed(1)+','+(s.spd_rssi||0).toFixed(1)+','+(s.spd_ctdelta||0).toFixed(1)+','+(s.spd_churn||0).toFixed(1)+','+(s.spd_fade||0).toFixed(1)+',';
     csv+=f(s.fused_lat,7)+','+f(s.fused_lon,7)+','+f(s.fused_conf,2)+','+n(s.fused_src)+'\n';
   });
 
@@ -2248,7 +2331,10 @@ function exportCSV(){
   csv+='# Spd_accel_max: '+Math.max(...DATA.samples.map(s=>s.spd_accel||0)).toFixed(1)+'\n';
   csv+='# Spd_cid_max: '+Math.max(...DATA.samples.map(s=>s.spd_cid||0)).toFixed(1)+'\n';
   csv+='# Spd_vibration_max: '+Math.max(...DATA.samples.map(s=>s.spd_vibration||0)).toFixed(1)+'\n';
-  csv+='# Spd_rssi_max: '+Math.max(...DATA.samples.map(s=>s.spd_rssi||0)).toFixed(1)+'\n';
+  csv+='# Spd_rssi_grad_max: '+Math.max(...DATA.samples.map(s=>s.spd_rssi||0)).toFixed(1)+'\n';
+  csv+='# Spd_ct_delta_max: '+Math.max(...DATA.samples.map(s=>s.spd_ctdelta||0)).toFixed(1)+'\n';
+  csv+='# Spd_nbr_churn_max: '+Math.max(...DATA.samples.map(s=>s.spd_churn||0)).toFixed(1)+'\n';
+  csv+='# Spd_sig_fade_max: '+Math.max(...DATA.samples.map(s=>s.spd_fade||0)).toFixed(1)+'\n';
   csv+='# Step_count: '+SPEED.steps.count+'\n';
   csv+='# Step_length_m: '+SPEED.steps._stepLen.toFixed(2)+'\n';
   csv+='# CID_cell_radius: '+Math.round(SPEED.cid._cellRadius)+'m\n';
@@ -2536,7 +2622,7 @@ window.addEventListener('load',()=>{
   setInterval(idleUpdate,2000);
   // Draw landmark markers after map loads
   setTimeout(drawLandmarks,3000);
-  log('UPIN '+VERSION+' — 20 algorithms, GPS stale detect, confidence-based fusion','var(--cyan)');
+  log('UPIN '+VERSION+' — 20 algorithms, 8 GPS-free speed sources, confidence fusion','var(--cyan)');
   log('Connect board or use phone sensors','var(--td)');
 });
 </script>
