@@ -136,7 +136,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 <!-- TAB 1: ALGORITHMS -->
 <div class="tab-body" id="tab1">
 <div class="panel">
-  <h2>6 POSITIONING ALGORITHMS</h2>
+  <h2>20 POSITIONING ALGORITHMS</h2>
   <div id="algList"></div>
 </div>
 <div class="panel">
@@ -224,7 +224,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.6.0';
+const VERSION='v6.7.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -1590,7 +1590,7 @@ function initPhoneGPS(){
     err=>{
       document.getElementById('dGPSv').textContent=err.code===1?'denied':err.code===3?'timeout':'error';
     },
-    {enableHighAccuracy:true,maximumAge:2000,timeout:15000}
+    {enableHighAccuracy:true,maximumAge:0,timeout:10000}
   );
 }
 
@@ -1841,6 +1841,9 @@ function tick(){
       if(!gpsAccCircle)gpsAccCircle=L.circle(ll,{radius:gpsSys.acc,color:'#00FF88',fillOpacity:0.05,weight:1,dashArray:'4,4'}).addTo(map);
       else{gpsAccCircle.setLatLng(ll);gpsAccCircle.setRadius(gpsSys.acc);}
     }
+    // Draw tower + landmark markers even in idle
+    drawLandmarks();
+    if(cellTowers.length>0)drawTowerMarkers();
   }
 
   // Update UI
@@ -2254,10 +2257,91 @@ function downloadReport(){
 }
 
 // ─── INIT ───
+// ─── LANDMARK MARKERS ON MAP ───
+let landmarkMarkers=[];
+function drawLandmarks(){
+  if(typeof L==='undefined'||!map||typeof LANDMARKS==='undefined')return;
+  if(landmarkMarkers.length)return; // already drawn
+  LANDMARKS.forEach(lm=>{
+    const col=lm.t==='transport'?'#3B82F6':lm.t==='metro_station'?'#A855F7':lm.t==='temple'||lm.t==='religious'?'#EAB308':'#14B8A6';
+    const m=L.circleMarker([lm.lat,lm.lon],{radius:3,color:col,fillColor:col,fillOpacity:0.6,weight:1})
+      .bindTooltip(lm.n,{permanent:false,direction:'top',className:'',offset:[0,-5]}).addTo(map);
+    landmarkMarkers.push(m);
+  });
+}
+
+// ─── NEAREST LANDMARK DISPLAY ───
+function nearestLandmark(pos){
+  if(!pos||typeof LANDMARKS==='undefined')return null;
+  let best=null,bestD=Infinity;
+  LANDMARKS.forEach(lm=>{
+    const d=hav(pos,{lat:lm.lat,lon:lm.lon});
+    if(d<bestD){bestD=d;best=lm;}
+  });
+  return best?{name:best.n,dist:Math.round(bestD),type:best.t}:null;
+}
+
+// ─── IDLE UI UPDATE — runs every 2s when not recording ───
+function idleUpdate(){
+  if(phase!=='idle')return;
+  // Tower tab
+  try{
+    document.getElementById('tPreloaded').textContent=typeof TOWERS!=='undefined'?TOWERS.length:0;
+    document.getElementById('tLearned').textContent=Object.keys(towerDB).length;
+    document.getElementById('tVisible').textContent=cellTowers.length;
+    document.getElementById('tKnown').textContent=cellTowers.filter(t=>t.lat>1).length;
+    let tlHTML='';
+    cellTowers.forEach(t=>{
+      tlHTML+='<div style="padding:2px 0;border-bottom:1px solid var(--border)">CID:'+t.cid+' '+Math.round(t.signal)+'dBm'+(t.lat>1?' <span style="color:var(--green)">'+t.lat.toFixed(4)+','+t.lon.toFixed(4)+'</span>':' <span style="color:var(--red)">unknown</span>')+'</div>';
+    });
+    document.getElementById('towerList').innerHTML=tlHTML||'No towers detected';
+    document.getElementById('wVisible').textContent=wifiAPs.length;
+    document.getElementById('wKnown').textContent=Object.keys(WIFI_DB).length;
+  }catch(e){}
+  // Algorithm tab — show all 20 with current confidence
+  try{
+    let algHTML='';
+    [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish,ALG.pedDR,ALG.landmark,ALG.cidPath,ALG.magFP,ALG.turnDet,ALG.gpsKalman,ALG.rssiPathLoss,ALG.particleFilter,ALG.cellDwell,ALG.gravDR,ALG.sigMap,ALG.compDR,ALG.velProfile,ALG.floorTrack].forEach(a=>{
+      const conf=Math.round(a.confidence*100);
+      const col=conf>50?'var(--green)':conf>20?'var(--amber)':'var(--td)';
+      const posStr=a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude!==null&&a.altitude!==undefined?a.altitude.toFixed(1)+'m':'waiting...');
+      algHTML+='<div class="alg-row"><span class="alg-name">'+a.name+'</span><span class="alg-val" style="color:'+col+'">'+posStr+' ('+conf+'%)</span></div>';
+    });
+    document.getElementById('algList').innerHTML=algHTML;
+    // Details
+    let detHTML='';
+    [ALG.cellTri,ALG.cellDir,ALG.wifiFP,ALG.imuDR,ALG.baro,ALG.fish,ALG.pedDR,ALG.landmark,ALG.cidPath,ALG.magFP,ALG.turnDet,ALG.gpsKalman,ALG.rssiPathLoss,ALG.particleFilter,ALG.cellDwell,ALG.gravDR,ALG.sigMap,ALG.compDR,ALG.velProfile,ALG.floorTrack].forEach(a=>{
+      detHTML+='<div style="margin-bottom:6px;padding:4px;background:var(--bg);border-radius:3px;font-size:9px">';
+      detHTML+='<span style="font-weight:700;color:var(--cyan)">'+a.name+'</span> — ';
+      detHTML+='<span style="color:'+(a.confidence>0.3?'var(--green)':'var(--td)')+'">'+Math.round(a.confidence*100)+'%</span>';
+      if(a.pos)detHTML+=' | '+a.pos.lat.toFixed(5)+', '+a.pos.lon.toFixed(5);
+      detHTML+='</div>';
+    });
+    document.getElementById('algDetails').innerHTML=detHTML;
+  }catch(e){}
+  // Nearest landmark
+  const pos=gpsSys||FUSION.pos;
+  if(pos){
+    const nl=nearestLandmark(pos);
+    if(nl){
+      try{document.getElementById('fPos').textContent=nl.name+' ('+nl.dist+'m '+nl.type+')';}catch(e){}
+    }
+  }
+  // Heading + speed
+  try{
+    document.getElementById('mHdg').textContent=Math.round(compass)+'°';
+    document.getElementById('clock').textContent=new Date().toLocaleTimeString();
+  }catch(e){}
+}
+
 window.addEventListener('load',()=>{
   initMap();
   initPhoneGPS();
   initPhoneSensors();
+  // Start idle UI update loop (2s interval)
+  setInterval(idleUpdate,2000);
+  // Draw landmark markers after map loads
+  setTimeout(drawLandmarks,3000);
   log('UPIN '+VERSION+' — 20 algorithms, GPS stale detect, confidence-based fusion','var(--cyan)');
   log('Connect board or use phone sensors','var(--td)');
 });
