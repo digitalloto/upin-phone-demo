@@ -224,7 +224,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.7.0';
+const VERSION='v6.8.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -261,7 +261,7 @@ const GPS_STALE={
   _lastMovedPos:null, _lastMovedTime:0,
   _accelBuf:[], _accBuf:[],
   check(gps,accel,now){
-    if(!gps||gps.lat<1){this.stale=false;return;}
+    if(!gps||gps.lat<1||gps.lat>90){this.stale=false;return;}
     // Track accelerometer energy
     const aMag=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z);
     this._accelBuf.push(Math.abs(aMag-9.81));
@@ -386,18 +386,29 @@ const ALG={
   cellTri:{
     name:'Cell Trilateration',
     pos:null, confidence:0, source:'cell',
+    _lastPos:null, _frozenTicks:0,
     predict(towers){
       if(!towers||towers.length<2)return null;
       const valid=towers.filter(t=>t.lat&&t.lon&&t.signal);
       if(valid.length<2)return null;
       let sLat=0,sLon=0,sW=0;
       valid.forEach(t=>{
-        const w=Math.pow(10,(t.signal+50)/20); // higher RSSI = closer = more weight
+        const w=Math.pow(10,(t.signal+50)/20);
         sLat+=t.lat*w;sLon+=t.lon*w;sW+=w;
       });
       if(sW<=0)return null;
-      this.pos={lat:sLat/sW,lon:sLon/sW};
-      this.confidence=Math.min(0.9,valid.length*0.2);
+      const newPos={lat:sLat/sW,lon:sLon/sW};
+      // Detect frozen output — decay confidence when position unchanged
+      if(this._lastPos&&Math.abs(newPos.lat-this._lastPos.lat)<0.000001&&Math.abs(newPos.lon-this._lastPos.lon)<0.000001){
+        this._frozenTicks++;
+      }else{
+        this._frozenTicks=0;
+      }
+      this._lastPos={lat:newPos.lat,lon:newPos.lon};
+      this.pos=newPos;
+      const baseConf=Math.min(0.9,valid.length*0.2);
+      // Decay: 80%→60% at 10s, →40% at 20s, →20% at 30s
+      this.confidence=this._frozenTicks>10?Math.max(0.15,baseConf-this._frozenTicks*0.02):baseConf;
       return this.pos;
     }
   },
@@ -1469,7 +1480,12 @@ function onBLEData(e){
 
 function processBoardData(d){
   if(d.imu&&d.imu.ok){
-    if(d.imu.ax!==undefined)accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    // Corrupted packet filter: if all accel axes are exactly 0, discard (no real gravity = bad data)
+    if(d.imu.ax===0&&d.imu.ay===0&&d.imu.az===0){
+      log('BLE: corrupted IMU packet (all zeros) — discarded','var(--red)');
+    }else{
+      if(d.imu.ax!==undefined)accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    }
     if(d.imu.gx!==undefined)gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
     // Mag might be in d.imu OR d.compass (firmware v6 uses separate compass object)
     if(d.imu.mx!==undefined&&d.imu.mx!==null){
@@ -1505,12 +1521,19 @@ function processBoardData(d){
     document.getElementById('dBaro').className='sdot live';
     document.getElementById('dBarov').textContent=pressure.toFixed(0)+'hPa';
   }
-  // Laser rangefinder
-  if(d.laser&&d.laser.mm!==undefined){laserMm=d.laser.mm;}
+  // Laser rangefinder — handle {mm:val}, {dist:val}, or raw number
+  if(d.laser){
+    if(typeof d.laser==='number')laserMm=d.laser;
+    else if(d.laser.mm!==undefined)laserMm=d.laser.mm;
+    else if(d.laser.dist!==undefined)laserMm=d.laser.dist;
+    else if(d.laser.range!==undefined)laserMm=d.laser.range;
+  }
   // GPS (board GPS module)
-  if(d.gps&&d.gps.ok&&d.gps.lat>1){
+  if(d.gps&&d.gps.ok&&d.gps.lat>1&&d.gps.lat<90){
     const acc=(d.gps.hdop||2)*5;
-    const fix={lat:d.gps.lat,lon:d.gps.lon,speed:d.gps.speed||0,acc:acc};
+    let spd=d.gps.speed||0;
+    if(spd<0.3)spd=calcGPSSpeed(d.gps.lat,d.gps.lon,performance.now());
+    const fix={lat:d.gps.lat,lon:d.gps.lon,speed:spd,acc:acc};
     gpsTrue=fix;
     if(phase!=='jammed')gpsSys=fix;
     document.getElementById('dGPS').className='sdot live';
@@ -1545,9 +1568,9 @@ function processBoardData(d){
     document.getElementById('dCell').className='sdot live';
     document.getElementById('dCellv').textContent=knownCount+'/'+cellTowers.length+' towers';
   }
-  // WiFi scan
+  // WiFi scan — handle array, {list:[]}, or {data:[]}
   if(d.wifi){
-    const list=d.wifi.list||d.wifi.data||[];
+    const list=Array.isArray(d.wifi)?d.wifi:(d.wifi.list||d.wifi.data||d.wifi.aps||[]);
     if(list.length)wifiAPs=list;
     // Learn AP positions when GPS is available
     if(gpsSys&&!GPS_STALE.stale&&gpsSys.lat>1&&gpsSys.acc<50){
@@ -1578,12 +1601,29 @@ function processBoardData(d){
   }catch(e){}
 }
 
+// ─── GPS SPEED FROM POSITION DELTA ───
+let _lastGPSPos=null, _lastGPSTime=0;
+function calcGPSSpeed(lat,lon,now){
+  if(!_lastGPSPos){_lastGPSPos={lat,lon};_lastGPSTime=now;return 0;}
+  const dt=(now-_lastGPSTime)/1000;
+  if(dt<0.5||dt>10){_lastGPSPos={lat,lon};_lastGPSTime=now;return 0;}
+  const d=hav(_lastGPSPos,{lat,lon});
+  _lastGPSPos={lat,lon};_lastGPSTime=now;
+  if(d<1)return 0; // less than 1m = GPS noise
+  const spd=d/dt;
+  return spd>50?0:spd; // cap at 180 km/h
+}
+
 // ─── PHONE GPS ───
 function initPhoneGPS(){
   if(!navigator.geolocation)return;
   navigator.geolocation.watchPosition(
     p=>{
-      const fix={lat:p.coords.latitude,lon:p.coords.longitude,speed:p.coords.speed||0,acc:p.coords.accuracy};
+      const lat=p.coords.latitude,lon=p.coords.longitude;
+      if(lat<1||lat>90||lon<-180||lon>180){return;} // invalid GPS — discard
+      let spd=p.coords.speed||0;
+      if(spd<0.3)spd=calcGPSSpeed(lat,lon,performance.now()); // calculate from delta if API returns 0
+      const fix={lat,lon,speed:spd,acc:p.coords.accuracy};
       gpsTrue=fix;
       if(phase!=='jammed')gpsSys=fix;
       document.getElementById('dGPS').className='sdot live';

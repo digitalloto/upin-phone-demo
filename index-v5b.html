@@ -105,7 +105,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <!-- TOP BAR -->
 <div class="topbar">
   <h1>UPIN v5b</h1>
-  <span style="font-size:7px;color:var(--td);margin-left:4px" id="appVer">v5b.3.0</span><span class="badge b-idle" id="badge">IDLE</span>
+  <span style="font-size:7px;color:var(--td);margin-left:4px" id="appVer">v5b.4.0</span><span class="badge b-idle" id="badge">IDLE</span>
 </div>
 <!-- TABS -->
 <div class="tabs">
@@ -1354,9 +1354,13 @@ function processBoardData(d){
   const imuStale=d.imu&&d.imu.age_ms&&d.imu.age_ms>2000;
   const baroStale=d.baro&&d.baro.age_ms&&d.baro.age_ms>2000;
   const gpsStale=d.gps&&d.gps.age_ms&&d.gps.age_ms>5000;
-  // IMU (MPU6500)
+  // IMU (MPU6500) — filter corrupted packets (all zeros = bad data)
   if(d.imu&&d.imu.ok&&!imuStale){
-    accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    if(d.imu.ax===0&&d.imu.ay===0&&d.imu.az===0){
+      log('BLE: corrupted IMU (all zeros) — discarded','var(--red)');
+    }else{
+      accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    }
     gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
     // v6.1: compass can be a number (heading), object {ok,mx,my,mz,hdg}, or inside imu
     if(typeof d.compass==='number'){
@@ -1392,7 +1396,9 @@ function processBoardData(d){
   if(d.gps&&d.gps.ok&&!gpsDeniedMode&&phase!=='jammed'&&phase!=='spoofed'){
     const gv=validateFix(d.gps.lat,d.gps.lon,'boardGPS');
     if(gv.ok){
-      let pos={lat:gv.lat,lon:gv.lon,acc:d.gps.hdop*5||10,speed:d.gps.speed||0};
+      let spd5=d.gps.speed||0;
+      if(spd5<0.3)spd5=calcGPSSpeedV5(gv.lat,gv.lon,performance.now());
+      let pos={lat:gv.lat,lon:gv.lon,acc:d.gps.hdop*5||10,speed:spd5};
       if(window.LAYER2) pos=LAYER2.smoothGPS(pos,0,isStationary,frozenPos);
       gpsTrue=pos;gpsSource='board';
       if(phase==='idle'||phase==='recording')gpsSys=pos;
@@ -1830,7 +1836,9 @@ function initPhoneGPS(){
   _gpsWatchId=navigator.geolocation.watchPosition(p=>{
     const v=validateFix(p.coords.latitude,p.coords.longitude,'phoneGPS');
     if(!v.ok)return;
-    let phoneFix={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:p.coords.speed||0};
+    let pSpd=p.coords.speed||0;
+    if(pSpd<0.3)pSpd=calcGPSSpeedV5(v.lat,v.lon,performance.now());
+    let phoneFix={lat:v.lat,lon:v.lon,acc:p.coords.accuracy,speed:pSpd};
     if(window.LAYER2) phoneFix=LAYER2.smoothGPS(phoneFix,0,isStationary,frozenPos);
     // During jam/spoof: keep gpsTrue for drift measurement but don't update gpsSys
     if(phase==='jammed'||phase==='spoofed'){
@@ -5840,7 +5848,20 @@ F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat
 F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
 
 // VERSION STAMP
-const UPIN_VERSION='v5b.3.0';
+const UPIN_VERSION='v5b.4.0';
+
+// ─── GPS SPEED FROM POSITION DELTA (v6.8.0 backport) ───
+let _lastGPSPos5=null, _lastGPSTime5=0;
+function calcGPSSpeedV5(lat,lon,now){
+  if(!_lastGPSPos5){_lastGPSPos5={lat,lon};_lastGPSTime5=now;return 0;}
+  const dt=(now-_lastGPSTime5)/1000;
+  if(dt<0.5||dt>10){_lastGPSPos5={lat,lon};_lastGPSTime5=now;return 0;}
+  const d=hav(_lastGPSPos5,{lat,lon});
+  _lastGPSPos5={lat,lon};_lastGPSTime5=now;
+  if(d<1)return 0;
+  const spd=d/dt;
+  return spd>50?0:spd;
+}
 
 // FROZEN GPS DETECTION
 const FROZEN_GPS={
