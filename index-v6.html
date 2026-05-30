@@ -1311,7 +1311,7 @@ const SPEED={
   // Source 1: Step Counter — accel peaks = footsteps
   steps:{
     count:0, speed:0, _buf:[], _lastPeak:0, _cooldown:250,
-    _stepLen:0.72, // calibrated from GPS when available
+    _stepLen:0.72, _recentSteps:[], // timestamps of recent steps
     update(accel,dt){
       const aMag=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z);
       this._buf.push(aMag);if(this._buf.length>30)this._buf.shift();
@@ -1320,38 +1320,61 @@ const SPEED={
       const now=performance.now();
       if(aMag>mean+1.2&&(now-this._lastPeak)>this._cooldown){
         this._lastPeak=now;this.count++;
-        // Speed from step frequency: steps per second × step length
-        const recent=this._buf.filter((v,i)=>i>this._buf.length-10);
-        const peaks=recent.filter(v=>v>mean+1.0).length;
-        const freq=peaks/10; // steps per second (approximate)
-        this.speed=freq*this._stepLen;
+        this._recentSteps.push(now);
       }
-      if(now-this._lastPeak>3000)this.speed*=0.9; // no steps for 3s → decay
-      if(this.speed<0.1)this.speed=0;
+      // Keep only steps from last 5 seconds
+      this._recentSteps=this._recentSteps.filter(t=>now-t<5000);
+      // Speed from step frequency over last 5 seconds
+      if(this._recentSteps.length>=2){
+        const span=(this._recentSteps[this._recentSteps.length-1]-this._recentSteps[0])/1000;
+        if(span>0)this.speed=(this._recentSteps.length-1)/span*this._stepLen;
+      }
+      // No steps for 2s → rapidly decay (you stopped walking)
+      if(now-this._lastPeak>2000){this.speed*=0.7;if(this.speed<0.1)this.speed=0;}
     }
   },
 
-  // Source 2: Horizontal Acceleration Integration
+  // Source 2: Horizontal Accel Integration — proper gravity removal + braking detection
   accelInt:{
-    speed:0, _gravX:0, _gravY:0, _gravZ:9.81, _alpha:0.8,
+    speed:0, _gravX:0, _gravY:0, _gravZ:9.81, _alpha:0.95,
+    _accelBuf:[], _brakeBuf:[],
     update(accel,gyro,dt){
-      // Low-pass filter to extract gravity vector
+      // Slow low-pass filter to extract gravity (alpha=0.95 = very stable)
       this._gravX=this._alpha*this._gravX+(1-this._alpha)*accel.x;
       this._gravY=this._alpha*this._gravY+(1-this._alpha)*accel.y;
       this._gravZ=this._alpha*this._gravZ+(1-this._alpha)*accel.z;
-      // Linear acceleration = total - gravity
       const linX=accel.x-this._gravX;
       const linY=accel.y-this._gravY;
-      const linZ=accel.z-this._gravZ;
-      const hAccel=Math.sqrt(linX*linX+linY*linY); // horizontal only
-      // ZUPT: if horizontal accel consistently low, we're stopped
-      if(hAccel<0.2&&Math.abs(gyro.z)<0.5){
-        this.speed*=0.85;
+      const hAccel=Math.sqrt(linX*linX+linY*linY);
+
+      // Track accel history for variance check
+      this._accelBuf.push(hAccel);if(this._accelBuf.length>20)this._accelBuf.shift();
+      const mean=this._accelBuf.reduce((s,v)=>s+v,0)/this._accelBuf.length;
+      const std=Math.sqrt(this._accelBuf.reduce((s,v)=>s+(v-mean)**2,0)/this._accelBuf.length);
+
+      // ZUPT: if accel variance is tiny AND gyro quiet → stopped
+      if(std<0.1&&Math.abs(gyro.z)<0.3){
+        this.speed*=0.7; // fast decay when stopped
         if(this.speed<0.05)this.speed=0;
-      }else{
-        this.speed+=hAccel*dt*0.4;
-        this.speed*=0.96; // friction decay
+        return;
       }
+
+      // Detect braking: sustained negative accel (forward deceleration)
+      // In a vehicle, braking shows as consistent accel in one direction
+      this._brakeBuf.push(linX);if(this._brakeBuf.length>10)this._brakeBuf.shift();
+      const brakeAvg=this._brakeBuf.reduce((s,v)=>s+v,0)/this._brakeBuf.length;
+      if(Math.abs(brakeAvg)>0.3&&this.speed>0.5){
+        // Braking detected — reduce speed proportionally
+        this.speed-=Math.abs(brakeAvg)*dt*0.5;
+        if(this.speed<0)this.speed=0;
+        return;
+      }
+
+      // Acceleration: only add speed if accel is above noise floor
+      if(hAccel>0.3){
+        this.speed+=hAccel*dt*0.3;
+      }
+      this.speed*=0.97; // mild friction
       this.speed=Math.min(this.speed,45);
     }
   },
@@ -1382,26 +1405,26 @@ const SPEED={
 
   // Source 4: Vibration Frequency — vehicle speed correlates with vibration
   vibration:{
-    speed:0, _buf:[], _energyHistory:[],
+    speed:0, _buf:[], _prevSpeed:0,
     update(accel,dt){
       const aMag=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z);
       this._buf.push(aMag);if(this._buf.length>60)this._buf.shift();
       if(this._buf.length<20)return;
-      // Energy = variance of acceleration magnitude
       const mean=this._buf.reduce((s,v)=>s+v,0)/this._buf.length;
       const energy=this._buf.reduce((s,v)=>s+(v-mean)**2,0)/this._buf.length;
-      this._energyHistory.push(energy);if(this._energyHistory.length>30)this._energyHistory.shift();
-      // Zero-crossing rate = rough frequency of vibration
       let crossings=0;
       for(let i=1;i<this._buf.length;i++){
         if((this._buf[i]-mean)*(this._buf[i-1]-mean)<0)crossings++;
       }
-      const freq=crossings/this._buf.length*30; // Hz
-      // Map energy+frequency to speed (learned thresholds)
-      if(energy<0.02)this.speed=0;
-      else if(freq>8)this.speed=Math.min(30,energy*15); // vehicle
-      else if(freq>3)this.speed=Math.min(3,energy*5); // walking
-      else this.speed=0;
+      const freq=crossings/this._buf.length*30;
+      let target=0;
+      if(energy<0.01)target=0; // dead still
+      else if(freq>8)target=Math.min(30,energy*12); // vehicle
+      else if(freq>3)target=Math.min(3,energy*4); // walking
+      // Smooth toward target — fast down (detect stops), slow up (avoid spikes)
+      if(target<this.speed)this.speed=this.speed*0.5+target*0.5; // fast brake
+      else this.speed=this.speed*0.85+target*0.15; // slow accelerate
+      if(this.speed<0.15)this.speed=0;
     }
   },
 
@@ -1509,6 +1532,8 @@ const SPEED={
   fusedSpeedKmh:0,
 
   update(accel,gyro,cellTowers,dt){
+    // Skip corrupted packets (all zeros = BLE glitch)
+    if(accel.x===0&&accel.y===0&&accel.z===0)return;
     // Run all 8 estimators
     this.steps.update(accel,dt);
     this.accelInt.update(accel,gyro,dt);

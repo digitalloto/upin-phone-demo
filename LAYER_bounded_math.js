@@ -184,6 +184,8 @@ const ALGEBRA={
     const gpsZero=!speed||speed<0.5;
     const zupt_active=accelStd<0.15&&gyroStd<0.3&&gpsZero;
 
+    const horizontal_accel=gDiff>0.5?Math.min(gDiff-0.3,3.0):0;
+
     if(zupt_active){
       this._zupt_count++;
       if(this._zupt_count>=3){
@@ -193,7 +195,6 @@ const ALGEBRA={
     } else {
       this._zupt_count=0;
       this.zuptActive=false;
-      const horizontal_accel=gDiff>0.5?Math.min(gDiff-0.3,3.0):0;
       this.velocity_ms+=horizontal_accel*dt;
       this.velocity_ms*=0.95;
     }

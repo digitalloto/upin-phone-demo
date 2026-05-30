@@ -640,7 +640,7 @@ const GPS_STALE={
 const SPEED5={
   // Source 1: Step Counter
   steps:{
-    count:0, speed:0, _buf:[], _lastPeak:0, _cooldown:250, _stepLen:0.72,
+    count:0, speed:0, _buf:[], _lastPeak:0, _cooldown:250, _stepLen:0.72, _recentSteps:[],
     update(ac,dt){
       const aMag=Math.sqrt(ac.x*ac.x+ac.y*ac.y+ac.z*ac.z);
       this._buf.push(aMag);if(this._buf.length>30)this._buf.shift();
@@ -649,23 +649,34 @@ const SPEED5={
       const now=performance.now();
       if(aMag>mean+1.2&&(now-this._lastPeak)>this._cooldown){
         this._lastPeak=now;this.count++;
-        const peaks=this._buf.filter(v=>v>mean+1.0).length;
-        this.speed=(peaks/10)*this._stepLen;
+        this._recentSteps.push(now);
       }
-      if(now-this._lastPeak>3000)this.speed*=0.9;
-      if(this.speed<0.1)this.speed=0;
+      this._recentSteps=this._recentSteps.filter(t=>now-t<5000);
+      if(this._recentSteps.length>=2){
+        const span=(this._recentSteps[this._recentSteps.length-1]-this._recentSteps[0])/1000;
+        if(span>0)this.speed=(this._recentSteps.length-1)/span*this._stepLen;
+      }
+      if(now-this._lastPeak>2000){this.speed*=0.7;if(this.speed<0.1)this.speed=0;}
     }
   },
-  // Source 2: Horizontal Accel Integration
+  // Source 2: Horizontal Accel Integration — braking detection
   accelInt:{
-    speed:0, _gx:0, _gy:0, _gz:9.81, _a:0.8,
+    speed:0, _gx:0, _gy:0, _gz:9.81, _a:0.95, _aBuf:[], _bBuf:[],
     update(ac,gy,dt){
       this._gx=this._a*this._gx+(1-this._a)*ac.x;
       this._gy=this._a*this._gy+(1-this._a)*ac.y;
       this._gz=this._a*this._gz+(1-this._a)*ac.z;
-      const hA=Math.sqrt((ac.x-this._gx)**2+(ac.y-this._gy)**2);
-      if(hA<0.2&&Math.abs(gy.z)<0.5){this.speed*=0.85;if(this.speed<0.05)this.speed=0;}
-      else{this.speed+=hA*dt*0.4;this.speed*=0.96;}
+      const lx=ac.x-this._gx,ly=ac.y-this._gy;
+      const hA=Math.sqrt(lx*lx+ly*ly);
+      this._aBuf.push(hA);if(this._aBuf.length>20)this._aBuf.shift();
+      const mean=this._aBuf.reduce((s,v)=>s+v,0)/this._aBuf.length;
+      const std=Math.sqrt(this._aBuf.reduce((s,v)=>s+(v-mean)**2,0)/this._aBuf.length);
+      if(std<0.1&&Math.abs(gy.z)<0.3){this.speed*=0.7;if(this.speed<0.05)this.speed=0;return;}
+      this._bBuf.push(lx);if(this._bBuf.length>10)this._bBuf.shift();
+      const ba=this._bBuf.reduce((s,v)=>s+v,0)/this._bBuf.length;
+      if(Math.abs(ba)>0.3&&this.speed>0.5){this.speed-=Math.abs(ba)*dt*0.5;if(this.speed<0)this.speed=0;return;}
+      if(hA>0.3)this.speed+=hA*dt*0.3;
+      this.speed*=0.97;
       this.speed=Math.min(this.speed,45);
     }
   },
@@ -684,7 +695,7 @@ const SPEED5={
       if(gpsSpd>2&&changes>0){const a=gpsSpd/((changes/60)*3.6)*1000;if(a>500&&a<10000)this._r=this._r*0.9+a*0.1;}
     }
   },
-  // Source 4: Vibration Frequency
+  // Source 4: Vibration Frequency — fast brake detection
   vibration:{
     speed:0, _buf:[],
     update(ac){
@@ -695,10 +706,13 @@ const SPEED5={
       const energy=this._buf.reduce((s,v)=>s+(v-mean)**2,0)/this._buf.length;
       let cr=0;for(let i=1;i<this._buf.length;i++){if((this._buf[i]-mean)*(this._buf[i-1]-mean)<0)cr++;}
       const freq=cr/this._buf.length*30;
-      if(energy<0.02)this.speed=0;
-      else if(freq>8)this.speed=Math.min(30,energy*15);
-      else if(freq>3)this.speed=Math.min(3,energy*5);
-      else this.speed=0;
+      let target=0;
+      if(energy<0.01)target=0;
+      else if(freq>8)target=Math.min(30,energy*12);
+      else if(freq>3)target=Math.min(3,energy*4);
+      if(target<this.speed)this.speed=this.speed*0.5+target*0.5;
+      else this.speed=this.speed*0.85+target*0.15;
+      if(this.speed<0.15)this.speed=0;
     }
   },
   // Source 5: RSSI Gradient
@@ -771,6 +785,7 @@ const SPEED5={
   // Fusion
   fused:0, fusedSource:'none', fusedKmh:0,
   update(ac,gy,towers,ctPos,dt){
+    if(ac.x===0&&ac.y===0&&ac.z===0)return;
     this.steps.update(ac,dt);
     this.accelInt.update(ac,gy,dt);
     if(towers.length>0&&towers[0].cid)this.cidSpd.update(towers[0].cid,performance.now());
