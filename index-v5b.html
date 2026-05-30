@@ -635,27 +635,165 @@ const GPS_STALE={
   }
 };
 
-// ─── IMU SPEED INTEGRATOR (v6.6.0 backport) ───
-const IMU_SPEED_V5={
-  speed:0, _accelBuf:[], _gyroBuf:[],
-  update(accelData,gyroData,dt){
-    const aMag=Math.sqrt(accelData.x*accelData.x+accelData.y*accelData.y+accelData.z*accelData.z);
-    const gDiff=Math.abs(aMag-9.81);
-    this._accelBuf.push(gDiff);if(this._accelBuf.length>20)this._accelBuf.shift();
-    this._gyroBuf.push(Math.abs(gyroData.z));if(this._gyroBuf.length>20)this._gyroBuf.shift();
-    const aM=this._accelBuf.reduce((s,v)=>s+v,0)/this._accelBuf.length;
-    const aStd=Math.sqrt(this._accelBuf.reduce((s,v)=>s+(v-aM)**2,0)/this._accelBuf.length);
-    const gM=this._gyroBuf.reduce((s,v)=>s+v,0)/this._gyroBuf.length;
-    const gStd=Math.sqrt(this._gyroBuf.reduce((s,v)=>s+(v-gM)**2,0)/this._gyroBuf.length);
-    if(aStd<0.15&&gStd<0.3){
-      this.speed*=0.8;
+// ─── GPS-FREE SPEED SYSTEM (v6.9.0 backport) ───
+// 8 independent speed estimators — NONE require GPS
+const SPEED5={
+  // Source 1: Step Counter
+  steps:{
+    count:0, speed:0, _buf:[], _lastPeak:0, _cooldown:250, _stepLen:0.72,
+    update(ac,dt){
+      const aMag=Math.sqrt(ac.x*ac.x+ac.y*ac.y+ac.z*ac.z);
+      this._buf.push(aMag);if(this._buf.length>30)this._buf.shift();
+      if(this._buf.length<10)return;
+      const mean=this._buf.reduce((s,v)=>s+v,0)/this._buf.length;
+      const now=performance.now();
+      if(aMag>mean+1.2&&(now-this._lastPeak)>this._cooldown){
+        this._lastPeak=now;this.count++;
+        const peaks=this._buf.filter(v=>v>mean+1.0).length;
+        this.speed=(peaks/10)*this._stepLen;
+      }
+      if(now-this._lastPeak>3000)this.speed*=0.9;
       if(this.speed<0.1)this.speed=0;
-    }else{
-      const hAccel=Math.max(0,gDiff-0.3);
-      this.speed+=hAccel*dt*0.5;
-      this.speed*=0.97;
     }
-    this.speed=Math.min(this.speed,40);
+  },
+  // Source 2: Horizontal Accel Integration
+  accelInt:{
+    speed:0, _gx:0, _gy:0, _gz:9.81, _a:0.8,
+    update(ac,gy,dt){
+      this._gx=this._a*this._gx+(1-this._a)*ac.x;
+      this._gy=this._a*this._gy+(1-this._a)*ac.y;
+      this._gz=this._a*this._gz+(1-this._a)*ac.z;
+      const hA=Math.sqrt((ac.x-this._gx)**2+(ac.y-this._gy)**2);
+      if(hA<0.2&&Math.abs(gy.z)<0.5){this.speed*=0.85;if(this.speed<0.05)this.speed=0;}
+      else{this.speed+=hA*dt*0.4;this.speed*=0.96;}
+      this.speed=Math.min(this.speed,45);
+    }
+  },
+  // Source 3: CID Transition Speed
+  cidSpd:{
+    speed_kmh:0, _hist:[], _r:1500,
+    update(cid,now){
+      if(!cid)return;
+      if(!this._hist.length||this._hist[this._hist.length-1].cid!==cid)this._hist.push({cid,t:now});
+      this._hist=this._hist.filter(h=>h.t>now-60000);
+      let c=0;for(let i=1;i<this._hist.length;i++){if(this._hist[i].cid!==this._hist[i-1].cid)c++;}
+      this.speed_kmh=c>=2?(c*this._r*0.5)/60*3.6:0;
+      this.speed_kmh=Math.min(this.speed_kmh,120);
+    },
+    calibrate(gpsSpd,changes){
+      if(gpsSpd>2&&changes>0){const a=gpsSpd/((changes/60)*3.6)*1000;if(a>500&&a<10000)this._r=this._r*0.9+a*0.1;}
+    }
+  },
+  // Source 4: Vibration Frequency
+  vibration:{
+    speed:0, _buf:[],
+    update(ac){
+      const aMag=Math.sqrt(ac.x*ac.x+ac.y*ac.y+ac.z*ac.z);
+      this._buf.push(aMag);if(this._buf.length>60)this._buf.shift();
+      if(this._buf.length<20)return;
+      const mean=this._buf.reduce((s,v)=>s+v,0)/this._buf.length;
+      const energy=this._buf.reduce((s,v)=>s+(v-mean)**2,0)/this._buf.length;
+      let cr=0;for(let i=1;i<this._buf.length;i++){if((this._buf[i]-mean)*(this._buf[i-1]-mean)<0)cr++;}
+      const freq=cr/this._buf.length*30;
+      if(energy<0.02)this.speed=0;
+      else if(freq>8)this.speed=Math.min(30,energy*15);
+      else if(freq>3)this.speed=Math.min(3,energy*5);
+      else this.speed=0;
+    }
+  },
+  // Source 5: RSSI Gradient
+  rssiGrad:{
+    speed:0, _hist:new Map(),
+    update(towers){
+      if(!towers||!towers.length){this.speed*=0.9;if(this.speed<0.2)this.speed=0;return;}
+      const now=performance.now();
+      let ts=0,tc=0;
+      towers.forEach(t=>{
+        if(!t.cid||!t.lat||t.lat<1)return;
+        if(!this._hist.has(t.cid))this._hist.set(t.cid,[]);
+        const h=this._hist.get(t.cid);
+        h.push({s:t.signal,t:now});if(h.length>30)h.shift();
+        if(h.length<5)return;
+        const r=h.slice(-10),t0=r[0].t/1000;
+        let sx=0,sy=0,sxx=0,sxy=0,n=r.length;
+        r.forEach(p=>{const x=p.t/1000-t0;sx+=x;sy+=p.s;sxx+=x*x;sxy+=x*p.s;});
+        const sl=(n*sxy-sx*sy)/(n*sxx-sx*sx||1);
+        const ed=Math.pow(10,(-40-t.signal)/(10*3))*100;
+        const v=Math.abs(sl)*Math.max(100,ed)*Math.log(10)/(10*3);
+        if(v>0.5&&v<50){ts+=v;tc++;}
+      });
+      this.speed=tc>0?ts/tc:this.speed*0.9;
+      if(this.speed<0.2)this.speed=0;
+    }
+  },
+  // Source 6: CT Position Delta
+  ctDelta:{
+    speed:0, _pp:null, _pt:0,
+    update(ctPos){
+      if(!ctPos)return;
+      const now=performance.now();
+      if(this._pp){
+        const dt=(now-this._pt)/1000;
+        if(dt>0.5&&dt<10){const d=hav(this._pp,ctPos);if(d>1&&d<500){const s=d/dt;if(s<50)this.speed=this.speed*0.7+s*0.3;}}
+      }
+      this._pp={lat:ctPos.lat,lon:ctPos.lon};this._pt=now;
+      if(this.speed<0.2)this.speed=0;
+    }
+  },
+  // Source 7: 2G Neighbor Churn
+  nbrChurn:{
+    speed:0, _prev:new Set(), _buf:[],
+    update(towers){
+      if(!towers||towers.length<2)return;
+      const cur=new Set(towers.map(t=>t.cid).filter(c=>c));
+      if(this._prev.size>0){
+        let ch=0;cur.forEach(c=>{if(!this._prev.has(c))ch++;});this._prev.forEach(c=>{if(!cur.has(c))ch++;});
+        this._buf.push(ch);if(this._buf.length>30)this._buf.shift();
+        this.speed=Math.min(30,(this._buf.reduce((s,v)=>s+v,0)/this._buf.length)*5);
+      }
+      this._prev=cur;if(this.speed<0.2)this.speed=0;
+    }
+  },
+  // Source 8: Signal Fade Rate
+  sigFade:{
+    speed:0, _pk:-999, _pt:0, _pc:null,
+    update(towers){
+      if(!towers||!towers.length)return;
+      const s=towers.reduce((b,t)=>t.signal>b.signal?t:b,towers[0]);
+      if(!s.cid)return;
+      const now=performance.now();
+      if(s.cid!==this._pc||s.signal>this._pk){this._pk=s.signal;this._pt=now;this._pc=s.cid;}
+      const el=(now-this._pt)/1000;
+      if(el>2&&this._pk>-100){const fd=(this._pk-s.signal)/el;this.speed=Math.min(30,Math.max(0,fd*3));}
+      if(this.speed<0.2)this.speed=0;
+    }
+  },
+  // Fusion
+  fused:0, fusedSource:'none', fusedKmh:0,
+  update(ac,gy,towers,ctPos,dt){
+    this.steps.update(ac,dt);
+    this.accelInt.update(ac,gy,dt);
+    if(towers.length>0&&towers[0].cid)this.cidSpd.update(towers[0].cid,performance.now());
+    this.vibration.update(ac);
+    this.rssiGrad.update(towers);
+    if(ctPos)this.ctDelta.update(ctPos);
+    this.nbrChurn.update(towers);
+    this.sigFade.update(towers);
+    const src=[
+      {n:'steps',s:this.steps.speed},{n:'accel',s:this.accelInt.speed},
+      {n:'cid',s:this.cidSpd.speed_kmh/3.6},{n:'vib',s:this.vibration.speed},
+      {n:'rssi',s:this.rssiGrad.speed},{n:'ctD',s:this.ctDelta.speed},
+      {n:'churn',s:this.nbrChurn.speed},{n:'fade',s:this.sigFade.speed}
+    ].filter(x=>x.s>0.2);
+    if(!src.length){this.fused=0;this.fusedSource='still';}
+    else if(src.length===1){this.fused=src[0].s;this.fusedSource=src[0].n;}
+    else{src.sort((a,b)=>a.s-b.s);const m=src[Math.floor(src.length/2)];this.fused=m.s;this.fusedSource=m.n+'+'+src.length;}
+    this.fusedKmh=this.fused*3.6;
+  },
+  calibrate(gpsSpd){
+    if(gpsSpd<1)return;
+    if(this.steps.speed>0.3&&this.steps.count>10){const r=gpsSpd/this.steps.speed;if(r>0.5&&r<2)this.steps._stepLen=this.steps._stepLen*0.95+this.steps._stepLen*r*0.05;}
+    if(this.cidSpd._hist.length>2){let c=0;for(let i=1;i<this.cidSpd._hist.length;i++){if(this.cidSpd._hist[i].cid!==this.cidSpd._hist[i-1].cid)c++;}this.cidSpd.calibrate(gpsSpd*3.6,c);}
   }
 };
 let compass=0,pitch=0,roll=0,gravity={x:0,y:0,z:9.8};
@@ -1945,7 +2083,16 @@ const DATA={
       _best_spd_fused:_fused_spd,
       _best_spd_src:_fused_src,
       _gpsStale:GPS_STALE.stale,
-      _imuSpeed:IMU_SPEED_V5.speed,
+      _spdSteps:SPEED5.steps.speed,
+      _spdAccel:SPEED5.accelInt.speed,
+      _spdCid5:SPEED5.cidSpd.speed_kmh,
+      _spdVib:SPEED5.vibration.speed,
+      _spdRssi:SPEED5.rssiGrad.speed,
+      _spdCtD:SPEED5.ctDelta.speed,
+      _spdChurn:SPEED5.nbrChurn.speed,
+      _spdFade:SPEED5.sigFade.speed,
+      _spdFused:SPEED5.fused,
+      _spdFusedSrc:SPEED5.fusedSource,
       ...(extra||{})});
     if(this.samples.length>this.MAX)this.samples.shift();},
   count(){return this.samples.length;}
@@ -2210,37 +2357,36 @@ const SPEED_LEARN={
 // Multi-source speed + heading: every formula can use these during GPS denial
 let _bestSpeedSource='none';
 function bestSpeed(){
-  // 0. Update IMU speed integrator every call
-  IMU_SPEED_V5.update(accel,gyro,1);
-  // 1. GPS — only if NOT stale AND speed > 0.3 (don't trust GPS speed=0)
-  if(gpsSys&&!GPS_STALE.stale&&gpsSys.speed>0.3&&gpsSys.acc&&gpsSys.acc<50){
-    _bestSpeedSource='gps';
-    return gpsSys.speed;
+  // GPS-free speed system — run all 8 sensor-only estimators
+  const ctPos=UTIN.predict();
+  SPEED5.update(accel,gyro,boardTowerList,ctPos,1);
+
+  // GPS as TEACHER only — calibrate sensor parameters
+  if(gpsSys&&!GPS_STALE.stale&&gpsSys.speed>1&&gpsSys.acc&&gpsSys.acc<30){
+    SPEED5.calibrate(gpsSys.speed);
   }
-  const gps=avgSpeed(5);
-  if(!GPS_STALE.stale&&gps>0.5){_bestSpeedSource='gps';return gps;}
-  // 2. CID speed — only if 2+ changes, capped at 120 km/h
-  if(window.LAYER7&&LAYER7.cidSpeed&&LAYER7.cidSpeed.speed_kmh>0&&LAYER7.cidSpeed.speed_kmh<120){
-    _bestSpeedSource='cid';
-    return Math.min(LAYER7.cidSpeed.speed_kmh,120)/3.6;
+
+  // Primary: sensor fusion result
+  if(SPEED5.fused>0.2){
+    _bestSpeedSource=SPEED5.fusedSource;
+    return SPEED5.fused;
   }
-  // 3. IMU speed integrator (v6.6.0 backport)
-  if(IMU_SPEED_V5.speed>0.3&&IMU_SPEED_V5.speed<40){
-    _bestSpeedSource='imu_int';
-    return IMU_SPEED_V5.speed;
+  // Fallback: LAYER7 fused speed (if external layer is loaded)
+  if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>2){
+    _bestSpeedSource='L7_fused';
+    return LAYER7.fused.speed_kmh/3.6;
   }
-  // 4. Learned speed (denial only) — only if not insane
+  // Fallback: ALGEBRA IMU velocity
+  if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3&&ALGEBRA.velocity_ms<15&&!ALGEBRA.zuptActive){
+    _bestSpeedSource='algebra';
+    return ALGEBRA.velocity_ms;
+  }
+  // Fallback: learned speed (denial only)
   if(phase!=='recording'){
     const learned=SPEED_LEARN.estimate();
     if(learned>0.5&&learned<50){_bestSpeedSource='learned';return learned;}
   }
-  // 5. IMU ALGEBRA — only if ZUPT is NOT active and value is sane
-  if(window.ALGEBRA&&ALGEBRA.velocity_ms>0.3&&ALGEBRA.velocity_ms<15&&!ALGEBRA.zuptActive){
-    _bestSpeedSource='imu';
-    return ALGEBRA.velocity_ms;
-  }
-  // 6. Nothing trustworthy
-  _bestSpeedSource='none';
+  _bestSpeedSource='still';
   return 0;
 }
 function bestHeading(){
@@ -6760,16 +6906,28 @@ function exportCSV(){
   c+='# IMU_Speed_Integrator: enabled\n';
   const staleRows=DATA.samples.filter(s=>s._gpsStale).length;
   c+='# GPS_Stale_Rows: '+staleRows+'/'+DATA.count()+' ('+Math.round(staleRows/Math.max(1,DATA.count())*100)+'%)\n';
-  c+='# IMU_Speed_Max: '+Math.max(...DATA.samples.map(s=>s._imuSpeed||0)).toFixed(1)+' m/s\n';
+  c+='# --- GPS-FREE SPEED (8 sources) ---\n';
+  c+='# Spd_steps_max: '+Math.max(...DATA.samples.map(s=>s._spdSteps||0)).toFixed(1)+'\n';
+  c+='# Spd_accel_max: '+Math.max(...DATA.samples.map(s=>s._spdAccel||0)).toFixed(1)+'\n';
+  c+='# Spd_cid_max: '+Math.max(...DATA.samples.map(s=>s._spdCid5||0)).toFixed(1)+'\n';
+  c+='# Spd_vibration_max: '+Math.max(...DATA.samples.map(s=>s._spdVib||0)).toFixed(1)+'\n';
+  c+='# Spd_rssi_max: '+Math.max(...DATA.samples.map(s=>s._spdRssi||0)).toFixed(1)+'\n';
+  c+='# Spd_ct_delta_max: '+Math.max(...DATA.samples.map(s=>s._spdCtD||0)).toFixed(1)+'\n';
+  c+='# Spd_nbr_churn_max: '+Math.max(...DATA.samples.map(s=>s._spdChurn||0)).toFixed(1)+'\n';
+  c+='# Spd_sig_fade_max: '+Math.max(...DATA.samples.map(s=>s._spdFade||0)).toFixed(1)+'\n';
+  c+='# Spd_fused_max: '+Math.max(...DATA.samples.map(s=>s._spdFused||0)).toFixed(1)+'\n';
+  c+='# Step_count: '+SPEED5.steps.count+'\n';
+  c+='# Step_length: '+SPEED5.steps._stepLen.toFixed(2)+'m\n';
+  c+='# CID_cell_radius: '+Math.round(SPEED5.cidSpd._r)+'m\n';
   c+='#\n';
-  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_N,Bound_Score,Speed_IMU_kmh,DR_Lat,DR_Lon,ZUPT,Speed_CID_kmh,Speed_WiFi_kmh,Speed_RSSI_kmh,Speed_Fused_kmh,Turns_60s,Cell_Tri_Lat,Cell_Tri_Lon,Cell_Tri_N,Speed_Best_kmh,Speed_Source,GPS_Stale,IMU_Speed_Int\n';
+  c+='Time,Src,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,Lat,Lon,Speed,Speed_Est,Heading,Pressure,BaroAlt,LaserMm,Cell4G,Cell2G,WiFiAPs,L2_Flags,LM_Tri_Lat,LM_Tri_Lon,LM_Tri_N,Bound_Score,Speed_IMU_kmh,DR_Lat,DR_Lon,ZUPT,Speed_CID_kmh,Speed_WiFi_kmh,Speed_RSSI_kmh,Speed_Fused_kmh,Turns_60s,Cell_Tri_Lat,Cell_Tri_Lon,Cell_Tri_N,Speed_Best_kmh,Speed_Source,GPS_Stale,Spd_Steps,Spd_Accel,Spd_CID5,Spd_Vib,Spd_RSSI,Spd_CtD,Spd_Churn,Spd_Fade,Spd_Fused,Spd_Fused_Src\n';
   DATA.samples.forEach((s,i)=>{
     // Speed estimator: GPS delta over 2s window
     let spdEst=s.speed;
     if(i>=2){const prev=DATA.samples[i-2];const dt=(s.t-prev.t)/1000;if(dt>0&&dt<5){const d=hav({lat:s.lat,lon:s.lon},{lat:prev.lat,lon:prev.lon});spdEst=d/dt;}}
     const l2f=window.LAYER2?LAYER2.csvFlags(s.t):'';
     // Per-row layer data from stored sample (not current snapshot)
-    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${(s._lm_lat||0).toFixed?s._lm_lat.toFixed(7):''},${(s._lm_lon||0).toFixed?s._lm_lon.toFixed(7):''},${s._lm_n||0},${s._bound_score||0},${(s._spd_imu||0).toFixed(1)},${(s._dr_lat||0).toFixed?s._dr_lat.toFixed(7):''},${(s._dr_lon||0).toFixed?s._dr_lon.toFixed(7):''},${s._zupt?1:0},${(s._spd_cid||0).toFixed(1)},${(s._spd_wifi||0).toFixed(1)},${(s._spd_rssi||0).toFixed(1)},${(s._spd_fused||0).toFixed(1)},${s._turns||0},${(s._tri_lat||0).toFixed?s._tri_lat.toFixed(7):''},${(s._tri_lon||0).toFixed?s._tri_lon.toFixed(7):''},${s._tri_n||0},${(s._best_spd_fused||0).toFixed(1)},${s._best_spd_src||'none'},${s._gpsStale?1:0},${(s._imuSpeed||0).toFixed(1)}\n`;
+    c+=`${s.t.toFixed(0)},${boardConnected?boardSource:'phone'},${s.ax.toFixed(4)},${s.ay.toFixed(4)},${s.az.toFixed(4)},${s.gx.toFixed(3)},${s.gy.toFixed(3)},${s.gz.toFixed(3)},${s.mx||0},${s.my||0},${s.mz||0},${s.compass.toFixed(1)},${s.lat.toFixed(8)},${s.lon.toFixed(8)},${s.speed.toFixed(3)},${spdEst.toFixed(3)},${s.heading.toFixed(1)},${s.pressure||0},${s.baroAlt||0},${s.laserMm||0},${s.cellTowers4G||0},${s.cellTowers2G||0},${s.wifiAPs||0},${l2f},${(s._lm_lat||0).toFixed?s._lm_lat.toFixed(7):''},${(s._lm_lon||0).toFixed?s._lm_lon.toFixed(7):''},${s._lm_n||0},${s._bound_score||0},${(s._spd_imu||0).toFixed(1)},${(s._dr_lat||0).toFixed?s._dr_lat.toFixed(7):''},${(s._dr_lon||0).toFixed?s._dr_lon.toFixed(7):''},${s._zupt?1:0},${(s._spd_cid||0).toFixed(1)},${(s._spd_wifi||0).toFixed(1)},${(s._spd_rssi||0).toFixed(1)},${(s._spd_fused||0).toFixed(1)},${s._turns||0},${(s._tri_lat||0).toFixed?s._tri_lat.toFixed(7):''},${(s._tri_lon||0).toFixed?s._tri_lon.toFixed(7):''},${s._tri_n||0},${(s._best_spd_fused||0).toFixed(1)},${s._best_spd_src||'none'},${s._gpsStale?1:0},${(s._spdSteps||0).toFixed(1)},${(s._spdAccel||0).toFixed(1)},${(s._spdCid5||0).toFixed(1)},${(s._spdVib||0).toFixed(1)},${(s._spdRssi||0).toFixed(1)},${(s._spdCtD||0).toFixed(1)},${(s._spdChurn||0).toFixed(1)},${(s._spdFade||0).toFixed(1)},${(s._spdFused||0).toFixed(1)},${s._spdFusedSrc||'still'}\n`;
   });
   // Formula rankings with status (Layer 5: RUNNING first, then PASSTHROUGH, WAITING, DISABLED)
   c+='\n# FORMULA RANKINGS\n';
