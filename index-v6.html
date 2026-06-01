@@ -628,6 +628,53 @@ const ALG={
       if(this.generation%10===0)this.evolve();
     },
 
+    // Score during drill — measure error but DON'T reset positions
+    // Agents keep running free, accumulating their own errors
+    // This teaches which DNA produces the best predictions during denial
+    scoreDrill(gpsTrue){
+      if(!gpsTrue||!this.schools.length)return;
+      this.schools.forEach(school=>{
+        let totalErr=0,n=0;
+        school.agents.forEach(ag=>{
+          if(!ag.pos)return;
+          ag.err=hav(ag.pos,gpsTrue);
+          ag.fitness=1/(ag.err+0.1);
+          // NO RESET — agents keep predicting from their own position
+          totalErr+=ag.err;n++;
+        });
+        school.avgErr=n>0?totalErr/n:999;
+      });
+      this._drillScores++;
+      // Evolve more aggressively during drills — kill bad DNA faster
+      if(this._drillScores%5===0)this.evolve();
+    },
+    _drillScores:0,
+
+    // Post-drill evolution burst — reward agents that tracked truth best
+    postDrillEvolve(){
+      this.schools.forEach(school=>{
+        school.agents.sort((a,b)=>b.fitness-a.fitness);
+        const n=school.agents.length;
+        // Kill bottom 30% (more aggressive than normal 10%)
+        const kill=Math.floor(n*0.3);
+        for(let i=0;i<kill;i++){
+          const parent=school.agents[Math.floor(Math.random()*3)]; // top 3 parents
+          school.agents[n-1-i]={
+            dna:{
+              velW:Math.max(0,Math.min(1,parent.dna.velW+(Math.random()-0.5)*0.15)),
+              accelW:Math.max(0,Math.min(1,parent.dna.accelW+(Math.random()-0.5)*0.15)),
+              compassW:Math.max(0.1,Math.min(1.5,parent.dna.compassW+(Math.random()-0.5)*0.15)),
+              decay:Math.max(0.9,Math.min(0.999,parent.dna.decay+(Math.random()-0.5)*0.03))
+            },
+            pos:parent.pos?{...parent.pos}:{lat:0,lon:0},fitness:0,err:999
+          };
+        }
+      });
+      this._drillScores=0;
+      this.generation++;
+      log('Fish School: post-drill evolution (30% replaced, gen '+this.generation+')','var(--cyan)');
+    },
+
     evolve(){
       this.schools.forEach(school=>{
         school.agents.sort((a,b)=>b.fitness-a.fitness);
@@ -2002,6 +2049,8 @@ function tick(){
     if(!ALG.fish.schools.length&&gpsLive&&gpsLive.lat>1)ALG.fish.init(gpsLive.lat,gpsLive.lon);
     if(ALG.fish.schools.length)ALG.fish.predict(pos,accel,compass,speedNow,dt,CAL.bias);
     if(gpsLive&&gpsLive.lat>1&&ALG.fish.schools.length)ALG.fish.score(gpsLive);
+    // During drill: score Fish against GPS truth (learn from errors without resetting)
+    if(phase==='jammed'&&gpsTrue&&gpsTrue.lat>1&&ALG.fish.schools.length)ALG.fish.scoreDrill(gpsTrue);
     // 7-11: v6.4.0 algorithms
     ALG.pedDR.predict(pos,accel,compass,dt,CAL.bias);
     ALG.landmark.predict(pos);
@@ -2353,7 +2402,11 @@ function resurface(){
     let bestAlg='none',bestConf=0;
     FUSION._keys.forEach(k=>{const a=ALG[k];if(a&&a.confidence>bestConf){bestConf=a.confidence;bestAlg=a.name;}});
     drill.winner=bestAlg;
-    log('RESURFACE — drift: '+drill.drift+'m, winner: '+drill.winner,'var(--green)');
+    // Fish School learns from the drill — aggressive evolution
+    if(ALG.fish.schools.length)ALG.fish.postDrillEvolve();
+    // Show Fish School best error for this drill
+    const fishErr=ALG.fish.schools.length?Math.min(...ALG.fish.schools.map(s=>s.avgErr)).toFixed(1):'--';
+    log('RESURFACE — drift: '+drill.drift+'m, winner: '+drill.winner+', fish err: '+fishErr+'m','var(--green)');
   }
   document.getElementById('badge').textContent='RECORDING';document.getElementById('badge').className='badge b-rec';
 }
