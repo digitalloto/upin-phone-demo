@@ -2381,10 +2381,14 @@ function bestSpeed(){
     SPEED5.calibrate(gpsSys.speed);
   }
 
-  // Primary: sensor fusion result
+  // Mode speed caps (km/h → m/s)
+  const modeCap5={static:2,walk:8,car:65,train:120};
+  const cap5=(modeCap5[mode]||65)/3.6;
+
+  // Primary: sensor fusion result (capped by mode)
   if(SPEED5.fused>0.2){
     _bestSpeedSource=SPEED5.fusedSource;
-    return SPEED5.fused;
+    return Math.min(SPEED5.fused,cap5);
   }
   // Fallback: LAYER7 fused speed (if external layer is loaded)
   if(window.LAYER7&&LAYER7.fused&&LAYER7.fused.speed_kmh>2){
@@ -6437,6 +6441,8 @@ function startRec(){
 function jam(){
   if(phase!=='recording')return;phase='jammed';drillStart=performance.now();
   DEBUG_LOG.log('INFO','GPS DENIAL DRILL started (jam)');
+  // Store pre-drill position for drift measurement
+  this._preDrillPos=gpsTrue?{lat:gpsTrue.lat,lon:gpsTrue.lon}:(drPos?{lat:drPos.lat,lon:drPos.lon}:null);
   // BLOCK ALL GPS — board AND phone. gpsTrue keeps updating for drift measurement only.
   gpsSys=null;gpsSource='none';
   PUE.activate();SPEED_LEARN.reset();
@@ -6467,7 +6473,10 @@ function spoof(){
 function resurface(){
   if(phase!=='jammed'&&phase!=='spoofed')return;
   const bs=(performance.now()-drillStart)/1000;gpsSys=gpsTrue?{...gpsTrue}:null;
-  const drift=drPos&&gpsTrue?hav(drPos,gpsTrue):0;
+  // Drift = distance between formula's current position and pre-drill start
+  // Use gpsTrue if it moved (real GPS available), otherwise use pre-drill position
+  const drillRef=gpsTrue&&gpsTrue.lat>1?gpsTrue:(this._preDrillPos||drPos);
+  const drift=drPos&&drillRef?hav(drPos,drillRef):0;
   const dps=bs>0?drift/bs:0;let grade='D';if(dps<0.3)grade='A';else if(dps<1)grade='B';else if(dps<3)grade='C';
   const fRes=F.map((f,i)=>({name:f.name,idx:i,drift:f.drillDrift||999})).sort((a,b)=>a.drift-b.drift);
   const ps=PUE.stats();

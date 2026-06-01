@@ -224,7 +224,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.9.0';
+const VERSION='v6.10.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -406,9 +406,16 @@ const ALG={
       }
       this._lastPos={lat:newPos.lat,lon:newPos.lon};
       this.pos=newPos;
-      const baseConf=Math.min(0.9,valid.length*0.2);
-      // Decay: 80%→60% at 10s, →40% at 20s, →20% at 30s
-      this.confidence=this._frozenTicks>10?Math.max(0.15,baseConf-this._frozenTicks*0.02):baseConf;
+      let baseConf=Math.min(0.9,valid.length*0.2);
+      // Decay when frozen: 80%→60% at 10s, →40% at 20s, →20% at 30s
+      if(this._frozenTicks>10)baseConf=Math.max(0.15,baseConf-this._frozenTicks*0.02);
+      // Trajectory check: if CT jump is too far for current speed, penalize
+      if(this._lastPos&&speedNow>0.5){
+        const maxDist=speedNow*5*2; // max reasonable move in 5s at 2× speed
+        const jump=hav(this._lastPos,newPos);
+        if(jump>maxDist&&jump>50)baseConf*=0.5; // 30% penalty for impossible jump
+      }
+      this.confidence=baseConf;
       return this.pos;
     }
   },
@@ -1588,13 +1595,36 @@ const SPEED={
   }
 };
 
+// ─── SPEED CAPS BY TRANSPORT MODE ───
+const MODE_CAPS={static:2,walk:8,car:65,train:120}; // km/h
+function getSpeedCap(){return(MODE_CAPS[mode]||65)/3.6;} // returns m/s
+
 // ─── SPEED OUTPUT (GPS-free primary, GPS only for calibration) ───
 let speedNow=0, speedSource='none';
 function updateSpeed(){
   // Run the GPS-free speed system
   SPEED.update(accel,gyro,cellTowers,1);
-  speedNow=SPEED.fused;
-  speedSource=SPEED.fusedSource;
+  let spd=SPEED.fused;
+  const src=SPEED.fusedSource;
+  const cap=getSpeedCap();
+
+  // Cap speed to mode limit — discard impossible readings
+  if(spd>cap){spd=cap;}
+  speedNow=spd;
+  speedSource=src;
+
+  // Pedometer disable when in vehicle (speed > 15 km/h from other sources)
+  if(speedNow>4.2)ALG.pedDR.confidence=0; // 4.2 m/s = 15 km/h
+
+  // Particle filter speed constraint — kill fast particles
+  if(ALG.particleFilter._inited){
+    ALG.particleFilter._particles.forEach(p=>{
+      if(p.lat&&ALG.particleFilter.pos){
+        const pSpd=hav(p,ALG.particleFilter.pos);
+        if(pSpd>cap*2)p.w=0.001; // kill particles exceeding 2× mode cap
+      }
+    });
+  }
 
   // GPS as TEACHER only — calibrate sensor speed when GPS is live and trustworthy
   if(gpsSys&&!GPS_STALE.stale&&gpsSys.speed>1&&gpsSys.acc&&gpsSys.acc<30){
@@ -1988,6 +2018,27 @@ function tick(){
     // Layer 6: fusion
     FUSION.update();
 
+    // Fix 7: Reset drifting algorithms to high-confidence fix
+    if(FUSION.pos&&FUSION.confidence>0.7){
+      const anchor=FUSION.pos;
+      // GDR: snap back if drifted too far
+      if(ALG.gravDR.pos&&hav(ALG.gravDR.pos,anchor)>100){
+        ALG.gravDR.pos={lat:anchor.lat,lon:anchor.lon};ALG.gravDR._vx=0;ALG.gravDR._vy=0;
+      }
+      // CHD: snap back if drifted too far
+      if(ALG.compDR.pos&&hav(ALG.compDR.pos,anchor)>100){
+        ALG.compDR.pos={lat:anchor.lat,lon:anchor.lon};
+      }
+      // IMU DR: snap back
+      if(ALG.imuDR.pos&&hav(ALG.imuDR.pos,anchor)>100){
+        ALG.imuDR.pos={lat:anchor.lat,lon:anchor.lon};ALG.imuDR._speed=0;
+      }
+      // Pedometer: snap back
+      if(ALG.pedDR.pos&&hav(ALG.pedDR.pos,anchor)>100){
+        ALG.pedDR.pos={lat:anchor.lat,lon:anchor.lon};
+      }
+    }
+
     // Snapshot algorithm outputs into the row
     row.ct_lat=ALG.cellTri.pos?ALG.cellTri.pos.lat:null;
     row.ct_lon=ALG.cellTri.pos?ALG.cellTri.pos.lon:null;
@@ -2251,6 +2302,14 @@ function calibrate(){
 }
 
 function startRec(){
+  // Protect against accidental reset — confirm if data exists
+  if(DATA.samples.length>10){
+    if(!confirm('You have '+DATA.samples.length+' samples recorded. Start new recording? (Previous data will be exported first)')){
+      return;
+    }
+    exportCSV(); // auto-save previous recording before reset
+    log('Previous recording saved ('+DATA.samples.length+' rows)','var(--amber)');
+  }
   phase='recording';startTime=performance.now();totalDist=0;uiFrame=0;lastPos=null;
   DATA.samples=[];drills.length=0;
   document.getElementById('badge').textContent='RECORDING';document.getElementById('badge').className='badge b-rec';
@@ -2307,7 +2366,7 @@ function exportCSV(){
     csv+=s.t+','+s.phase+','+(s.activity||'static')+','+s.ax.toFixed(3)+','+s.ay.toFixed(3)+','+s.az.toFixed(3)+',';
     csv+=s.gx.toFixed(2)+','+s.gy.toFixed(2)+','+s.gz.toFixed(2)+',';
     csv+=(s.mx||0).toFixed(1)+','+(s.my||0).toFixed(1)+','+(s.mz||0).toFixed(1)+','+s.compass.toFixed(1)+',';
-    csv+=s.gpsLat.toFixed(7)+','+s.gpsLon.toFixed(7)+','+(s.gpsSpd||0).toFixed(1)+','+(s.gpsAcc||999).toFixed(0)+',';
+    csv+=s.gpsLat.toFixed(7)+','+s.gpsLon.toFixed(7)+','+((s.gpsSpd||0)*3.6).toFixed(1)+','+(s.gpsAcc||999).toFixed(0)+',';
     csv+=(s.pressure||0).toFixed(1)+','+(s.baroAlt||0).toFixed(1)+','+(s.temp||0).toFixed(1)+','+(s.laserMm||0)+',';
     csv+=(s.cell4g_cid||0)+','+(s.cell4g_mcc||0)+','+(s.cell4g_mnc||0)+','+(s.cell4g_rssi||0)+',';
     csv+=(s.cell2g_count||0)+','+(s.wifi_count||0)+','+(s.wifi_known||0)+',';
