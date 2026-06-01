@@ -224,7 +224,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.10.0';
+const VERSION='v6.11.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -340,17 +340,30 @@ function learnTower(cid,lat,lon,signal){
 }
 function enrichTowers(towers){
   buildTowerIndex();
-  return towers.map(t=>{
-    // 1. Check runtime learned DB
+  const enriched=towers.map(t=>{
     const learned=towerDB[t.cid];
     if(learned&&learned.lat>1)return{...t,lat:learned.lat,lon:learned.lon};
-    // 2. Check static TOWERS database
     if(_towerIdx){
       const static_t=_towerIdx[t.cid];
       if(static_t)return{...t,lat:static_t.lat,lon:static_t.lon};
     }
     return t;
   });
+  // GEOGRAPHIC OUTLIER FILTER: reject towers >50km from the median
+  const withPos=enriched.filter(t=>t.lat>1);
+  if(withPos.length>=2){
+    const medLat=withPos.map(t=>t.lat).sort((a,b)=>a-b)[Math.floor(withPos.length/2)];
+    const medLon=withPos.map(t=>t.lon).sort((a,b)=>a-b)[Math.floor(withPos.length/2)];
+    const median={lat:medLat,lon:medLon};
+    return enriched.map(t=>{
+      if(t.lat>1&&hav(t,median)>50000){
+        log('Tower CID:'+t.cid+' rejected — '+Math.round(hav(t,median)/1000)+'km from other towers','var(--red)');
+        return{...t,lat:0,lon:0}; // strip position from outlier tower
+      }
+      return t;
+    });
+  }
+  return enriched;
 }
 let mode='car'; // static|walk|car|train
 
@@ -386,7 +399,7 @@ const ALG={
   cellTri:{
     name:'Cell Trilateration',
     pos:null, confidence:0, source:'cell',
-    _lastPos:null, _frozenTicks:0,
+    _prevPos:null, _frozenTicks:0,
     predict(towers){
       if(!towers||towers.length<2)return null;
       const valid=towers.filter(t=>t.lat&&t.lon&&t.signal);
@@ -398,23 +411,26 @@ const ALG={
       });
       if(sW<=0)return null;
       const newPos={lat:sLat/sW,lon:sLon/sW};
-      // Detect frozen output — decay confidence when position unchanged
-      if(this._lastPos&&Math.abs(newPos.lat-this._lastPos.lat)<0.000001&&Math.abs(newPos.lon-this._lastPos.lon)<0.000001){
-        this._frozenTicks++;
-      }else{
-        this._frozenTicks=0;
-      }
-      this._lastPos={lat:newPos.lat,lon:newPos.lon};
-      this.pos=newPos;
       let baseConf=Math.min(0.9,valid.length*0.2);
-      // Decay when frozen: 80%→60% at 10s, →40% at 20s, →20% at 30s
-      if(this._frozenTicks>10)baseConf=Math.max(0.15,baseConf-this._frozenTicks*0.02);
-      // Trajectory check: if CT jump is too far for current speed, penalize
-      if(this._lastPos&&speedNow>0.5){
-        const maxDist=speedNow*5*2; // max reasonable move in 5s at 2× speed
-        const jump=hav(this._lastPos,newPos);
-        if(jump>maxDist&&jump>50)baseConf*=0.5; // 30% penalty for impossible jump
+      // Trajectory check FIRST — compare against PREVIOUS position (before overwriting)
+      if(this._prevPos){
+        const jump=hav(this._prevPos,newPos);
+        // If jump > 10km, this is a wrong-continent tower — reject completely
+        if(jump>10000){this.confidence=0;return null;}
+        // If jump > reasonable for current speed, penalize heavily
+        const maxDist=Math.max(100,speedNow*10);
+        if(jump>maxDist)baseConf*=0.3;
+        // Frozen detection
+        if(Math.abs(newPos.lat-this._prevPos.lat)<0.000001&&Math.abs(newPos.lon-this._prevPos.lon)<0.000001){
+          this._frozenTicks++;
+        }else{
+          this._frozenTicks=0;
+        }
       }
+      // NOW update previous position (after the check, not before)
+      this._prevPos={lat:newPos.lat,lon:newPos.lon};
+      this.pos=newPos;
+      if(this._frozenTicks>10)baseConf=Math.max(0.15,baseConf-this._frozenTicks*0.02);
       this.confidence=baseConf;
       return this.pos;
     }
@@ -533,13 +549,16 @@ const ALG={
 
       if(this._speed<0.1){
         this.confidence=0;
-        if(pos)this.pos={lat:pos.lat,lon:pos.lon}; // keep position anchor for when movement starts
+        if(!this.pos&&pos)this.pos={lat:pos.lat,lon:pos.lon}; // initial anchor only
         return null;
       }
+      // Use OWN previous position for DR, not FUSION.pos (prevents garbage propagation)
+      const base=this.pos||pos;
+      if(!base)return null;
       const h=compassDeg*Math.PI/180;
       this.pos={
-        lat:pos.lat+(this._speed*Math.cos(h)*dt)/111320,
-        lon:pos.lon+(this._speed*Math.sin(h)*dt)/(111320*Math.cos(pos.lat*Math.PI/180))
+        lat:base.lat+(this._speed*Math.cos(h)*dt)/111320,
+        lon:base.lon+(this._speed*Math.sin(h)*dt)/(111320*Math.cos(base.lat*Math.PI/180))
       };
       this.confidence=Math.min(0.6,0.3+this._speed*0.02);
       return this.pos;
@@ -1304,25 +1323,35 @@ const FUSION={
     'sigMap','fish','cellDwell','pedDR','compDR','gravDR','imuDR','cidPath','magFP',
     'velProfile','cellDir','turnDet','floorTrack'],
   _minConf:0.2,
-  _lastGoodPos:null, // last validated position — used for sanity checking
+  _lastGoodPos:null, // last validated position — ONLY set from GPS, never from algorithms
+  _gpsEverSeen:false,
   update(){
-    // HIGHEST CONFIDENCE WINS — with geographic sanity check
+    // If GPS is available, ALWAYS update the anchor — GPS is ground truth for sanity checking
+    if(gpsTrue&&gpsTrue.lat>1&&gpsTrue.lat<85){
+      this._lastGoodPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
+      this._gpsEverSeen=true;
+    }
+
     let bestK=null, bestConf=this._minConf, bestPos=null;
     for(const k of this._keys){
       const a=ALG[k];
       if(!a||!a.pos||a.confidence<=this._minConf)continue;
       if(k==='gpsKalman'&&GPS_STALE.stale)continue;
-      // SANITY CHECK: reject positions that are impossibly far from last known good
+      // SANITY CHECK 1: reject lat/lon that are obviously invalid
+      if(a.pos.lat<1||a.pos.lat>85||a.pos.lon<-180||a.pos.lon>180){
+        a.confidence=0;continue;
+      }
+      // SANITY CHECK 2: reject positions impossibly far from GPS truth
       if(this._lastGoodPos){
         const dist=hav(a.pos,this._lastGoodPos);
-        const maxJump=Math.max(500,speedNow*120); // max: 500m or speed×2min
+        const maxJump=Math.max(200,speedNow*60); // tighter: 200m or speed×1min
         if(dist>maxJump){
-          a.confidence=0; // kill this algorithm's confidence
-          continue; // skip garbage position
+          a.confidence=0;continue;
         }
       }
-      // SANITY CHECK: reject lat/lon that are obviously invalid
-      if(a.pos.lat<1||a.pos.lat>85||a.pos.lon<-180||a.pos.lon>180)continue;
+      // SANITY CHECK 3: if GPS has NEVER been seen, don't trust any algorithm yet
+      // (prevents wrong-continent lock-on before GPS arrives)
+      if(!this._gpsEverSeen){continue;}
       if(a.confidence>bestConf){
         bestConf=a.confidence;
         bestK=k;
@@ -1331,7 +1360,9 @@ const FUSION={
     }
     if(bestK&&bestPos){
       this.pos={...bestPos};this.confidence=bestConf;this.source=bestK;
-      this._lastGoodPos={lat:bestPos.lat,lon:bestPos.lon}; // update anchor
+    }else if(this._gpsEverSeen&&gpsTrue&&gpsTrue.lat>1){
+      // No algorithm passed — fall back to GPS truth directly
+      this.pos={lat:gpsTrue.lat,lon:gpsTrue.lon};this.confidence=0.5;this.source='gps_fallback';
     }else if(this.pos){
       this.confidence=Math.max(0,this.confidence-0.01);
     }else{
