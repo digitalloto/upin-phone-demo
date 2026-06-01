@@ -1257,14 +1257,25 @@ const FUSION={
     'sigMap','fish','cellDwell','pedDR','compDR','gravDR','imuDR','cidPath','magFP',
     'velProfile','cellDir','turnDet','floorTrack'],
   _minConf:0.2,
+  _lastGoodPos:null, // last validated position — used for sanity checking
   update(){
-    // HIGHEST CONFIDENCE WINS — not priority order
+    // HIGHEST CONFIDENCE WINS — with geographic sanity check
     let bestK=null, bestConf=this._minConf, bestPos=null;
     for(const k of this._keys){
       const a=ALG[k];
       if(!a||!a.pos||a.confidence<=this._minConf)continue;
-      // Block GPS Kalman when GPS is stale
       if(k==='gpsKalman'&&GPS_STALE.stale)continue;
+      // SANITY CHECK: reject positions that are impossibly far from last known good
+      if(this._lastGoodPos){
+        const dist=hav(a.pos,this._lastGoodPos);
+        const maxJump=Math.max(500,speedNow*120); // max: 500m or speed×2min
+        if(dist>maxJump){
+          a.confidence=0; // kill this algorithm's confidence
+          continue; // skip garbage position
+        }
+      }
+      // SANITY CHECK: reject lat/lon that are obviously invalid
+      if(a.pos.lat<1||a.pos.lat>85||a.pos.lon<-180||a.pos.lon>180)continue;
       if(a.confidence>bestConf){
         bestConf=a.confidence;
         bestK=k;
@@ -1273,6 +1284,7 @@ const FUSION={
     }
     if(bestK&&bestPos){
       this.pos={...bestPos};this.confidence=bestConf;this.source=bestK;
+      this._lastGoodPos={lat:bestPos.lat,lon:bestPos.lon}; // update anchor
     }else if(this.pos){
       this.confidence=Math.max(0,this.confidence-0.01);
     }else{
@@ -1812,6 +1824,7 @@ function processBoardData(d){
     const fix={lat:d.gps.lat,lon:d.gps.lon,speed:spd,acc:acc};
     gpsTrue=fix;
     if(phase!=='jammed')gpsSys=fix;
+    if(!FUSION._lastGoodPos)FUSION._lastGoodPos={lat:d.gps.lat,lon:d.gps.lon};
     document.getElementById('dGPS').className='sdot live';
     document.getElementById('dGPSv').textContent='±'+Math.round(acc)+'m';
   }
@@ -1902,6 +1915,8 @@ function initPhoneGPS(){
       const fix={lat,lon,speed:spd,acc:p.coords.accuracy};
       gpsTrue=fix;
       if(phase!=='jammed')gpsSys=fix;
+      // Initialize fusion anchor on first valid GPS
+      if(!FUSION._lastGoodPos&&lat>1)FUSION._lastGoodPos={lat,lon};
       document.getElementById('dGPS').className='sdot live';
       document.getElementById('dGPSv').textContent='±'+Math.round(fix.acc)+'m';
     },
@@ -2113,11 +2128,10 @@ function tick(){
     row.fused_conf=FUSION.confidence;
     row.fused_src=FUSION.source;
 
-    // Distance
+    // Distance — hard sanity cap: max 50m per tick (180 km/h = 50m/s)
     if(FUSION.pos&&lastPos){
       const dd=hav(lastPos,FUSION.pos);
-      if(dd>0.5&&dd<250)totalDist+=dd;
-      else{const sd=speedNow*dt;if(sd>0.5&&sd<250)totalDist+=sd;}
+      if(dd>0.5&&dd<50)totalDist+=dd; // was <250, now <50
     }
     if(FUSION.pos)lastPos={lat:FUSION.pos.lat,lon:FUSION.pos.lon};
 
