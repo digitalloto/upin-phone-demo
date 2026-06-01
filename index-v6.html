@@ -1327,7 +1327,7 @@ const FUSION={
   _gpsEverSeen:false,
   update(){
     // If GPS is available, ALWAYS update the anchor — GPS is ground truth for sanity checking
-    if(gpsTrue&&gpsTrue.lat>1&&gpsTrue.lat<85){
+    if(gpsTrue&&gpsTrue.lat>1&&gpsTrue.lat<85&&gpsTrue.lon>60&&gpsTrue.lon<100&&gpsTrue.acc>0&&gpsTrue.acc<200){
       this._lastGoodPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
       this._gpsEverSeen=true;
     }
@@ -1774,8 +1774,9 @@ function processBoardData(d){
     else if(d.laser.range!==undefined)laserMm=d.laser.range;
   }
   // GPS (board GPS module)
-  if(d.gps&&d.gps.ok&&d.gps.lat>1&&d.gps.lat<90){
+  if(d.gps&&d.gps.ok&&d.gps.lat>1&&d.gps.lat<90&&d.gps.lon>60&&d.gps.lon<100){
     const acc=(d.gps.hdop||2)*5;
+    if(acc<=0||acc>200)return; // reject garbage accuracy
     let spd=d.gps.speed||0;
     if(spd<0.3)spd=calcGPSSpeed(d.gps.lat,d.gps.lon,performance.now());
     const fix={lat:d.gps.lat,lon:d.gps.lon,speed:spd,acc:acc};
@@ -1866,10 +1867,14 @@ function initPhoneGPS(){
   navigator.geolocation.watchPosition(
     p=>{
       const lat=p.coords.latitude,lon=p.coords.longitude;
-      if(lat<1||lat>90||lon<-180||lon>180){return;} // invalid GPS — discard
+      const acc=p.coords.accuracy;
+      // REJECT garbage GPS: negative accuracy, >200m accuracy, or coordinates outside India
+      if(acc<=0||acc>200)return; // negative accuracy = invalid hardware reading
+      if(lat<1||lat>90)return;
+      if(lon<60||lon>100)return; // India is between 68°E-98°E, reject Africa/Atlantic
       let spd=p.coords.speed||0;
-      if(spd<0.3)spd=calcGPSSpeed(lat,lon,performance.now()); // calculate from delta if API returns 0
-      const fix={lat,lon,speed:spd,acc:p.coords.accuracy};
+      if(spd<0.3)spd=calcGPSSpeed(lat,lon,performance.now());
+      const fix={lat,lon,speed:spd,acc};
       gpsTrue=fix;
       if(phase!=='jammed')gpsSys=fix;
       // Initialize fusion anchor on first valid GPS
