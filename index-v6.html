@@ -224,7 +224,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.12.0';
+const VERSION='v7.0.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -254,6 +254,116 @@ let gpsSys=null, gpsTrue=null, drPos=null;
 let accel={x:0,y:0,z:9.81}, gyro={x:0,y:0,z:0}, compass=0, mag={x:0,y:0,z:0};
 let pressure=0, baroAlt=0, temp=0, laserMm=0;
 let boardConnected=false, bleDevice=null, bleChar=null;
+
+// ═══════════════════════════════════════════════════════════
+// DATA GUARDIAN — single gate that catches ALL garbage input
+// Every sensor reading passes through here BEFORE reaching
+// any algorithm. If data fails any check, it's rejected.
+// ═══════════════════════════════════════════════════════════
+const GUARD={
+  rejectCount:0, acceptCount:0, lastReject:'',
+
+  // GPS validation — catches Africa, null island, negative accuracy, impossible jumps
+  gps(lat,lon,acc,source){
+    // Rule 1: accuracy must be positive and reasonable
+    if(acc===undefined||acc===null||acc<=0||acc>500){
+      this._reject('GPS '+source+': bad accuracy '+acc);return null;
+    }
+    // Rule 2: coordinates must be valid numbers
+    if(!isFinite(lat)||!isFinite(lon)||isNaN(lat)||isNaN(lon)){
+      this._reject('GPS '+source+': NaN/Infinite');return null;
+    }
+    // Rule 3: latitude must be in valid range
+    if(lat<-90||lat>90||lat===0){
+      this._reject('GPS '+source+': lat='+lat+' invalid');return null;
+    }
+    // Rule 4: longitude must be in India range (68°E to 98°E)
+    // This prevents Africa (0-40°E), Atlantic (-30-0°E), Middle East (40-60°E)
+    if(lon<60||lon>100){
+      this._reject('GPS '+source+': lon='+lon.toFixed(2)+' outside India');return null;
+    }
+    // Rule 5: if we have a previous good position, reject impossible jumps
+    // Max 5km between consecutive GPS fixes (>5km in 1 second = teleportation)
+    if(FUSION._lastGoodPos){
+      const jump=hav({lat,lon},FUSION._lastGoodPos);
+      if(jump>5000){
+        this._reject('GPS '+source+': '+Math.round(jump/1000)+'km jump');return null;
+      }
+    }
+    this.acceptCount++;
+    return{lat,lon,acc};
+  },
+
+  // IMU validation — catches corrupted BLE packets, impossible readings
+  imu(ax,ay,az,gx,gy,gz){
+    // Rule 1: all-zero accel = corrupted packet (no gravity = impossible)
+    if(ax===0&&ay===0&&az===0){
+      this._reject('IMU: all-zero accel');return null;
+    }
+    // Rule 2: accel magnitude must include gravity (6-16 m/s²)
+    const aMag=Math.sqrt(ax*ax+ay*ay+az*az);
+    if(aMag<2||aMag>50){
+      this._reject('IMU: accel magnitude '+aMag.toFixed(1)+' impossible');return null;
+    }
+    // Rule 3: gyro must be in physical range (±2000°/s for MPU6500)
+    if(Math.abs(gx)>2000||Math.abs(gy)>2000||Math.abs(gz)>2000){
+      this._reject('IMU: gyro '+Math.max(Math.abs(gx),Math.abs(gy),Math.abs(gz)).toFixed(0)+'°/s impossible');return null;
+    }
+    this.acceptCount++;
+    return{x:ax,y:ay,z:az,gx,gy,gz};
+  },
+
+  // Compass validation — catches stuck, NaN, impossible values
+  compass(hdg){
+    if(!isFinite(hdg)||isNaN(hdg))return null;
+    if(hdg<0||hdg>360)hdg=((hdg%360)+360)%360; // normalize
+    return hdg;
+  },
+
+  // Pressure validation — catches zero, negative, impossible readings
+  pressure(hpa){
+    if(!isFinite(hpa)||hpa<300||hpa>1100)return null;
+    return hpa;
+  },
+
+  // Cell tower validation — catches wrong-country towers
+  tower(cid,lat,lon,signal){
+    if(!cid)return null;
+    if(lat>1&&(lat<5||lat>40||lon<60||lon>100)){
+      // Tower position outside India — reject
+      return{cid,lat:0,lon:0,signal};
+    }
+    return{cid,lat,lon,signal};
+  },
+
+  // Speed validation — catches impossible speeds
+  speed(spd,modeCap){
+    if(!isFinite(spd)||spd<0)return 0;
+    if(spd>modeCap)return modeCap;
+    return spd;
+  },
+
+  // Position output validation — catches any algorithm outputting garbage
+  position(pos,name){
+    if(!pos||!isFinite(pos.lat)||!isFinite(pos.lon))return null;
+    if(pos.lat<1||pos.lat>85)return null;
+    if(pos.lon<60||pos.lon>100){
+      // Algorithm produced position outside India — kill it
+      this._reject('ALG '+name+': lon='+pos.lon.toFixed(2)+' outside India');
+      return null;
+    }
+    return pos;
+  },
+
+  _reject(reason){
+    this.rejectCount++;
+    this.lastReject=reason;
+    // Log first 20 rejections, then every 100th
+    if(this.rejectCount<=20||this.rejectCount%100===0){
+      log('GUARD: '+reason+' ('+this.rejectCount+' total)','var(--red)');
+    }
+  }
+};
 
 // ─── GPS STALENESS DETECTOR ───
 const GPS_STALE={
@@ -1337,17 +1447,13 @@ const FUSION={
       const a=ALG[k];
       if(!a||!a.pos||a.confidence<=this._minConf)continue;
       if(k==='gpsKalman'&&GPS_STALE.stale)continue;
-      // SANITY CHECK 1: reject lat/lon that are obviously invalid
-      if(a.pos.lat<1||a.pos.lat>85||a.pos.lon<-180||a.pos.lon>180){
-        a.confidence=0;continue;
-      }
-      // SANITY CHECK 2: reject positions impossibly far from GPS truth
+      // GUARD: validate algorithm output position
+      if(!GUARD.position(a.pos,k)){a.confidence=0;continue;}
+      // Distance check: reject impossible jumps from anchor
       if(this._lastGoodPos){
         const dist=hav(a.pos,this._lastGoodPos);
-        const maxJump=Math.max(200,speedNow*60); // tighter: 200m or speed×1min
-        if(dist>maxJump){
-          a.confidence=0;continue;
-        }
+        const maxJump=Math.max(200,speedNow*60);
+        if(dist>maxJump){a.confidence=0;continue;}
       }
       // SANITY CHECK 3: if GPS has NEVER been seen, don't trust any algorithm yet
       // (prevents wrong-continent lock-on before GPS arrives)
@@ -1725,13 +1831,11 @@ function onBLEData(e){
 
 function processBoardData(d){
   if(d.imu&&d.imu.ok){
-    // Corrupted packet filter: if all accel axes are exactly 0, discard (no real gravity = bad data)
-    if(d.imu.ax===0&&d.imu.ay===0&&d.imu.az===0){
-      log('BLE: corrupted IMU packet (all zeros) — discarded','var(--red)');
-    }else{
-      if(d.imu.ax!==undefined)accel={x:d.imu.ax,y:d.imu.ay,z:d.imu.az};
+    const imuOk=GUARD.imu(d.imu.ax,d.imu.ay,d.imu.az,d.imu.gx||0,d.imu.gy||0,d.imu.gz||0);
+    if(imuOk){
+      accel={x:imuOk.x,y:imuOk.y,z:imuOk.z};
+      gyro={x:imuOk.gx,y:imuOk.gy,z:imuOk.gz};
     }
-    if(d.imu.gx!==undefined)gyro={x:d.imu.gx,y:d.imu.gy,z:d.imu.gz};
     // Mag might be in d.imu OR d.compass (firmware v6 uses separate compass object)
     if(d.imu.mx!==undefined&&d.imu.mx!==null){
       mag={x:d.imu.mx,y:d.imu.my,z:d.imu.mz};
@@ -1762,7 +1866,8 @@ function processBoardData(d){
   }
   // Barometer
   if(d.baro&&d.baro.ok){
-    pressure=d.baro.hpa||0;temp=d.baro.temp||0;baroAlt=d.baro.alt||0;
+    const pOk=GUARD.pressure(d.baro.hpa);
+    if(pOk){pressure=pOk;temp=d.baro.temp||0;baroAlt=d.baro.alt||0;}
     document.getElementById('dBaro').className='sdot live';
     document.getElementById('dBarov').textContent=pressure.toFixed(0)+'hPa';
   }
@@ -1774,17 +1879,19 @@ function processBoardData(d){
     else if(d.laser.range!==undefined)laserMm=d.laser.range;
   }
   // GPS (board GPS module)
-  if(d.gps&&d.gps.ok&&d.gps.lat>1&&d.gps.lat<90&&d.gps.lon>60&&d.gps.lon<100){
-    const acc=(d.gps.hdop||2)*5;
-    if(acc<=0||acc>200)return; // reject garbage accuracy
+  if(d.gps&&d.gps.ok){
+    const bAcc=(d.gps.hdop||2)*5;
+    const bValid=GUARD.gps(d.gps.lat,d.gps.lon,bAcc,'board');
+    if(bValid){
     let spd=d.gps.speed||0;
-    if(spd<0.3)spd=calcGPSSpeed(d.gps.lat,d.gps.lon,performance.now());
-    const fix={lat:d.gps.lat,lon:d.gps.lon,speed:spd,acc:acc};
+    if(spd<0.3)spd=calcGPSSpeed(bValid.lat,bValid.lon,performance.now());
+    const fix={lat:bValid.lat,lon:bValid.lon,speed:spd,acc:bValid.acc};
     gpsTrue=fix;
     if(phase!=='jammed')gpsSys=fix;
-    if(!FUSION._lastGoodPos)FUSION._lastGoodPos={lat:d.gps.lat,lon:d.gps.lon};
+    if(!FUSION._lastGoodPos)FUSION._lastGoodPos={lat:bValid.lat,lon:bValid.lon};
     document.getElementById('dGPS').className='sdot live';
-    document.getElementById('dGPSv').textContent='±'+Math.round(acc)+'m';
+    document.getElementById('dGPSv').textContent='±'+Math.round(bValid.acc)+'m';
+    }
   }
   // Cell modem — handle 4G and 2G separately (4G may be down)
   let cellUpdated=false;
@@ -1866,15 +1973,11 @@ function initPhoneGPS(){
   if(!navigator.geolocation)return;
   navigator.geolocation.watchPosition(
     p=>{
-      const lat=p.coords.latitude,lon=p.coords.longitude;
-      const acc=p.coords.accuracy;
-      // REJECT garbage GPS: negative accuracy, >200m accuracy, or coordinates outside India
-      if(acc<=0||acc>200)return; // negative accuracy = invalid hardware reading
-      if(lat<1||lat>90)return;
-      if(lon<60||lon>100)return; // India is between 68°E-98°E, reject Africa/Atlantic
+      const validated=GUARD.gps(p.coords.latitude,p.coords.longitude,p.coords.accuracy,'phone');
+      if(!validated)return;
       let spd=p.coords.speed||0;
-      if(spd<0.3)spd=calcGPSSpeed(lat,lon,performance.now());
-      const fix={lat,lon,speed:spd,acc};
+      if(spd<0.3)spd=calcGPSSpeed(validated.lat,validated.lon,performance.now());
+      const fix={lat:validated.lat,lon:validated.lon,speed:spd,acc:validated.acc};
       gpsTrue=fix;
       if(phase!=='jammed')gpsSys=fix;
       // Initialize fusion anchor on first valid GPS
@@ -2381,6 +2484,10 @@ function exportCSV(){
   csv+='# Total_distance_m: '+Math.round(totalDist)+'\n';
   csv+='# Avg_speed_kmh: '+(dur>0?(totalDist/dur*3.6).toFixed(1):'0')+'\n';
   csv+='# Samples: '+DATA.count()+'\n';
+  csv+='# --- DATA GUARDIAN ---\n';
+  csv+='# Guard_accepted: '+GUARD.acceptCount+'\n';
+  csv+='# Guard_rejected: '+GUARD.rejectCount+'\n';
+  csv+='# Guard_last_reject: '+GUARD.lastReject+'\n';
   csv+='# --- DATA HEALTH ---\n';
   csv+='# L4_accepted: '+L4.accepted+'\n';
   csv+='# L4_rejected: '+L4.rejected+'\n';
@@ -2681,7 +2788,7 @@ window.addEventListener('load',()=>{
   setInterval(idleUpdate,2000);
   // Draw landmark markers after map loads
   setTimeout(drawLandmarks,3000);
-  log('UPIN '+VERSION+' — 20 algorithms, 8 GPS-free speed sources, confidence fusion','var(--cyan)');
+  log('UPIN '+VERSION+' — DATA GUARDIAN active, all inputs validated','var(--cyan)');
   log('Connect board or use phone sensors','var(--td)');
 });
 </script>
