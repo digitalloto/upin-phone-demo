@@ -224,7 +224,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v6.11.0';
+const VERSION='v6.12.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -1401,82 +1401,50 @@ const CID_SPEED={
   }
 };
 
-// ─── GPS-FREE SPEED SYSTEM ───
-// 5 independent speed estimators — NONE require GPS to work.
-// GPS is used ONLY as a teacher signal to calibrate, never as a source.
+// ─── GPS-FREE SPEED SYSTEM v2 ───
+// ONLY proven methods. No acceleration integration (MEMS noise too high).
+// How real devices measure speed without GPS:
+//   Fitness trackers: step counting (proven, ±10%)
+//   Cars: wheel rotation (we don't have this)
+//   Military INS: $50K ring laser gyros (we don't have this)
+//   Cell networks: tower transition timing (proven, ±30%)
+//   CT position delta: distance between CT fixes / time (proven if CT is accurate)
 const SPEED={
-  // Source 1: Step Counter — accel peaks = footsteps
+  // Source 1: Step Counter — PROVEN for walking/running
+  // Method: detect accel magnitude peaks (each peak = one footstep)
+  // Speed = steps per second × calibrated step length
   steps:{
-    count:0, speed:0, _buf:[], _lastPeak:0, _cooldown:250,
-    _stepLen:0.72, _recentSteps:[], // timestamps of recent steps
+    count:0, speed:0, _buf:[], _lastPeak:0, _cooldown:300,
+    _stepLen:0.72, _recentSteps:[],
     update(accel,dt){
       const aMag=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z);
-      this._buf.push(aMag);if(this._buf.length>30)this._buf.shift();
-      if(this._buf.length<10)return;
+      this._buf.push(aMag);if(this._buf.length>40)this._buf.shift();
+      if(this._buf.length<15)return;
       const mean=this._buf.reduce((s,v)=>s+v,0)/this._buf.length;
+      const std=Math.sqrt(this._buf.reduce((s,v)=>s+(v-mean)**2,0)/this._buf.length);
       const now=performance.now();
-      if(aMag>mean+1.2&&(now-this._lastPeak)>this._cooldown){
+      // Step = peak above mean + 1.5×std (adaptive threshold)
+      const thresh=Math.max(1.0,std*1.5);
+      if(aMag>mean+thresh&&(now-this._lastPeak)>this._cooldown){
         this._lastPeak=now;this.count++;
         this._recentSteps.push(now);
       }
-      // Keep only steps from last 5 seconds
       this._recentSteps=this._recentSteps.filter(t=>now-t<5000);
-      // Speed from step frequency over last 5 seconds
       if(this._recentSteps.length>=2){
         const span=(this._recentSteps[this._recentSteps.length-1]-this._recentSteps[0])/1000;
-        if(span>0)this.speed=(this._recentSteps.length-1)/span*this._stepLen;
+        if(span>0){
+          const cadence=(this._recentSteps.length-1)/span; // steps/sec
+          this.speed=cadence*this._stepLen; // m/s
+          this.speed=Math.min(this.speed,4); // max 4 m/s = fast running
+        }
       }
-      // No steps for 2s → rapidly decay (you stopped walking)
-      if(now-this._lastPeak>2000){this.speed*=0.7;if(this.speed<0.1)this.speed=0;}
+      if(now-this._lastPeak>2000){this.speed*=0.6;if(this.speed<0.1)this.speed=0;}
     }
   },
 
-  // Source 2: Horizontal Accel Integration — proper gravity removal + braking detection
-  accelInt:{
-    speed:0, _gravX:0, _gravY:0, _gravZ:9.81, _alpha:0.95,
-    _accelBuf:[], _brakeBuf:[],
-    update(accel,gyro,dt){
-      // Slow low-pass filter to extract gravity (alpha=0.95 = very stable)
-      this._gravX=this._alpha*this._gravX+(1-this._alpha)*accel.x;
-      this._gravY=this._alpha*this._gravY+(1-this._alpha)*accel.y;
-      this._gravZ=this._alpha*this._gravZ+(1-this._alpha)*accel.z;
-      const linX=accel.x-this._gravX;
-      const linY=accel.y-this._gravY;
-      const hAccel=Math.sqrt(linX*linX+linY*linY);
-
-      // Track accel history for variance check
-      this._accelBuf.push(hAccel);if(this._accelBuf.length>20)this._accelBuf.shift();
-      const mean=this._accelBuf.reduce((s,v)=>s+v,0)/this._accelBuf.length;
-      const std=Math.sqrt(this._accelBuf.reduce((s,v)=>s+(v-mean)**2,0)/this._accelBuf.length);
-
-      // ZUPT: if accel variance is tiny AND gyro quiet → stopped
-      if(std<0.1&&Math.abs(gyro.z)<0.3){
-        this.speed*=0.7; // fast decay when stopped
-        if(this.speed<0.05)this.speed=0;
-        return;
-      }
-
-      // Detect braking: sustained negative accel (forward deceleration)
-      // In a vehicle, braking shows as consistent accel in one direction
-      this._brakeBuf.push(linX);if(this._brakeBuf.length>10)this._brakeBuf.shift();
-      const brakeAvg=this._brakeBuf.reduce((s,v)=>s+v,0)/this._brakeBuf.length;
-      if(Math.abs(brakeAvg)>0.3&&this.speed>0.5){
-        // Braking detected — reduce speed proportionally
-        this.speed-=Math.abs(brakeAvg)*dt*0.5;
-        if(this.speed<0)this.speed=0;
-        return;
-      }
-
-      // Acceleration: only add speed if accel is above noise floor
-      if(hAccel>0.3){
-        this.speed+=hAccel*dt*0.3;
-      }
-      this.speed*=0.97; // mild friction
-      this.speed=Math.min(this.speed,45);
-    }
-  },
-
-  // Source 3: CID Transition Speed — cell tower changes = movement
+  // Source 2: CID Transition Speed — PROVEN for vehicles
+  // Method: count how many times serving cell tower changes per minute
+  // Speed = transitions × cell radius / time. Cell radius calibrated from GPS.
   cid:{
     speed_kmh:0, _history:[], _cellRadius:1500,
     update(cid,now){
@@ -1500,66 +1468,11 @@ const SPEED={
     }
   },
 
-  // Source 4: Vibration Frequency — vehicle speed correlates with vibration
-  vibration:{
-    speed:0, _buf:[], _prevSpeed:0,
-    update(accel,dt){
-      const aMag=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z);
-      this._buf.push(aMag);if(this._buf.length>60)this._buf.shift();
-      if(this._buf.length<20)return;
-      const mean=this._buf.reduce((s,v)=>s+v,0)/this._buf.length;
-      const energy=this._buf.reduce((s,v)=>s+(v-mean)**2,0)/this._buf.length;
-      let crossings=0;
-      for(let i=1;i<this._buf.length;i++){
-        if((this._buf[i]-mean)*(this._buf[i-1]-mean)<0)crossings++;
-      }
-      const freq=crossings/this._buf.length*30;
-      let target=0;
-      if(energy<0.01)target=0; // dead still
-      else if(freq>8)target=Math.min(30,energy*12); // vehicle
-      else if(freq>3)target=Math.min(3,energy*4); // walking
-      // Smooth toward target — fast down (detect stops), slow up (avoid spikes)
-      if(target<this.speed)this.speed=this.speed*0.5+target*0.5; // fast brake
-      else this.speed=this.speed*0.85+target*0.15; // slow accelerate
-      if(this.speed<0.15)this.speed=0;
-    }
-  },
-
-  // Source 5: RSSI Gradient Speed — per-tower signal slope = approach/retreat speed
-  rssiGrad:{
-    speed:0, _history:new Map(), // cid → [{signal, t}]
-    update(towers){
-      if(!towers||!towers.length){this.speed*=0.9;if(this.speed<0.2)this.speed=0;return;}
-      const now=performance.now();
-      let totalSpeed=0,count=0;
-      towers.forEach(t=>{
-        if(!t.cid||!t.lat||t.lat<1)return;
-        const key=t.cid;
-        if(!this._history.has(key))this._history.set(key,[]);
-        const hist=this._history.get(key);
-        hist.push({signal:t.signal,t:now});
-        if(hist.length>30)hist.shift();
-        if(hist.length<5)return;
-        // Linear regression on RSSI over last 10 samples → dBm/sec slope
-        const recent=hist.slice(-10);
-        const tStart=recent[0].t/1000;
-        let sx=0,sy=0,sxx=0,sxy=0,n=recent.length;
-        recent.forEach(p=>{const x=p.t/1000-tStart;sx+=x;sy+=p.signal;sxx+=x*x;sxy+=x*p.signal;});
-        const slope=(n*sxy-sx*sy)/(n*sxx-sx*sx||1); // dBm/sec
-        // Path loss model: RSSI ≈ -10*n*log10(d) → dRSSI/dt = -10*n/(d*ln10) * v
-        // At typical d=1000m, n=3: v ≈ |slope| * d * ln(10) / (10*n)
-        const estDist=Math.pow(10,(-40-t.signal)/(10*3))*100; // rough distance from RSSI
-        const v=Math.abs(slope)*Math.max(100,estDist)*Math.log(10)/(10*3);
-        if(v>0.5&&v<50){totalSpeed+=v;count++;}
-      });
-      this.speed=count>0?totalSpeed/count:this.speed*0.9;
-      if(this.speed<0.2)this.speed=0;
-    }
-  },
-
-  // Source 6: Cell Tri Position Delta — speed from CT position change over time
+  // Source 3: CT Position Delta — PROVEN if Cell Tri is accurate
+  // Method: measure distance between consecutive Cell Tri positions / time
+  // This works because CT uses real tower positions, not IMU integration
   ctDelta:{
-    speed:0, _prevPos:null, _prevT:0,
+    speed:0, _prevPos:null, _prevT:0, _buf:[],
     update(ctPos){
       if(!ctPos)return;
       const now=performance.now();
@@ -1567,114 +1480,80 @@ const SPEED={
         const dt=(now-this._prevT)/1000;
         if(dt>0.5&&dt<10){
           const d=hav(this._prevPos,ctPos);
-          if(d>1&&d<500){
+          if(d<500){ // reject >500m jumps (CT error)
             const spd=d/dt;
-            if(spd<50)this.speed=this.speed*0.7+spd*0.3; // smooth
+            this._buf.push(spd);if(this._buf.length>10)this._buf.shift();
+            // Use median of last 10 readings (reject outliers)
+            const sorted=[...this._buf].sort((a,b)=>a-b);
+            this.speed=sorted[Math.floor(sorted.length/2)];
           }
         }
       }
       this._prevPos={lat:ctPos.lat,lon:ctPos.lon};
       this._prevT=now;
-      if(this.speed<0.2)this.speed=0;
+      if(this.speed<0.3)this.speed=0;
     }
   },
 
-  // Source 7: 2G Neighbor Churn — how fast neighbor cells appear/disappear
-  neighborChurn:{
-    speed:0, _prevSet:new Set(), _churnBuf:[],
-    update(towers){
-      if(!towers||towers.length<2){return;}
-      const curSet=new Set(towers.map(t=>t.cid).filter(c=>c));
-      if(this._prevSet.size>0){
-        let appeared=0,disappeared=0;
-        curSet.forEach(c=>{if(!this._prevSet.has(c))appeared++;});
-        this._prevSet.forEach(c=>{if(!curSet.has(c))disappeared++;});
-        const churn=appeared+disappeared;
-        this._churnBuf.push(churn);if(this._churnBuf.length>30)this._churnBuf.shift();
-        const avgChurn=this._churnBuf.reduce((s,v)=>s+v,0)/this._churnBuf.length;
-        // More churn = faster movement. 1 churn/sec ≈ 5-10 m/s in urban
-        this.speed=Math.min(30,avgChurn*5);
-      }
-      this._prevSet=curSet;
-      if(this.speed<0.2)this.speed=0;
+  // Source 4: Motion detector — binary: moving or stopped
+  // Method: accelerometer variance over 3 seconds
+  // Does NOT estimate speed — just detects whether the device is moving at all
+  motion:{
+    isMoving:false, _buf:[],
+    update(accel,gyro){
+      const aMag=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z);
+      this._buf.push(aMag);if(this._buf.length>30)this._buf.shift();
+      if(this._buf.length<10)return;
+      const mean=this._buf.reduce((s,v)=>s+v,0)/this._buf.length;
+      const std=Math.sqrt(this._buf.reduce((s,v)=>s+(v-mean)**2,0)/this._buf.length);
+      const gyroActive=Math.abs(gyro.x)>1||Math.abs(gyro.y)>1||Math.abs(gyro.z)>1;
+      this.isMoving=(std>0.3)||gyroActive;
     }
   },
 
-  // Source 8: Signal Fade Rate — how quickly strongest signal drops after peak
-  signalFade:{
-    speed:0, _peakSignal:-999, _peakTime:0, _peakCID:null,
-    update(towers){
-      if(!towers||!towers.length)return;
-      const strongest=towers.reduce((best,t)=>t.signal>best.signal?t:best,towers[0]);
-      if(!strongest.cid)return;
-      const now=performance.now();
-      if(strongest.cid!==this._peakCID||strongest.signal>this._peakSignal){
-        this._peakSignal=strongest.signal;
-        this._peakTime=now;
-        this._peakCID=strongest.cid;
-      }
-      const elapsed=(now-this._peakTime)/1000;
-      if(elapsed>2&&this._peakSignal>-100){
-        const fade=this._peakSignal-strongest.signal; // dB drop since peak
-        const fadeRate=fade/elapsed; // dB/sec
-        // Fast fade = fast movement. At 300m cell, 3dB/s ≈ 10 m/s
-        this.speed=Math.min(30,Math.max(0,fadeRate*3));
-      }
-      if(this.speed<0.2)this.speed=0;
-    }
-  },
-
-  // ─── FUSION: pick best speed from all 8 sources ───
-  fused:0, fusedSource:'none',
-  fusedSpeedKmh:0,
+  // ─── FUSION ───
+  fused:0, fusedSource:'none', fusedSpeedKmh:0,
 
   update(accel,gyro,cellTowers,dt){
-    // Skip corrupted packets (all zeros = BLE glitch)
-    if(accel.x===0&&accel.y===0&&accel.z===0)return;
-    // Run all 8 estimators
-    this.steps.update(accel,dt);
-    this.accelInt.update(accel,gyro,dt);
-    if(cellTowers.length>0)this.cid.update(cellTowers[0].cid,performance.now());
-    this.vibration.update(accel,dt);
-    this.rssiGrad.update(cellTowers);
-    if(ALG.cellTri.pos)this.ctDelta.update(ALG.cellTri.pos);
-    this.neighborChurn.update(cellTowers);
-    this.signalFade.update(cellTowers);
+    if(accel.x===0&&accel.y===0&&accel.z===0)return; // corrupted packet
 
-    // Pick from all 8 sensor-only sources
-    const sources=[
-      {name:'steps',speed:this.steps.speed},
-      {name:'accel',speed:this.accelInt.speed},
-      {name:'cid',speed:this.cid.speed_kmh/3.6},
-      {name:'vibration',speed:this.vibration.speed},
-      {name:'rssiGrad',speed:this.rssiGrad.speed},
-      {name:'ctDelta',speed:this.ctDelta.speed},
-      {name:'nbrChurn',speed:this.neighborChurn.speed},
-      {name:'sigFade',speed:this.signalFade.speed}
-    ].filter(s=>s.speed>0.2);
+    // Run all sources
+    this.steps.update(accel,dt);
+    if(cellTowers.length>0)this.cid.update(cellTowers[0].cid,performance.now());
+    if(ALG.cellTri.pos)this.ctDelta.update(ALG.cellTri.pos);
+    this.motion.update(accel,gyro);
+
+    // ZUPT first: if motion detector says stopped, speed = 0
+    if(!this.motion.isMoving){
+      this.fused=0;this.fusedSource='still';this.fusedSpeedKmh=0;return;
+    }
+
+    // Collect non-zero speed estimates
+    const sources=[];
+    if(this.steps.speed>0.2)sources.push({n:'steps',s:this.steps.speed});
+    if(this.cid.speed_kmh>2)sources.push({n:'cid',s:this.cid.speed_kmh/3.6});
+    if(this.ctDelta.speed>0.3)sources.push({n:'ctDelta',s:this.ctDelta.speed});
 
     if(sources.length===0){
-      this.fused=0;this.fusedSource='still';
+      // Moving but no speed estimate — report minimum movement speed
+      this.fused=0.5;this.fusedSource='moving';
     }else if(sources.length===1){
-      this.fused=sources[0].speed;this.fusedSource=sources[0].name;
+      this.fused=sources[0].s;this.fusedSource=sources[0].n;
     }else{
-      // Multiple sources agree = higher confidence. Use weighted median.
-      sources.sort((a,b)=>a.speed-b.speed);
-      const median=sources[Math.floor(sources.length/2)];
-      this.fused=median.speed;this.fusedSource=median.name+'+'+sources.length;
+      // Multiple sources: take the LOWEST (most conservative)
+      // Overestimating speed causes DR drift, underestimating is safer
+      sources.sort((a,b)=>a.s-b.s);
+      this.fused=sources[0].s;this.fusedSource=sources[0].n+'+'+sources.length;
     }
     this.fusedSpeedKmh=this.fused*3.6;
   },
 
-  // GPS calibration — learn scale factors when GPS is available (teacher mode)
   calibrate(gpsSpeed){
     if(gpsSpeed<1)return;
-    // Calibrate step length
     if(this.steps.speed>0.3&&this.steps.count>10){
       const ratio=gpsSpeed/this.steps.speed;
       if(ratio>0.5&&ratio<2)this.steps._stepLen=this.steps._stepLen*0.95+this.steps._stepLen*ratio*0.05;
     }
-    // Calibrate CID radius
     if(this.cid._history.length>2){
       let changes=0;
       for(let i=1;i<this.cid._history.length;i++){
@@ -2196,13 +2075,9 @@ function tick(){
     row.activity=ACTIVITY.type;
     row.gps_stale=GPS_STALE.stale?1:0;
     row.spd_steps=SPEED.steps.speed;
-    row.spd_accel=SPEED.accelInt.speed;
     row.spd_cid=SPEED.cid.speed_kmh;
-    row.spd_vibration=SPEED.vibration.speed;
-    row.spd_rssi=SPEED.rssiGrad.speed;
     row.spd_ctdelta=SPEED.ctDelta.speed;
-    row.spd_churn=SPEED.neighborChurn.speed;
-    row.spd_fade=SPEED.signalFade.speed;
+    row.spd_moving=SPEED.motion.isMoving?1:0;
     row.fused_lat=FUSION.pos?FUSION.pos.lat:null;
     row.fused_lon=FUSION.pos?FUSION.pos.lon:null;
     row.fused_conf=FUSION.confidence;
@@ -2456,7 +2331,7 @@ function setMode(m){mode=m;log('Mode: '+m,'var(--cyan)');}
 // ─── CSV EXPORT ───
 function exportCSV(){
   // Layer 3: ALL raw sensor columns first. Layer 5/6 algorithm columns after.
-  let csv='Time,Phase,Activity,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Temp,Laser_mm,Cell4G_CID,Cell4G_MCC,Cell4G_MNC,Cell4G_RSSI,Cell2G_Count,WiFi_APs,WiFi_Known,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Ped_Lat,Ped_Lon,Ped_Conf,Ped_Steps,LM_Lat,LM_Lon,LM_Conf,CP_Lat,CP_Lon,CP_Conf,MF_Lat,MF_Lon,MF_Conf,TD_Lat,TD_Lon,TD_Conf,GK_Lat,GK_Lon,GK_Conf,RP_Lat,RP_Lon,RP_Conf,PF_Lat,PF_Lon,PF_Conf,CDW_Lat,CDW_Lon,CDW_Conf,GDR_Lat,GDR_Lon,GDR_Conf,SM_Lat,SM_Lon,SM_Conf,CHD_Lat,CHD_Lon,CHD_Conf,VP_Lat,VP_Lon,VP_Conf,FL_Alt,FL_Floor,GPS_Stale,Spd_Steps,Spd_Accel,Spd_CID,Spd_Vibration,Spd_RSSI_Grad,Spd_CT_Delta,Spd_Nbr_Churn,Spd_Sig_Fade,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
+  let csv='Time,Phase,Activity,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,Compass,GPS_Lat,GPS_Lon,GPS_Speed,GPS_Acc,Pressure,BaroAlt,Temp,Laser_mm,Cell4G_CID,Cell4G_MCC,Cell4G_MNC,Cell4G_RSSI,Cell2G_Count,WiFi_APs,WiFi_Known,Speed_Now,Speed_Source,CT_Lat,CT_Lon,CT_Conf,CD_Lat,CD_Lon,CD_Conf,WF_Lat,WF_Lon,WF_Conf,DR_Lat,DR_Lon,DR_Conf,PA_Alt,Fish_Lat,Fish_Lon,Fish_Conf,Ped_Lat,Ped_Lon,Ped_Conf,Ped_Steps,LM_Lat,LM_Lon,LM_Conf,CP_Lat,CP_Lon,CP_Conf,MF_Lat,MF_Lon,MF_Conf,TD_Lat,TD_Lon,TD_Conf,GK_Lat,GK_Lon,GK_Conf,RP_Lat,RP_Lon,RP_Conf,PF_Lat,PF_Lon,PF_Conf,CDW_Lat,CDW_Lon,CDW_Conf,GDR_Lat,GDR_Lon,GDR_Conf,SM_Lat,SM_Lon,SM_Conf,CHD_Lat,CHD_Lon,CHD_Conf,VP_Lat,VP_Lon,VP_Conf,FL_Alt,FL_Floor,GPS_Stale,Spd_Steps,Spd_CID_kmh,Spd_CT_Delta,Spd_Moving,Fused_Lat,Fused_Lon,Fused_Conf,Fused_Src\n';
   DATA.samples.forEach(s=>{
     const n=v=>v!==null&&v!==undefined?v:'';
     const f=(v,d)=>v!==null&&v!==undefined?Number(v).toFixed(d):'';
@@ -2489,7 +2364,7 @@ function exportCSV(){
     csv+=f(s.chd_lat,7)+','+f(s.chd_lon,7)+','+f(s.chd_conf,2)+',';
     csv+=f(s.vp_lat,7)+','+f(s.vp_lon,7)+','+f(s.vp_conf,2)+',';
     csv+=f(s.fl_alt,1)+','+(s.fl_floor||0)+','+(s.gps_stale||0)+',';
-    csv+=(s.spd_steps||0).toFixed(1)+','+(s.spd_accel||0).toFixed(1)+','+(s.spd_cid||0).toFixed(1)+','+(s.spd_vibration||0).toFixed(1)+','+(s.spd_rssi||0).toFixed(1)+','+(s.spd_ctdelta||0).toFixed(1)+','+(s.spd_churn||0).toFixed(1)+','+(s.spd_fade||0).toFixed(1)+',';
+    csv+=(s.spd_steps||0).toFixed(1)+','+(s.spd_cid||0).toFixed(1)+','+(s.spd_ctdelta||0).toFixed(1)+','+(s.spd_moving||0)+',';
     csv+=f(s.fused_lat,7)+','+f(s.fused_lon,7)+','+f(s.fused_conf,2)+','+n(s.fused_src)+'\n';
   });
 
@@ -2509,14 +2384,11 @@ function exportCSV(){
   const staleRows=DATA.samples.filter(s=>s.gps_stale).length;
   csv+='# GPS_stale_pct: '+Math.round(staleRows/Math.max(1,DATA.count())*100)+'\n';
   csv+='# GPS_stale_rows: '+staleRows+'\n';
+  csv+='# --- SPEED (GPS-free, proven methods only) ---\n';
   csv+='# Spd_steps_max: '+Math.max(...DATA.samples.map(s=>s.spd_steps||0)).toFixed(1)+'\n';
-  csv+='# Spd_accel_max: '+Math.max(...DATA.samples.map(s=>s.spd_accel||0)).toFixed(1)+'\n';
   csv+='# Spd_cid_max: '+Math.max(...DATA.samples.map(s=>s.spd_cid||0)).toFixed(1)+'\n';
-  csv+='# Spd_vibration_max: '+Math.max(...DATA.samples.map(s=>s.spd_vibration||0)).toFixed(1)+'\n';
-  csv+='# Spd_rssi_grad_max: '+Math.max(...DATA.samples.map(s=>s.spd_rssi||0)).toFixed(1)+'\n';
   csv+='# Spd_ct_delta_max: '+Math.max(...DATA.samples.map(s=>s.spd_ctdelta||0)).toFixed(1)+'\n';
-  csv+='# Spd_nbr_churn_max: '+Math.max(...DATA.samples.map(s=>s.spd_churn||0)).toFixed(1)+'\n';
-  csv+='# Spd_sig_fade_max: '+Math.max(...DATA.samples.map(s=>s.spd_fade||0)).toFixed(1)+'\n';
+  csv+='# Moving_pct: '+Math.round(DATA.samples.filter(s=>s.spd_moving).length/Math.max(1,DATA.count())*100)+'%\n';
   csv+='# Step_count: '+SPEED.steps.count+'\n';
   csv+='# Step_length_m: '+SPEED.steps._stepLen.toFixed(2)+'\n';
   csv+='# CID_cell_radius: '+Math.round(SPEED.cid._cellRadius)+'m\n';
