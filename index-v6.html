@@ -66,6 +66,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 <div class="panel" id="controls">
   <div id="b1" style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="btn btn-cyan" onclick="calibrate()">Calibrate</button>
+    <button class="btn btn-amber" onclick="AUTOCAL.running?AUTOCAL.finish():AUTOCAL.start()" id="btnAutoCal">Auto-Cal Drive</button>
     <button class="btn btn-green" onclick="startRec()">Start Recording</button>
     <select id="modeSelect" onchange="setMode(this.value)" style="font-family:inherit;font-size:9px;padding:4px;background:var(--bg);color:var(--tp);border:1px solid var(--border);border-radius:3px">
       <option value="static">Static</option>
@@ -224,7 +225,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // Layer 6: Fusion
 // ═══════════════════════════════════════════════════════════
 
-const VERSION='v7.0.0';
+const VERSION='v7.1.0';
 
 function switchTab(idx){
   document.querySelectorAll('.tab').forEach((t,i)=>t.className='tab'+(i===idx?' active':''));
@@ -362,6 +363,192 @@ const GUARD={
     if(this.rejectCount<=20||this.rejectCount%100===0){
       log('GUARD: '+reason+' ('+this.rejectCount+' total)','var(--red)');
     }
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
+// AUTO-CALIBRATION — learns from GPS truth while driving
+// Press "Calibrate Drive" → drive 5 min with GPS → system learns:
+//   1. Compass offset (GPS heading vs magnetometer heading)
+//   2. Forward axis (which accel axis = forward movement)
+//   3. Speed scale (accel energy to actual km/h)
+//   4. Cell radius (from CID transitions + GPS speed)
+// Saves to localStorage so it persists between sessions.
+// ═══════════════════════════════════════════════════════════
+const AUTOCAL={
+  running:false, startTime:0, samples:0,
+  // Learned values
+  compassOffset:0,    // degrees to add to compass to match GPS heading
+  forwardAxis:'z',    // which accel axis is forward ('x','y','z')
+  forwardSign:1,      // +1 or -1
+  speedScale:1.0,     // multiply accel energy by this to get m/s
+  cellRadius:1500,    // meters per cell
+  // Buffers for learning
+  _headingPairs:[],   // [{compass, gpsHeading}]
+  _speedPairs:[],     // [{accelEnergy, gpsSpeed}]
+  _cidChanges:[],     // [{speed, time}]
+  _accelAtSpeed:[],   // [{ax,ay,az,speed}]
+
+  start(){
+    this.running=true;
+    this.startTime=performance.now();
+    this.samples=0;
+    this._headingPairs=[];
+    this._speedPairs=[];
+    this._cidChanges=[];
+    this._accelAtSpeed=[];
+    log('AUTO-CAL started — drive normally for 5 minutes with GPS','var(--cyan)');
+  },
+
+  // Called every tick during calibration
+  tick(gps,accelData,gyroData,compassDeg,cellTowers){
+    if(!this.running||!gps||gps.acc>50)return;
+    this.samples++;
+
+    // 1. Learn compass offset — only when moving straight (gyro quiet, speed>3)
+    if(gps.speed>3&&Math.abs(gyroData.z)<1){
+      // GPS heading from position delta
+      if(this._lastGPS){
+        const dLat=gps.lat-this._lastGPS.lat;
+        const dLon=gps.lon-this._lastGPS.lon;
+        if(Math.abs(dLat)>0.00001||Math.abs(dLon)>0.00001){
+          let gpsHdg=Math.atan2(dLon*Math.cos(gps.lat*Math.PI/180),dLat)*180/Math.PI;
+          if(gpsHdg<0)gpsHdg+=360;
+          this._headingPairs.push({compass:compassDeg,gps:gpsHdg});
+          if(this._headingPairs.length>300)this._headingPairs.shift();
+        }
+      }
+      this._lastGPS={lat:gps.lat,lon:gps.lon};
+    }
+
+    // 2. Learn which axis is forward — correlate accel axes with GPS speed changes
+    if(gps.speed>1){
+      this._accelAtSpeed.push({
+        ax:accelData.x,ay:accelData.y,az:accelData.z,speed:gps.speed
+      });
+      if(this._accelAtSpeed.length>300)this._accelAtSpeed.shift();
+    }
+
+    // 3. Learn speed scale — map accel energy to GPS speed
+    const energy=Math.sqrt(accelData.x*accelData.x+accelData.y*accelData.y+accelData.z*accelData.z);
+    if(gps.speed>1){
+      this._speedPairs.push({energy,speed:gps.speed});
+      if(this._speedPairs.length>300)this._speedPairs.shift();
+    }
+
+    // 4. Learn cell radius from CID transitions
+    if(cellTowers.length>0){
+      const cid=cellTowers[0].cid;
+      if(this._lastCID&&this._lastCID!==cid&&gps.speed>2){
+        this._cidChanges.push({speed:gps.speed,time:performance.now()});
+      }
+      this._lastCID=cid;
+    }
+
+    // Auto-complete after 5 minutes or 200+ samples with speed
+    const elapsed=(performance.now()-this.startTime)/1000;
+    if(elapsed>300||this._speedPairs.length>200){
+      this.finish();
+    }
+  },
+
+  finish(){
+    this.running=false;
+    const results=[];
+
+    // 1. Compute compass offset
+    if(this._headingPairs.length>20){
+      const offsets=this._headingPairs.map(p=>{
+        let d=p.gps-p.compass;
+        if(d>180)d-=360;if(d<-180)d+=360;
+        return d;
+      });
+      offsets.sort((a,b)=>a-b);
+      this.compassOffset=offsets[Math.floor(offsets.length/2)]; // median
+      results.push('compass offset: '+this.compassOffset.toFixed(1)+'°');
+    }
+
+    // 2. Find forward axis — which axis correlates most with speed
+    if(this._accelAtSpeed.length>50){
+      const corr=(axis)=>{
+        const vals=this._accelAtSpeed.map(s=>({a:s[axis],speed:s.speed}));
+        const mA=vals.reduce((s,v)=>s+v.a,0)/vals.length;
+        const mS=vals.reduce((s,v)=>s+v.speed,0)/vals.length;
+        let num=0,denA=0,denS=0;
+        vals.forEach(v=>{num+=(v.a-mA)*(v.speed-mS);denA+=(v.a-mA)**2;denS+=(v.speed-mS)**2;});
+        return Math.abs(num/Math.sqrt(denA*denS||1));
+      };
+      const cx=corr('ax'),cy=corr('ay'),cz=corr('az');
+      if(cx>cy&&cx>cz)this.forwardAxis='x';
+      else if(cy>cx&&cy>cz)this.forwardAxis='y';
+      else this.forwardAxis='z';
+      results.push('forward axis: '+this.forwardAxis);
+    }
+
+    // 3. Compute speed scale
+    if(this._speedPairs.length>30){
+      const sorted=[...this._speedPairs].sort((a,b)=>a.speed-b.speed);
+      const mid=sorted.slice(Math.floor(sorted.length*0.25),Math.floor(sorted.length*0.75));
+      if(mid.length>5){
+        const avgEnergy=mid.reduce((s,v)=>s+v.energy,0)/mid.length;
+        const avgSpeed=mid.reduce((s,v)=>s+v.speed,0)/mid.length;
+        if(avgEnergy>0)this.speedScale=avgSpeed/avgEnergy;
+        results.push('speed scale: '+this.speedScale.toFixed(3));
+      }
+    }
+
+    // 4. Compute cell radius
+    if(this._cidChanges.length>=2){
+      const avgSpeed=this._cidChanges.reduce((s,v)=>s+v.speed,0)/this._cidChanges.length;
+      const totalTime=(this._cidChanges[this._cidChanges.length-1].time-this._cidChanges[0].time)/1000;
+      if(totalTime>0&&this._cidChanges.length>1){
+        this.cellRadius=avgSpeed*totalTime/this._cidChanges.length;
+        this.cellRadius=Math.max(300,Math.min(5000,this.cellRadius));
+        results.push('cell radius: '+Math.round(this.cellRadius)+'m');
+      }
+    }
+
+    // Save to localStorage
+    try{
+      localStorage.setItem('upin_cal',JSON.stringify({
+        compassOffset:this.compassOffset,
+        forwardAxis:this.forwardAxis,
+        speedScale:this.speedScale,
+        cellRadius:this.cellRadius,
+        timestamp:Date.now()
+      }));
+    }catch(e){}
+
+    // Apply calibration to speed system
+    if(SPEED&&SPEED.cid)SPEED.cid._cellRadius=this.cellRadius;
+
+    log('AUTO-CAL complete ('+this.samples+' samples): '+results.join(', '),'var(--green)');
+    log('Compass: add '+this.compassOffset.toFixed(1)+'° | Speed×'+this.speedScale.toFixed(2)+' | Cell: '+Math.round(this.cellRadius)+'m','var(--green)');
+  },
+
+  // Load saved calibration from localStorage
+  load(){
+    try{
+      const saved=JSON.parse(localStorage.getItem('upin_cal'));
+      if(saved&&saved.timestamp){
+        this.compassOffset=saved.compassOffset||0;
+        this.forwardAxis=saved.forwardAxis||'z';
+        this.speedScale=saved.speedScale||1.0;
+        this.cellRadius=saved.cellRadius||1500;
+        if(SPEED&&SPEED.cid)SPEED.cid._cellRadius=this.cellRadius;
+        const age=Math.round((Date.now()-saved.timestamp)/60000);
+        log('Loaded calibration ('+age+' min old): compass+'+this.compassOffset.toFixed(1)+'° speed×'+this.speedScale.toFixed(2),'var(--cyan)');
+        return true;
+      }
+    }catch(e){}
+    return false;
+  },
+
+  // Get corrected compass heading
+  heading(rawCompass){
+    let h=rawCompass+this.compassOffset;
+    if(h>360)h-=360;if(h<0)h+=360;
+    return h;
   }
 };
 
@@ -2051,6 +2238,12 @@ function tick(){
     GPS_STALE.check(gpsSys,accel,now);
     const gpsLive=gpsSys&&!GPS_STALE.stale?gpsSys:null;
 
+    // AUTO-CALIBRATION — learns from GPS while driving
+    if(AUTOCAL.running&&gpsLive)AUTOCAL.tick(gpsLive,accel,gyro,compass,cellTowers);
+
+    // Apply calibrated compass offset to all heading uses
+    const calCompass=AUTOCAL.heading(compass);
+
     // Activity classification — use IMU speed, NOT GPS speed
     ACTIVITY.classify(accel,gyro,SPEED.fused);
     ALG.pedDR._stepLen=ACTIVITY.stepLength()||0.72;
@@ -2062,21 +2255,21 @@ function tick(){
     ALG.cellDir.predict(cellTowers,pos,speedNow,dt);
     if(gpsLive&&phase==='recording')ALG.wifiFP.record(gpsLive.lat,gpsLive.lon,wifiAPs);
     ALG.wifiFP.predict(wifiAPs);
-    ALG.imuDR.predict(pos,accel,gyro,compass,speedNow,dt,CAL.bias);
+    ALG.imuDR.predict(pos,accel,gyro,calCompass,speedNow,dt,CAL.bias);
     ALG.baro.predict(pressure,baroAlt);
     if(!ALG.fish.schools.length&&gpsLive&&gpsLive.lat>1)ALG.fish.init(gpsLive.lat,gpsLive.lon);
-    if(ALG.fish.schools.length)ALG.fish.predict(pos,accel,compass,speedNow,dt,CAL.bias);
+    if(ALG.fish.schools.length)ALG.fish.predict(pos,accel,calCompass,speedNow,dt,CAL.bias);
     if(gpsLive&&gpsLive.lat>1&&ALG.fish.schools.length)ALG.fish.score(gpsLive);
     // During drill: score Fish against GPS truth (learn from errors without resetting)
     if(phase==='jammed'&&gpsTrue&&gpsTrue.lat>1&&ALG.fish.schools.length)ALG.fish.scoreDrill(gpsTrue);
     // 7-11: v6.4.0 algorithms
-    ALG.pedDR.predict(pos,accel,compass,dt,CAL.bias);
+    ALG.pedDR.predict(pos,accel,calCompass,dt,CAL.bias);
     ALG.landmark.predict(pos);
     if(gpsLive&&gpsLive.lat>1&&cellTowers.length>0)ALG.cidPath.learn(cellTowers[0].cid,gpsLive.lat,gpsLive.lon);
     if(cellTowers.length>0)ALG.cidPath.predict(cellTowers[0].cid);
     if(gpsLive&&gpsLive.lat>1&&phase==='recording')ALG.magFP.record(gpsLive.lat,gpsLive.lon,mag.x,mag.y,mag.z);
     ALG.magFP.predict(mag.x,mag.y,mag.z);
-    ALG.turnDet.update(compass,speedNow,dt);
+    ALG.turnDet.update(calCompass,speedNow,dt);
     if(gpsLive&&gpsLive.lat>1)ALG.turnDet.learnRoute(gpsLive);
     ALG.turnDet.predict();
     // 12-20: v6.5.0 + v6.6.0 algorithms
@@ -2084,17 +2277,17 @@ function tick(){
     ALG.rssiPathLoss.predict(cellTowers,wifiAPs);
     if(!ALG.particleFilter._inited&&gpsLive&&gpsLive.lat>1)ALG.particleFilter.init(gpsLive.lat,gpsLive.lon);
     if(ALG.particleFilter._inited){
-      ALG.particleFilter.predict(compass,speedNow,dt);
+      ALG.particleFilter.predict(calCompass,speedNow,dt);
       ALG.particleFilter.observe(cellTowers,wifiAPs);
       if(gpsLive&&gpsLive.lat>1)ALG.particleFilter.scoreGPS(gpsLive);
     }
     ALG.cellDwell.predict(cellTowers,speedNow);
-    ALG.gravDR.predict(pos,accel,compass,dt,CAL.bias);
+    ALG.gravDR.predict(pos,accel,calCompass,dt,CAL.bias);
     if(gpsLive&&gpsLive.lat>1&&phase==='recording')ALG.sigMap.record(gpsLive.lat,gpsLive.lon,cellTowers,wifiAPs);
     ALG.sigMap.predict(cellTowers,wifiAPs);
-    ALG.compDR.predict(pos,compass,gyro.z,speedNow,dt);
+    ALG.compDR.predict(pos,calCompass,gyro.z,speedNow,dt);
     if(gpsLive&&gpsLive.lat>1&&phase==='recording')ALG.velProfile.record(gpsLive.lat,gpsLive.lon,speedNow,compass);
-    ALG.velProfile.predict(speedNow,compass);
+    ALG.velProfile.predict(speedNow,calCompass);
     ALG.floorTrack.predict(pressure,baroAlt,pos);
 
     // Layer 6: fusion
@@ -2484,6 +2677,11 @@ function exportCSV(){
   csv+='# Total_distance_m: '+Math.round(totalDist)+'\n';
   csv+='# Avg_speed_kmh: '+(dur>0?(totalDist/dur*3.6).toFixed(1):'0')+'\n';
   csv+='# Samples: '+DATA.count()+'\n';
+  csv+='# --- CALIBRATION ---\n';
+  csv+='# Compass_offset: '+AUTOCAL.compassOffset.toFixed(1)+'°\n';
+  csv+='# Forward_axis: '+AUTOCAL.forwardAxis+'\n';
+  csv+='# Speed_scale: '+AUTOCAL.speedScale.toFixed(3)+'\n';
+  csv+='# Cell_radius_cal: '+Math.round(AUTOCAL.cellRadius)+'m\n';
   csv+='# --- DATA GUARDIAN ---\n';
   csv+='# Guard_accepted: '+GUARD.acceptCount+'\n';
   csv+='# Guard_rejected: '+GUARD.rejectCount+'\n';
@@ -2784,11 +2982,10 @@ window.addEventListener('load',()=>{
   initMap();
   initPhoneGPS();
   initPhoneSensors();
-  // Start idle UI update loop (2s interval)
+  AUTOCAL.load(); // Load saved calibration from previous session
   setInterval(idleUpdate,2000);
-  // Draw landmark markers after map loads
   setTimeout(drawLandmarks,3000);
-  log('UPIN '+VERSION+' — DATA GUARDIAN active, all inputs validated','var(--cyan)');
+  log('UPIN '+VERSION+' — DATA GUARDIAN + AUTO-CALIBRATION','var(--cyan)');
   log('Connect board or use phone sensors','var(--td)');
 });
 </script>
