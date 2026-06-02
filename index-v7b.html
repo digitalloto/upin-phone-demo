@@ -205,7 +205,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // 6 proven algorithms, single data guard, strict fusion rules
 // ================================================================
 
-const VERSION='v7b.0.0';
+const VERSION='v7b.1.0';
 const GOOGLE_GEO_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
 
 function switchTab(i){
@@ -856,7 +856,7 @@ const FUSION={
 
   update(){
     // Anchor ONLY from validated GPS
-    if(gpsTrue&&gpsTrue.lat>1&&gpsTrue.lat<85&&gpsTrue.lon>60&&gpsTrue.lon<100&&gpsTrue.acc>0&&gpsTrue.acc<200){
+    if(gpsTrue&&gpsTrue.lat>1&&gpsTrue.lat<85&&gpsTrue.lon>60&&gpsTrue.lon<100&&gpsTrue.acc>0&&gpsTrue.acc<2000){
       this._lastGoodPos={lat:gpsTrue.lat,lon:gpsTrue.lon};
       this._gpsEverSeen=true;
     }
@@ -1481,27 +1481,86 @@ function autoSave(){
 // HTML REPORT
 // ================================================================
 function downloadReport(){
-  let h='<!DOCTYPE html><html><head><title>UPIN v7b Report</title><style>body{font-family:monospace;background:#0a0e14;color:#e6edf3;padding:20px;font-size:12px}h1{color:#00e5ff}h2{color:#3dcc6e;margin-top:20px}.good{color:#3dcc6e}.bad{color:#f06060}.warn{color:#e8a832}table{border-collapse:collapse;width:100%}td,th{border:1px solid #1e2a3a;padding:4px 8px;text-align:left}th{background:#111820}</style></head><body>';
-  h+='<h1>UPIN v7b Report</h1><p>'+new Date().toLocaleString()+'</p>';
+  let h='<!DOCTYPE html><html><head><title>UPIN v7b Report</title><style>body{font-family:monospace;background:#0a0e14;color:#e6edf3;padding:20px;font-size:12px}h1{color:#00e5ff}h2{color:#3dcc6e;margin-top:20px}.good{color:#3dcc6e}.bad{color:#f06060}.warn{color:#e8a832}table{border-collapse:collapse;width:100%}td,th{border:1px solid #1e2a3a;padding:4px 8px;text-align:left}th{background:#111820}pre{background:#111820;padding:10px;overflow-x:auto}</style></head><body>';
+  h+='<h1>UPIN v7b.1.0 Report</h1><p>'+new Date().toLocaleString()+'</p>';
   const dur=startTime?Math.round((performance.now()-startTime)/1000):0;
+  const gpsRows=DATA.samples.filter(s=>s.gpsLat>1).length;
+  const staleRows=DATA.samples.filter(s=>s.gpsStale).length;
+  const movingRows=DATA.samples.filter(s=>s.speedNow>0.5).length;
+
   h+='<h2>Summary</h2><table><tr><th>Metric</th><th>Value</th></tr>';
+  h+='<tr><td>Version</td><td>v7b.1.0</td></tr>';
   h+='<tr><td>Duration</td><td>'+fmt(dur)+'</td></tr>';
   h+='<tr><td>Samples</td><td>'+DATA.count()+'</td></tr>';
   h+='<tr><td>Distance</td><td>'+Math.round(totalDist)+'m</td></tr>';
+  h+='<tr><td>Avg Speed</td><td>'+(dur>0?(totalDist/dur*3.6).toFixed(1):'0')+' km/h</td></tr>';
+  h+='<tr><td>Mode</td><td>'+mode+'</td></tr>';
   h+='<tr><td>Drills</td><td>'+drills.length+'</td></tr>';
+  h+='<tr><td>Board</td><td>'+(boardConnected?'YES':'NO')+'</td></tr>';
+  h+='<tr><td>GPS lock %</td><td>'+Math.round(gpsRows/Math.max(1,DATA.count())*100)+'%</td></tr>';
+  h+='<tr><td>GPS stale %</td><td>'+Math.round(staleRows/Math.max(1,DATA.count())*100)+'%</td></tr>';
+  h+='<tr><td>Moving %</td><td>'+Math.round(movingRows/Math.max(1,DATA.count())*100)+'%</td></tr>';
   h+='<tr><td>Guard accepted</td><td>'+GUARD.acceptCount+'</td></tr>';
-  h+='<tr><td>Guard rejected</td><td>'+GUARD.rejectCount+'</td></tr></table>';
-  h+='<h2>Algorithms</h2><table><tr><th>Algorithm</th><th>Conf</th><th>Position</th></tr>';
+  h+='<tr><td>Guard rejected</td><td>'+GUARD.rejectCount+'</td></tr>';
+  h+='<tr><td>Guard last reject</td><td>'+GUARD.lastReject+'</td></tr></table>';
+
+  h+='<h2>Speed Analysis</h2><table><tr><th>Source</th><th>Current</th><th>Max</th></tr>';
+  h+='<tr><td>Fused speed</td><td>'+SPEED.fusedSpeedKmh.toFixed(1)+' km/h</td><td>'+Math.max(...DATA.samples.map(s=>s.speedNow*3.6||0)).toFixed(1)+' km/h</td></tr>';
+  h+='<tr><td>Speed source</td><td colspan="2">'+SPEED.fusedSource+'</td></tr>';
+  h+='<tr><td>Vibration</td><td>'+(SPEED.vibration.speed*3.6).toFixed(1)+' km/h</td><td>--</td></tr>';
+  h+='<tr><td>CID speed</td><td>'+SPEED.cid.speed_kmh.toFixed(1)+' km/h</td><td>--</td></tr>';
+  h+='<tr><td>CT delta</td><td>'+(SPEED.ctDelta.speed*3.6).toFixed(1)+' km/h</td><td>--</td></tr>';
+  h+='<tr><td>Steps</td><td>'+SPEED.steps.count+' ('+SPEED.steps._stepLen.toFixed(2)+'m/step)</td><td>--</td></tr>';
+  h+='<tr><td>Motion</td><td>'+(SPEED.motion.isMoving?'MOVING':'STILL')+'</td><td>--</td></tr></table>';
+
+  h+='<h2>Algorithms</h2><table><tr><th>Algorithm</th><th>Conf</th><th>Position</th><th>Details</th></tr>';
   algList.forEach(a=>{
-    h+='<tr><td>'+a.name+'</td><td>'+Math.round(a.confidence*100)+'%</td><td>'+(a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude?a.altitude.toFixed(1)+'m':'--'))+'</td></tr>';
+    let det='';
+    if(a.name==='Fish School')det='Gen:'+ALG.fish.generation+' Schools:'+ALG.fish.schools.length;
+    if(a.name==='Cell Trilateration')det='Towers w/pos:'+cellTowers.filter(t=>t.lat>1).length+'/'+cellTowers.length;
+    if(a.name==='Particle Filter')det='Particles:'+ALG.pf._particles.length;
+    if(a.name==='IMU+Compass DR')det='ZUPT:'+(!ALG.imuDR._speed?'YES':'NO')+' Spd:'+(ALG.imuDR._speed||0).toFixed(1);
+    h+='<tr><td>'+a.name+'</td><td>'+Math.round(a.confidence*100)+'%</td><td>'+(a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude?a.altitude.toFixed(1)+'m':'--'))+'</td><td>'+det+'</td></tr>';
   });
   h+='</table>';
+
+  h+='<h2>Fusion</h2><table><tr><th>Metric</th><th>Value</th></tr>';
+  h+='<tr><td>Source</td><td>'+FUSION.source+'</td></tr>';
+  h+='<tr><td>Confidence</td><td>'+Math.round(FUSION.confidence*100)+'%</td></tr>';
+  h+='<tr><td>Position</td><td>'+(FUSION.pos?FUSION.pos.lat.toFixed(5)+', '+FUSION.pos.lon.toFixed(5):'--')+'</td></tr>';
+  h+='<tr><td>GPS ever seen</td><td>'+(FUSION._gpsEverSeen?'YES':'NO')+'</td></tr>';
+  h+='<tr><td>Anchor</td><td>'+(FUSION._lastGoodPos?FUSION._lastGoodPos.lat.toFixed(5)+', '+FUSION._lastGoodPos.lon.toFixed(5):'NOT SET')+'</td></tr>';
+  const srcCounts={};DATA.samples.forEach(s=>{const src=s.fusedSrc||'none';srcCounts[src]=(srcCounts[src]||0)+1;});
+  h+='<tr><td>Source distribution</td><td>';
+  Object.entries(srcCounts).sort((a,b)=>b[1]-a[1]).forEach(([k,v])=>{h+=k+':'+v+' ('+Math.round(v/DATA.count()*100)+'%) ';});
+  h+='</td></tr></table>';
+
   if(drills.length>0){
     h+='<h2>Drills</h2><table><tr><th>#</th><th>Duration</th><th>Drift</th><th>Winner</th></tr>';
     drills.forEach((d,i)=>{h+='<tr><td>'+(i+1)+'</td><td>'+(d.duration||0)+'s</td><td class="'+(d.drift<100?'good':d.drift<500?'warn':'bad')+'">'+(d.drift||0)+'m</td><td>'+d.winner+'</td></tr>';});
     h+='</table>';
   }
-  h+='<h2>Calibration</h2><p>Compass offset: '+AUTOCAL.compassOffset.toFixed(1)+' | Speed scale: '+AUTOCAL.speedScale.toFixed(3)+' | Cell radius: '+Math.round(AUTOCAL.cellRadius)+'m</p>';
+
+  h+='<h2>Towers</h2><table><tr><th>Metric</th><th>Value</th></tr>';
+  h+='<tr><td>DB loaded</td><td>'+(typeof TOWERS!=='undefined'?TOWERS.length:0)+'</td></tr>';
+  h+='<tr><td>Learned</td><td>'+Object.keys(towerDB).length+'</td></tr>';
+  h+='<tr><td>Visible</td><td>'+cellTowers.length+'</td></tr>';
+  h+='<tr><td>With positions</td><td>'+cellTowers.filter(t=>t.lat>1).length+'</td></tr>';
+  cellTowers.forEach(t=>{
+    h+='<tr><td>CID:'+t.cid+'</td><td>'+Math.round(t.signal)+'dBm '+(t.lat>1?t.lat.toFixed(4)+','+t.lon.toFixed(4):'unknown')+'</td></tr>';
+  });
+  h+='</table>';
+
+  h+='<h2>Calibration</h2><table><tr><th>Metric</th><th>Value</th></tr>';
+  h+='<tr><td>Compass offset</td><td>'+AUTOCAL.compassOffset.toFixed(1)+'°</td></tr>';
+  h+='<tr><td>Speed scale</td><td>'+AUTOCAL.speedScale.toFixed(3)+'</td></tr>';
+  h+='<tr><td>Cell radius</td><td>'+Math.round(AUTOCAL.cellRadius)+'m</td></tr>';
+  h+='<tr><td>Cal samples</td><td>'+AUTOCAL.samples+'</td></tr></table>';
+
+  h+='<h2>Last 30 Debug Log</h2><pre>';
+  DEBUG.slice(-30).forEach(d=>{h+=d.t+' '+d.msg+'\n';});
+  h+='</pre>';
+
   h+='</body></html>';
   const blob=new Blob([h],{type:'text/html'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
