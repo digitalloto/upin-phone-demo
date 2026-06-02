@@ -66,7 +66,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 <div class="panel" id="controls">
   <div id="b1" style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="btn btn-cyan" onclick="calibrate()">Calibrate</button>
-    <button class="btn btn-amber" onclick="AUTOCAL.running?AUTOCAL.finish():AUTOCAL.start()" id="btnAutoCal">Auto-Cal Drive</button>
+    <button class="btn btn-amber" onclick="startAutoCal()">Auto-Cal Drive</button>
     <button class="btn btn-green" onclick="startRec()">Start Recording</button>
     <select id="modeSelect" onchange="setMode(this.value)" style="font-family:inherit;font-size:9px;padding:4px;background:var(--bg);color:var(--tp);border:1px solid var(--border);border-radius:3px">
       <option value="static">Static</option>
@@ -267,7 +267,7 @@ const GUARD={
   // GPS validation — catches Africa, null island, negative accuracy, impossible jumps
   gps(lat,lon,acc,source){
     // Rule 1: accuracy must be positive and reasonable
-    if(acc===undefined||acc===null||acc<=0||acc>500){
+    if(acc===undefined||acc===null||acc<=0||acc>2000){
       this._reject('GPS '+source+': bad accuracy '+acc);return null;
     }
     // Rule 2: coordinates must be valid numbers
@@ -2239,7 +2239,8 @@ function tick(){
     const gpsLive=gpsSys&&!GPS_STALE.stale?gpsSys:null;
 
     // AUTO-CALIBRATION — learns from GPS while driving
-    if(AUTOCAL.running&&gpsLive)AUTOCAL.tick(gpsLive,accel,gyro,compass,cellTowers);
+    // Use gpsSys (not gpsLive) because gpsLive requires stale check which may block good GPS
+    if(AUTOCAL.running&&gpsSys&&gpsSys.acc>0&&gpsSys.acc<300)AUTOCAL.tick(gpsSys,accel,gyro,compass,cellTowers);
 
     // Apply calibrated compass offset to all heading uses
     const calCompass=AUTOCAL.heading(compass);
@@ -2569,6 +2570,13 @@ function calibrate(){
   log('Calibrating — hold still 3s','var(--amber)');
   const iv=setInterval(()=>CAL.addSample(),100);
   setTimeout(()=>{clearInterval(iv);CAL.compute();log('Calibrated: bias='+CAL.bias.x.toFixed(2)+','+CAL.bias.y.toFixed(2),'var(--green)');},3000);
+}
+
+function startAutoCal(){
+  if(AUTOCAL.running){AUTOCAL.finish();return;}
+  // Auto-start recording if not already recording
+  if(phase==='idle')startRec();
+  AUTOCAL.start();
 }
 
 function startRec(){

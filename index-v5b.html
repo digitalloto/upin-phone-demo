@@ -105,7 +105,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
 <!-- TOP BAR -->
 <div class="topbar">
   <h1>UPIN v5b</h1>
-  <span style="font-size:7px;color:var(--td);margin-left:4px" id="appVer">v5b.4.0</span><span class="badge b-idle" id="badge">IDLE</span>
+  <span style="font-size:7px;color:var(--td);margin-left:4px" id="appVer">v5b.5.0</span><span class="badge b-idle" id="badge">IDLE</span>
 </div>
 <!-- TABS -->
 <div class="tabs">
@@ -251,6 +251,7 @@ body{font-family:'SF Mono','Cascadia Code','Consolas',monospace;background:var(-
   <!-- Controls -->
   <div id="b1" class="btns">
     <button class="btn btn-cyan" onclick="V.calibrate()">Calibrate</button>
+    <button class="btn btn-amber" onclick="if(AUTOCAL5.running){AUTOCAL5.finish();}else{if(phase==='idle')startRec();AUTOCAL5.start();}">Auto-Cal Drive</button>
     <button class="btn btn-green" id="bStart" onclick="V.startRec()">Start Recording</button>
   </div>
   <div id="b2" style="display:none">
@@ -4975,6 +4976,10 @@ function tick(){
   // ── GPS STALENESS CHECK (before anything uses GPS) ──
   GPS_STALE.check(gpsSys,accel,now);
 
+  // ── AUTO-CALIBRATION ──
+  if(AUTOCAL5.running&&gpsSys&&gpsSys.acc>0&&gpsSys.acc<300)
+    AUTOCAL5.tick(gpsSys,accel,gyro,compass,boardTowerList);
+
   // ── PREPROCESS all sensor data (6 fixes) ──
   if(!useBoard&&gpsSys){
     // FIX: Read from RAW sensor values, not already-corrected globals
@@ -6013,7 +6018,68 @@ F.push(mkF('APRS Amateur',function(pos,dt){return boardData&&boardData.aprs?{lat
 F.push(mkF('Infrasound Map',function(pos,dt){return boardData&&boardData.infrasound?{lat:boardData.infrasound.lat,lon:boardData.infrasound.lon}:null;}));
 
 // VERSION STAMP
-const UPIN_VERSION='v5b.4.0';
+const UPIN_VERSION='v5b.5.0';
+
+// ═══ AUTO-CALIBRATION (v7.1.0 backport) ═══
+const AUTOCAL5={
+  running:false,startTime:0,samples:0,
+  compassOffset:0,speedScale:1.0,cellRadius:1500,
+  _headingPairs:[],_speedPairs:[],_cidChanges:[],_lastGPS:null,_lastCID:null,
+  start(){
+    this.running=true;this.startTime=performance.now();this.samples=0;
+    this._headingPairs=[];this._speedPairs=[];this._cidChanges=[];
+    log('AUTO-CAL started — drive 5 min with GPS','var(--cyan)');
+  },
+  tick(gps,ac,gy,comp,towers){
+    if(!this.running||!gps||gps.acc>300)return;
+    this.samples++;
+    if(gps.speed>3&&Math.abs(gy.z)<1&&this._lastGPS){
+      const dLat=gps.lat-this._lastGPS.lat,dLon=gps.lon-this._lastGPS.lon;
+      if(Math.abs(dLat)>0.00001||Math.abs(dLon)>0.00001){
+        let gh=Math.atan2(dLon*Math.cos(gps.lat*Math.PI/180),dLat)*180/Math.PI;
+        if(gh<0)gh+=360;
+        this._headingPairs.push({c:comp,g:gh});if(this._headingPairs.length>300)this._headingPairs.shift();
+      }
+    }
+    if(gps.speed>1){
+      this._lastGPS={lat:gps.lat,lon:gps.lon};
+      const e=Math.sqrt(ac.x*ac.x+ac.y*ac.y+ac.z*ac.z);
+      this._speedPairs.push({e,s:gps.speed});if(this._speedPairs.length>300)this._speedPairs.shift();
+    }
+    if(towers&&towers.length>0){
+      const cid=towers[0].cid||towers[0];
+      if(this._lastCID&&this._lastCID!==cid&&gps.speed>2)this._cidChanges.push({s:gps.speed,t:performance.now()});
+      this._lastCID=cid;
+    }
+    if((performance.now()-this.startTime)/1000>300||this._speedPairs.length>200)this.finish();
+  },
+  finish(){
+    this.running=false;const r=[];
+    if(this._headingPairs.length>20){
+      const o=this._headingPairs.map(p=>{let d=p.g-p.c;if(d>180)d-=360;if(d<-180)d+=360;return d;});
+      o.sort((a,b)=>a-b);this.compassOffset=o[Math.floor(o.length/2)];
+      r.push('compass+'+this.compassOffset.toFixed(1)+'°');
+    }
+    if(this._speedPairs.length>30){
+      const mid=this._speedPairs.slice(Math.floor(this._speedPairs.length*0.25),Math.floor(this._speedPairs.length*0.75));
+      if(mid.length>5){const aE=mid.reduce((s,v)=>s+v.e,0)/mid.length;const aS=mid.reduce((s,v)=>s+v.s,0)/mid.length;if(aE>0)this.speedScale=aS/aE;}
+      r.push('speed×'+this.speedScale.toFixed(2));
+    }
+    if(this._cidChanges.length>=2){
+      const aS=this._cidChanges.reduce((s,v)=>s+v.s,0)/this._cidChanges.length;
+      const tT=(this._cidChanges[this._cidChanges.length-1].t-this._cidChanges[0].t)/1000;
+      if(tT>0)this.cellRadius=Math.max(300,Math.min(5000,aS*tT/this._cidChanges.length));
+      r.push('cell:'+Math.round(this.cellRadius)+'m');
+    }
+    try{localStorage.setItem('upin_cal5',JSON.stringify({co:this.compassOffset,ss:this.speedScale,cr:this.cellRadius,t:Date.now()}));}catch(e){}
+    if(SPEED5&&SPEED5.cidSpd)SPEED5.cidSpd._r=this.cellRadius;
+    log('AUTO-CAL done ('+this.samples+'): '+r.join(', '),'var(--green)');
+  },
+  load(){
+    try{const s=JSON.parse(localStorage.getItem('upin_cal5'));if(s&&s.t){this.compassOffset=s.co||0;this.speedScale=s.ss||1;this.cellRadius=s.cr||1500;if(SPEED5&&SPEED5.cidSpd)SPEED5.cidSpd._r=this.cellRadius;log('Cal loaded: compass+'+this.compassOffset.toFixed(1)+'° speed×'+this.speedScale.toFixed(2),'var(--cyan)');return true;}}catch(e){}return false;
+  },
+  heading(raw){let h=raw+this.compassOffset;if(h>360)h-=360;if(h<0)h+=360;return h;}
+};
 
 // ─── GPS SPEED FROM POSITION DELTA (v6.8.0 backport) ───
 let _lastGPSPos5=null, _lastGPSTime5=0;
@@ -7517,7 +7583,7 @@ window.addEventListener('unhandledrejection',e=>{
 
 window.addEventListener('load',()=>{
   try{
-    initMap();buildFormulaTable();
+    initMap();buildFormulaTable();AUTOCAL5.load();
     ROUTES.init();TOWER_CAPTURE.init();SCORE.init();MANEUVER.init();PROFILES.init();
     ML_TOGGLE.init();SVM_GATE.init();RF_FUSION.init();initCIDCache();
     if(window.LAYER9)LAYER9._updateUI();
