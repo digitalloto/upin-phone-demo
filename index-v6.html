@@ -1804,19 +1804,42 @@ const SPEED={
     }
   },
 
+  // Source 5: Vibration — detects car movement from accel energy + frequency
+  vibration:{
+    speed:0, _buf:[],
+    update(accel){
+      const aMag=Math.sqrt(accel.x*accel.x+accel.y*accel.y+accel.z*accel.z);
+      this._buf.push(aMag);if(this._buf.length>60)this._buf.shift();
+      if(this._buf.length<20)return;
+      const mean=this._buf.reduce((s,v)=>s+v,0)/this._buf.length;
+      const energy=this._buf.reduce((s,v)=>s+(v-mean)**2,0)/this._buf.length;
+      let cr=0;for(let i=1;i<this._buf.length;i++){if((this._buf[i]-mean)*(this._buf[i-1]-mean)<0)cr++;}
+      const freq=cr/this._buf.length*30;
+      let target=0;
+      if(energy<0.01)target=0;
+      else if(freq>8)target=Math.min(18,energy*8); // vehicle, capped at 18 m/s = 65 km/h
+      else if(freq>3)target=Math.min(3,energy*3); // walking
+      // Smooth: fast down, slow up
+      if(target<this.speed)this.speed=this.speed*0.5+target*0.5;
+      else this.speed=this.speed*0.8+target*0.2;
+      if(this.speed<0.15)this.speed=0;
+    }
+  },
+
   // ─── FUSION ───
   fused:0, fusedSource:'none', fusedSpeedKmh:0,
 
   update(accel,gyro,cellTowers,dt){
-    if(accel.x===0&&accel.y===0&&accel.z===0)return; // corrupted packet
+    if(accel.x===0&&accel.y===0&&accel.z===0)return;
 
     // Run all sources
     this.steps.update(accel,dt);
     if(cellTowers.length>0)this.cid.update(cellTowers[0].cid,performance.now());
     if(ALG.cellTri.pos)this.ctDelta.update(ALG.cellTri.pos);
     this.motion.update(accel,gyro);
+    this.vibration.update(accel);
 
-    // ZUPT first: if motion detector says stopped, speed = 0
+    // ZUPT: if motion detector says stopped, speed = 0
     if(!this.motion.isMoving){
       this.fused=0;this.fusedSource='still';this.fusedSpeedKmh=0;return;
     }
@@ -1826,9 +1849,9 @@ const SPEED={
     if(this.steps.speed>0.2)sources.push({n:'steps',s:this.steps.speed});
     if(this.cid.speed_kmh>2)sources.push({n:'cid',s:this.cid.speed_kmh/3.6});
     if(this.ctDelta.speed>0.3)sources.push({n:'ctDelta',s:this.ctDelta.speed});
+    if(this.vibration.speed>0.5)sources.push({n:'vibration',s:this.vibration.speed});
 
     if(sources.length===0){
-      // Moving but no speed estimate — report minimum movement speed
       this.fused=0.5;this.fusedSource='moving';
     }else if(sources.length===1){
       this.fused=sources[0].s;this.fusedSource=sources[0].n;
