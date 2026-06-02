@@ -158,6 +158,8 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 <!-- TAB 3: DRILLS -->
 <div class="tab-body" id="tab3">
 <div class="panel">
+  <h2>AUTO-DRILL</h2>
+  <div style="margin-bottom:8px"><label><input type="checkbox" onchange="AUTO_DRILL.enabled=this.checked;AUTO_DRILL.lastTime=performance.now();log('Auto-drill '+(this.checked?'ON — every 20 min':'OFF'),'var(--cyan)')"> Auto-drill every 20 min (60s denial when speed >20 km/h)</label></div>
   <h2>DEMO MODE</h2>
   <div style="display:flex;gap:4px;flex-wrap:wrap">
     <button class="btn btn-green" onclick="runDemo('quick')" style="flex:1;font-size:8px">QUICK<br>3min</button>
@@ -205,7 +207,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // 6 proven algorithms, single data guard, strict fusion rules
 // ================================================================
 
-const VERSION='v7b.1.0';
+const VERSION='v7b.2.0';
 const GOOGLE_GEO_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
 
 function switchTab(i){
@@ -368,6 +370,17 @@ const DATA={
 // ================================================================
 // 6. AUTO-CALIBRATION
 // ================================================================
+// Auto-drill timer
+const AUTO_DRILL={enabled:false,intervalMin:20,durationSec:60,lastTime:0,count:0};
+
+// Nearest landmark
+function nearestLandmark(pos){
+  if(!pos||typeof LANDMARKS==='undefined')return null;
+  let best=null,bestD=Infinity;
+  LANDMARKS.forEach(lm=>{const d=hav(pos,{lat:lm.lat,lon:lm.lon});if(d<bestD){bestD=d;best=lm;}});
+  return best?{name:best.n,dist:Math.round(bestD),type:best.t}:null;
+}
+
 const AUTOCAL={
   running:false, startTime:0, samples:0,
   compassOffset:0, speedScale:1.0, cellRadius:1500,
@@ -1144,6 +1157,23 @@ function tick(){
     // Fusion
     FUSION.update();
 
+    // DR reset: snap drifting algorithms back to high-confidence fix
+    if(FUSION.pos&&FUSION.confidence>0.7){
+      const anchor=FUSION.pos;
+      if(ALG.imuDR.pos&&hav(ALG.imuDR.pos,anchor)>100){ALG.imuDR.pos={lat:anchor.lat,lon:anchor.lon};ALG.imuDR._speed=0;}
+      if(ALG.pf.pos&&hav(ALG.pf.pos,anchor)>100){ALG.pf._particles.forEach(p=>{p.lat=anchor.lat+(Math.random()-0.5)*0.001;p.lon=anchor.lon+(Math.random()-0.5)*0.001;});}
+    }
+
+    // Auto-drill: jam GPS every 20 min if enabled and speed>20km/h
+    if(AUTO_DRILL.enabled&&phase==='recording'&&speedNow*3.6>20){
+      const elapsed=(now-AUTO_DRILL.lastTime)/60000;
+      if(elapsed>AUTO_DRILL.intervalMin){
+        AUTO_DRILL.lastTime=now;AUTO_DRILL.count++;
+        jamGPS();
+        setTimeout(()=>{if(phase==='jammed')resurface();},AUTO_DRILL.durationSec*1000);
+      }
+    }
+
     // Snapshot algorithm outputs into row
     row.ct_lat=ALG.cellTri.pos?ALG.cellTri.pos.lat:null;
     row.ct_lon=ALG.cellTri.pos?ALG.cellTri.pos.lon:null;
@@ -1662,6 +1692,9 @@ function idleUpdate(){
       algHTML+='<div class="alg-row"><span class="alg-name">'+a.name+'</span><span class="alg-val" style="color:'+col+'">waiting... ('+conf+'%)</span></div>';
     });
     document.getElementById('algList').innerHTML=algHTML;
+    // Nearest landmark
+    const pos=gpsSys||FUSION.pos;
+    if(pos){const nl=nearestLandmark(pos);if(nl){try{document.getElementById('fPos').textContent=nl.name+' ('+nl.dist+'m)';}catch(e){}}}
   }catch(e){}
 }
 
