@@ -207,7 +207,7 @@ h2{font-size:12px;color:var(--cyan);letter-spacing:2px;margin-bottom:6px}
 // 6 proven algorithms, single data guard, strict fusion rules
 // ================================================================
 
-const VERSION='v7b.2.0';
+const VERSION='v7b.3.0';
 const GOOGLE_GEO_KEY='AIzaSyDwJOK-SETOm73rXDHdPXdaR_GtEI9lr0k';
 
 function switchTab(i){
@@ -469,7 +469,7 @@ const CAL={
 // ================================================================
 // 4. SPEED SYSTEM (GPS-free)
 // ================================================================
-const MODE_CAPS={static:2,walk:8,car:65,train:120};
+const MODE_CAPS={static:2,walk:8,car:120,train:180};
 function getSpeedCap(){return(MODE_CAPS[mode]||65)/3.6;}
 
 const SPEED={
@@ -486,8 +486,8 @@ const SPEED={
       const freq=cr/this._buf.length*30;
       let target=0;
       if(energy<0.01)target=0;
-      else if(freq>8)target=Math.min(18,energy*8);
-      else if(freq>3)target=Math.min(3,energy*3);
+      else if(freq>8)target=Math.min(30,energy*10);
+      else if(freq>3)target=Math.min(4,energy*3);
       if(target<this.speed)this.speed=this.speed*0.5+target*0.5;
       else this.speed=this.speed*0.8+target*0.2;
       if(this.speed<0.15)this.speed=0;
@@ -577,7 +577,7 @@ const SPEED={
     if(this.steps.speed>0.2)sources.push({n:'steps',s:this.steps.speed});
     if(sources.length===0){this.fused=0.5;this.fusedSource='moving';}
     else if(sources.length===1){this.fused=sources[0].s;this.fusedSource=sources[0].n;}
-    else{sources.sort((a,b)=>a.s-b.s);this.fused=sources[0].s;this.fusedSource=sources[0].n+'+'+sources.length;}
+    else{sources.sort((a,b)=>b.s-a.s);this.fused=sources[0].s;this.fusedSource=sources[0].n+'+'+sources.length;}
     this.fusedSpeedKmh=this.fused*3.6;
   },
 
@@ -595,7 +595,7 @@ function updateSpeed(){
   if(spd>cap)spd=cap;
   speedNow=spd;
   speedSource=SPEED.fusedSource;
-  if(gpsSys&&!GPS_STALE.stale&&gpsSys.speed>1&&gpsSys.acc<30)SPEED.calibrate(gpsSys.speed);
+  if(gpsSys&&!GPS_STALE.stale&&gpsSys.speed>1&&gpsSys.acc>0&&gpsSys.acc<500)SPEED.calibrate(gpsSys.speed);
 }
 
 // ================================================================
@@ -1161,7 +1161,7 @@ function tick(){
     if(FUSION.pos&&FUSION.confidence>0.7){
       const anchor=FUSION.pos;
       if(ALG.imuDR.pos&&hav(ALG.imuDR.pos,anchor)>100){ALG.imuDR.pos={lat:anchor.lat,lon:anchor.lon};ALG.imuDR._speed=0;}
-      if(ALG.pf.pos&&hav(ALG.pf.pos,anchor)>100){ALG.pf._particles.forEach(p=>{p.lat=anchor.lat+(Math.random()-0.5)*0.001;p.lon=anchor.lon+(Math.random()-0.5)*0.001;});}
+      if(ALG.particleFilter.pos&&hav(ALG.particleFilter.pos,anchor)>100){ALG.particleFilter._particles.forEach(p=>{p.lat=anchor.lat+(Math.random()-0.5)*0.001;p.lon=anchor.lon+(Math.random()-0.5)*0.001;});}
     }
 
     // Auto-drill: jam GPS every 20 min if enabled and speed>20km/h
@@ -1548,7 +1548,7 @@ function downloadReport(){
     let det='';
     if(a.name==='Fish School')det='Gen:'+ALG.fish.generation+' Schools:'+ALG.fish.schools.length;
     if(a.name==='Cell Trilateration')det='Towers w/pos:'+cellTowers.filter(t=>t.lat>1).length+'/'+cellTowers.length;
-    if(a.name==='Particle Filter')det='Particles:'+ALG.pf._particles.length;
+    if(a.name==='Particle Filter')det='Particles:'+ALG.particleFilter._particles.length;
     if(a.name==='IMU+Compass DR')det='ZUPT:'+(!ALG.imuDR._speed?'YES':'NO')+' Spd:'+(ALG.imuDR._speed||0).toFixed(1);
     h+='<tr><td>'+a.name+'</td><td>'+Math.round(a.confidence*100)+'%</td><td>'+(a.pos?a.pos.lat.toFixed(5)+','+a.pos.lon.toFixed(5):(a.altitude?a.altitude.toFixed(1)+'m':'--'))+'</td><td>'+det+'</td></tr>';
   });
