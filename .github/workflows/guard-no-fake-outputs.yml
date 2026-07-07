@@ -1,0 +1,34 @@
+name: Guard — no fake outputs
+
+# Hard safety rule for UPIN:
+#   A layer either computes from real sensor data or reports OFFLINE.
+#   UPIN must NEVER output an invented position, accuracy, or confidence.
+#
+# This workflow fails the build if any random source (Math.random,
+# random.random, np.random.normal, crypto.getRandomValues) feeds directly
+# into a returned lat/lon/alt, accuracy, or confidence/score value.
+#
+# Legitimate algorithmic randomness (particle-filter state, DNA/weight
+# mutation, swarm exploration) is allowed — see scripts/guard-no-fake-outputs.mjs.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  no-fake-outputs:
+    name: no-fake-outputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run guard
+        run: node scripts/guard-no-fake-outputs.mjs

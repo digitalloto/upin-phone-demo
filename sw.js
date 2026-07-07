@@ -1,7 +1,5 @@
-const CACHE='upin-v5b-v3';
+const CACHE='upin-v6-guard';
 const FILES=[
-  '/upin-phone-demo/index-v5b.html',
-  '/upin-phone-demo/index-v5.html',
   '/upin-phone-demo/upin_offline.html',
   '/upin-phone-demo/upin_ble_test.html',
   '/upin-phone-demo/towers-data.js',
